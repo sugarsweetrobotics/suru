@@ -430,3 +430,188 @@ def test_名前に混ざったひらがなはエラー():
 def test_句読点の例が動く():
     src = (ROOT / "examples" / "punct.suru").read_text(encoding="utf-8")
     assert run(src) == [3, 15, 5.5, 6, 120, 10, 4, (3, 6, 9, 12), (2, 4), 24, 5, 9]
+
+
+# --- 組・選択肢の型 -----------------------------------------------------------
+
+POINT = "点 とは 横 と 縦 の 組\n"
+SHAPE = "図形 とは 半径 の 円 か 幅 と 高 の 長方形\n"
+
+
+def _text(src):
+    from suru import Interpreter
+    return Interpreter().run_text(src)
+
+
+def test_組を作って取り出す():
+    assert _text(POINT + "3 と 4 の 点\n縦 は 4 で 横 は 3 の 点") == ["（横 は 3 で 縦 は 4 の 点）"] * 2
+    assert run(POINT + "p とは 3 と 4 の 点\np の 横 + p の 縦") == [7]
+    assert run(POINT + "（3 と 4 の 点） が （縦 は 4 で 横 は 3 の 点）") == [True]
+    assert run(POINT + "（3 と 4） の 点 が （3 と 4 の 点）") == [True]
+
+
+def test_組の更新():
+    assert _text(POINT + "p とは 3 と 4 の 点\n横 は 10 の p\np") == [
+        "（横 は 10 で 縦 は 4 の 点）", "（横 は 3 で 縦 は 4 の 点）"]
+
+
+def test_組を並べるときは括弧():
+    assert _text(POINT + "（1 と 2 の 点） と （3 と 4 の 点）") == [
+        "（（横 は 1 で 縦 は 2 の 点） と （横 は 3 で 縦 は 4 の 点））"]
+    with pytest.raises(SuruError, match="括弧で囲んで"):
+        run(POINT + "1 と 2 の 点 と 3 と 4 の 点")
+
+
+def test_組の引数の数():
+    with pytest.raises(SuruError, match="「点」には2個の値が必要です"):
+        run(POINT + "1 と 2 と 3 の 点")
+    with pytest.raises(SuruError, match="「高」というフィールドがありません"):
+        run(POINT + "（1 と 2 の 点） の 高")
+
+
+def test_の先頭は今まで通り():
+    assert run("xs とは 1 と 2\nys とは 3 と 4\nxs と ys の 先頭") == [((1, 2), 3)]
+
+
+def test_選択肢の型():
+    assert _text(SHAPE + "5 の 円\n幅 は 2 で 高 は 3 の 長方形") == [
+        "（半径 は 5 の 円）", "（幅 は 2 で 高 は 3 の 長方形）"]
+    assert _text("信号 とは 赤 か 黄 か 青\n赤") == ["赤"]
+
+
+def test_型の定義の誤り():
+    with pytest.raises(SuruError, match="「組」は形が1つのとき"):
+        run("図形 とは 半径 の 組 か 幅 の 長方形")
+    with pytest.raises(SuruError, match="既に型「図形」で使われています"):
+        run(SHAPE + "箱 とは 幅 の 円 か 高 の 四角")
+
+
+# --- パターンマッチ -----------------------------------------------------------
+
+AREA = SHAPE + """形 を 面積にする とは
+  もし 形 が
+    半径 の 円 ならば 3 * 半径 ^ 2
+    幅 と 高 の 長方形 ならば 幅 * 高
+"""
+
+
+def test_場合分け():
+    assert run(AREA + "5 の 円 を 面積にする\n2 と 3 の 長方形 を 面積にする") == [75, 6]
+
+
+def test_場合分けを1行で():
+    assert run(SHAPE + "もし 5 の 円 が 半径 の 円 ならば 半径 そうでなければ 0") == [5]
+    assert run(SHAPE + "もし 2 と 3 の 長方形 が 半径 の 円 ならば 半径 そうでなければ 0") == [0]
+
+
+def test_場合分け_句読点():
+    src = ("図形とは半径の円か幅と高の長方形。"
+           "形を面積にするとは、もし形が半径の円ならば3*半径^2、幅と高の長方形ならば幅*高。"
+           "5の円を面積にする。2と3の長方形を面積にする。")
+    assert run(src) == [75, 6]
+
+
+def test_リストを先頭と残りで分解():
+    sum_ = """xs を 合計する とは
+  もし xs が
+    空 ならば 0
+    先頭 は x で 残り は 他 ならば 他 を 合計して x を 加算する
+"""
+    assert run(sum_ + "1 と 2 と 3 を 合計する") == [6]
+    assert run("xsを合計するとは、もしxsが空ならば0、先頭はxで残りは他ならば他を合計して、xを加算する。"
+               "1と2と3を合計する。") == [6]
+
+
+def test_列挙型の場合分け():
+    src = """信号 とは 赤 か 黄 か 青
+s を 次にする とは
+  もし s が
+    赤 ならば 青
+    青 ならば 黄
+    黄 ならば 赤
+"""
+    assert _text(src + "赤 を 次にする") == ["青"]
+
+
+def test_書かれていない形はエラー():
+    with pytest.raises(SuruError, match="「長方形」の場合がありません"):
+        run(SHAPE + "形 を 面積にする とは\n  もし 形 が\n    半径 の 円 ならば 1\n5 の 円 を 面積にする")
+    # そうでなければ があれば良い
+    assert run(SHAPE + "もし 5 の 円 が 幅 と 高 の 長方形 ならば 1 そうでなければ 0") == [0]
+
+
+def test_当てはまらないとエラー():
+    with pytest.raises(SuruError, match="どの場合にも当てはまりません"):
+        run("x を 判定する とは\n  もし x が\n    1 ならば 「一」\n    2 ならば 「二」\n3 を 判定する")
+
+
+def test_入れ子のパターン():
+    src = POINT + "図形 とは 中心 と 半径 の 円 か 幅 の 正方形\n" + \
+        "もし （1 と 2 の 点） と 5 の 円 が （x と y の 点） と r の 円 ならば x + y + r そうでなければ 0"
+    assert run(src) == [8]
+
+
+def test_パターンの誤り():
+    with pytest.raises(SuruError, match="2回使われています"):
+        run(POINT + "もし 1 と 2 の 点 が x と x の 点 ならば x そうでなければ 0")
+    with pytest.raises(SuruError, match="「点」のパターンには2個の名前が必要です"):
+        run(POINT + "もし 1 と 2 の 点 が x の 点 ならば x そうでなければ 0")
+    with pytest.raises(SuruError, match="「点」には「高」というフィールドがありません"):
+        run(POINT + "もし 1 と 2 の 点 が 高 は x の 点 ならば x そうでなければ 0")
+
+
+def test_今までのもしはそのまま():
+    assert run("n を 判定する とは もし n % 2 が 0 ならば 「偶」 そうでなければ 「奇」\n3 を 判定する") == ["奇"]
+    src = "x を 判定する とは\n  もし x が 1 ならば 「一」\n  そうでなければ もし x が 2 ならば 「二」 そうでなければ 「他」\n"
+    assert run(src + "2 を 判定する\n3 を 判定する") == ["二", "他"]
+
+
+# --- 性質 ---------------------------------------------------------------------
+
+COMPARABLE = """比較可能 という 性質 とは
+  a と b を 比較する
+  a と b を 大きい方にする とは
+    もし （a と b を 比較する） > 0 ならば a そうでなければ b
+"""
+
+
+def test_性質と実装():
+    src = POINT + COMPARABLE + """点 は 比較可能
+  p と q を 比較する とは p の 横 - q の 横
+数 は 比較可能
+  a と b を 比較する とは a - b
+"""
+    assert _text(src + "（1 と 2 の 点） と （3 と 0 の 点） を 大きい方にする\n5 と 9 を 大きい方にする") == [
+        "（横 は 3 で 縦 は 0 の 点）", "9"]
+
+
+def test_性質_句読点():
+    src = ("点とは横と縦の組。"
+           "比較可能という性質とは、aとbを比較する。"
+           "ただし、aとbを『大きい方に』するとは、もし（aとbを比較する）>0ならばaそうでなければb。"
+           "数は比較可能。ただし、aとbを比較するとは、a-b。"
+           "5と9を『大きい方に』する。")
+    assert run(src) == [9]
+
+
+def test_性質を持たない型はエラー():
+    with pytest.raises(SuruError, match="「文字列」は性質「比較可能」を持っていません"):
+        run(COMPARABLE + "「a」 と 「b」 を 比較する")
+
+
+def test_実装が足りないとエラー():
+    with pytest.raises(SuruError, match="「点」は性質「比較可能」の「比較する」を定義していません"):
+        run(POINT + COMPARABLE + "点 は 比較可能\n  p と q を 大きい方にする とは p")
+    with pytest.raises(SuruError, match="助詞が性質「比較可能」での宣言と違います"):
+        run(POINT + COMPARABLE + "点 は 比較可能\n  p を q で 比較する とは 0")
+
+
+def test_表示可能():
+    src = POINT + "点 は 表示可能\n  p を 文字列化する とは 「(」 + p の 横 + 「, 」 + p の 縦 + 「)」\n"
+    assert _text(src + "1 と 2 の 点\n（1 と 2 の 点） と （3 と 4 の 点）\n5 を 文字列化する") == [
+        "(1, 2)", "（(1, 2) と (3, 4)）", "5"]
+
+
+def test_データの例が動く():
+    src = (ROOT / "examples" / "data.suru").read_text(encoding="utf-8")
+    assert _text(src)[-3:] == ["（横 は 3 で 縦 は 0 の 点）", "9", "2×3"]
