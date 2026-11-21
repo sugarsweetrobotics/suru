@@ -6,7 +6,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from suru import Call, Num, SuruError, Var, parse_program, run  # noqa: E402
+from suru import Call, ListLit, SuruError, Var, parse_program, run  # noqa: E402
 
 ADD = "a　と　b　を加算する　とは　a + b\n"
 TRIPLE = "引数　を三倍する　とは　引数　と　引数　を加算して　引数　を加算する\n"
@@ -25,8 +25,10 @@ def test_三倍する_パイプライン():
 def test_三倍するの構文木は加算の入れ子():
     prog = parse_program(TRIPLE)
     body = prog[0].body
-    # (引数 と 引数 を加算して) 引数 を加算する → 加算(加算(引数, 引数), 引数)
-    assert body == Call("加算する", [Call("加算する", [Var("引数", 1), Var("引数", 1)], 1), Var("引数", 1)], 1)
+    # (引数 と 引数 を加算して) 引数 を加算する → 加算(を=[加算(を=[引数, 引数]), 引数])
+    x = Var("引数", 1)
+    inner = Call("加算する", {"を": ListLit([x, x])}, 1)
+    assert body == Call("加算する", {"を": ListLit([inner, x])}, 1)
 
 
 def test_ファイルの例が動く():
@@ -120,7 +122,7 @@ def test_してで終わるとエラー():
 
 
 def test_引数の数が違うとエラー():
-    with pytest.raises(SuruError, match="引数は2個"):
+    with pytest.raises(SuruError, match="2個の値が必要"):
         run(ADD + "1 を加算する")
 
 
@@ -155,3 +157,163 @@ def test_文字列():
 def test_未定義はエラー():
     with pytest.raises(SuruError, match="定義されていません"):
         run("1 を謎する")
+
+
+# --- 助詞で区別する引数 -----------------------------------------------------
+
+DIV = "a を b で 割る数にする とは a / b\n"
+
+
+def test_助詞で引数を区別し語順は自由():
+    assert run(DIV + "10 を 2 で 割る数にする\n2 で 10 を 割る数にする") == [5, 5]
+
+
+def test_助詞がくっついていてもよい():
+    assert run("a を b で割る数にする とは a / b\n10 を 2 で割る数にする") == [5]
+
+
+def test_ひらがなが続くときは助詞を分けない():
+    from suru import tokenize_line
+    assert [t.kind for t in tokenize_line("をへんかんする", 1)] == ["CALL"]
+    assert [t.kind for t in tokenize_line("を変換する", 1)] == ["PART", "CALL"]
+
+
+def test_してはをに入る():
+    assert run("10 を 2 で 除算して 3 に 加算する") == [8]
+
+
+def test_同じ助詞は定義で1回まで():
+    with pytest.raises(SuruError, match="2回"):
+        run("a を b を 足しする とは a + b")
+
+
+def test_同じ助詞は呼び出しで1回まで():
+    with pytest.raises(SuruError, match="2回"):
+        run("1 を 2 を 加算する")
+
+
+def test_足りない引数はエラー():
+    with pytest.raises(SuruError, match="「で」の引数が必要"):
+        run("10 を 除算する")
+
+
+def test_受け取らない助詞はエラー():
+    with pytest.raises(SuruError, match="「に」の引数を受け取りません"):
+        run("x を三倍する とは x * 3\n5 に 三倍する")
+
+
+def test_組み込みの四則():
+    assert run("1 と 2 と 3 を 加算する\n10 から 3 を 減算する\n2 と 3 と 4 を 乗算する\n9 を 2 で 除算する") == [6, 7, 24, 4.5]
+
+
+def test_組み込みの加算で三倍():
+    # 加算する を自分で定義しなくても、三倍の例はそのまま動く
+    assert run(TRIPLE + "5 を三倍する") == [15]
+
+
+# --- リスト -----------------------------------------------------------------
+
+LIST = "リスト とは 1 と 2 と 3\n"
+
+
+def test_とでリスト():
+    assert run("1 と 2 と 3") == [(1, 2, 3)]
+    assert run("空") == [()]
+
+
+def test_リストの性質():
+    assert run(LIST + "リスト の 先頭\nリスト の 残り\nリスト の 最後\nリスト の 長さ\nリスト の 残り の 先頭") == [
+        1, (2, 3), 3, 3, 2,
+    ]
+
+
+def test_追加と挿入():
+    assert run(LIST + "4 を リスト に 追加する\n0 を リスト に 挿入する") == [(1, 2, 3, 4), (0, 1, 2, 3)]
+
+
+def test_空の判定と再帰():
+    src = LIST + (
+        "xs を 合計する とは\n"
+        "  もし xs が 空 ならば 0\n"
+        "  そうでなければ xs の 残り を 合計して xs の 先頭 を 加算する\n"
+        "リスト を 合計する"
+    )
+    assert run(src) == [6]
+
+
+def test_引数のリストを分解して受け取る():
+    assert run("a と b を 差にする とは a - b\n10 と 3 を 差にする") == [7]
+
+
+def test_空のリストの先頭はエラー():
+    with pytest.raises(SuruError, match="空のリスト"):
+        run("空 の 先頭")
+
+
+def test_読点は予約():
+    with pytest.raises(SuruError, match="予約"):
+        run("1、2")
+    with pytest.raises(SuruError, match="予約"):
+        run("1・2")
+
+
+def test_表示():
+    from suru import format_value
+    assert format_value((1, "a", ())) == "（1 と 「a」 と 空）"
+
+
+# --- 高階関数 ---------------------------------------------------------------
+
+TRIPLE2 = "x を三倍する とは x * 3\n"
+
+
+def test_それぞれでmap():
+    assert run(TRIPLE2 + LIST + "リスト の それぞれ を 三倍する") == [(3, 6, 9)]
+
+
+def test_それぞれと他の引数():
+    assert run(LIST + "リスト の それぞれ を 10 に 加算する") == [(11, 12, 13)]
+
+
+def test_することで関数の値():
+    assert run(TRIPLE2 + "5 に 三倍すること を 適用する\n三倍すること") [0] == 15
+
+
+def test_部分適用():
+    assert run("5 に （1 を 加算すること） を 適用する") == [6]
+    assert run("a から b を 引き算する とは a - b\n3 に （10 から 引き算すること） を 適用する") == [7]
+
+
+def test_部分適用を値にして使う():
+    assert run("足す1 とは 1 を 加算すること\n41 に 足す1 を 適用する") == [42]
+
+
+def test_選別_写像_畳み込み():
+    src = TRIPLE2 + LIST + (
+        "n を 偶数判定する とは n % 2 == 0\n"
+        "リスト から 偶数判定すること で 選別する\n"
+        "リスト を 三倍すること で 写像する\n"
+        "リスト を 0 から 加算すること で 畳み込みする\n"
+    )
+    assert run(src) == [(2,), (3, 6, 9), 6]
+
+
+def test_無名関数():
+    assert run("x を 受け取って x * 2 を 返すこと を 7 に 適用する") == [14]
+    assert run(LIST + "リスト を 1 から （a と b を 受け取って a * b を 返すこと） で 畳み込みする") == [6]
+    assert run(LIST + "リスト の それぞれ に （x を 受け取って x を 三倍する を 返すこと） を 適用する"
+               + "\nx を三倍する とは x * 3") == [(3, 6, 9)]
+
+
+def test_無名関数はクロージャ():
+    src = "n を 足す関数にする とは x を 受け取って x + n を 返すこと\n5 に （10 を 足す関数にする） を 適用する"
+    assert run(src) == [15]
+
+
+def test_それぞれが2つならzip():
+    assert run("（1 と 2） の それぞれ を （10 と 20） の それぞれ に 加算する") == [(11, 22)]
+
+
+def test_リストの例が動く():
+    src = (ROOT / "examples" / "list.suru").read_text(encoding="utf-8")
+    assert run(src)[-1] == (1, 4, 9, 16)
