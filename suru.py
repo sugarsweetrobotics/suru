@@ -95,9 +95,11 @@ KW_TOIU = "という"    # 性質の定義: 比較可能 という 性質 とは
 KW_KUMI = "組"        # 組の定義: 点 とは 横 と 縦 の 組
 KW_SEISHITSU = "性質"
 KW_SOREKARA = "それから"  # 前の文に続けて行う: 「やあ」を表示する。それから、「またね」を表示する。
+KW_KATSU = "かつ"      # 真偽の「かつ」、パターンの条件: 半径 の 円 かつ 半径 > 10 ならば …
+KW_MATAHA = "または"   # 真偽の「または」
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
-    KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA,
+    KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA,
 }
 KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU}
 CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}  # 行頭に来たら前の文の続きとみなす
@@ -286,7 +288,7 @@ MIXED_NAMES = ("畳み込み",)
 # ひらがなの並びを分けるときの辞書。長いものから順に照合する
 HIRAGANA_WORDS = sorted(
     set(PARTICLES)
-    | {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, KW_KA, KW_WA, KW_TOIU, KW_SOREKARA}
+    | {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, KW_KA, KW_WA, KW_TOIU, KW_SOREKARA, KW_KATSU, KW_MATAHA}
     | {"それぞれ", KOTO, SURU, SHITEKARA, SHITE, SHITA},
     key=len,
     reverse=True,
@@ -848,6 +850,13 @@ class PBind:
 
 
 @dataclass
+class PSeq:
+    """決まった長さのリストを要素ごとに調べる(場合ごとの関数定義の「a と b を」や、複数の引数)"""
+
+    items: list
+
+
+@dataclass
 class PValue:
     """値と等しいか調べる(「空」「0」、すでにある変数など)"""
 
@@ -877,9 +886,10 @@ class Match:
     """「もし 形 が 半径 の 円 ならば … 幅 と 高 の 長方形 ならば …」"""
 
     subject: Any
-    cases: list  # [(パターン, 式)]
+    cases: list  # [(パターン, 条件か None, 式)]
     default: Any
     line: int
+    fname: str = ""  # 場合ごとの関数定義から作ったときの関数名
 
 
 # --- 性質(型クラス) ---
@@ -1053,7 +1063,7 @@ def check_params(params: list, line: int) -> None:
 def pattern_binders(pat: Any) -> list[str]:
     if isinstance(pat, PBind):
         return [pat.name]
-    if isinstance(pat, PCtor):
+    if isinstance(pat, (PCtor, PSeq)):
         return [n for p in pat.items for n in pattern_binders(p)]
     if isinstance(pat, PNamed):
         return [n for _, p in pat.fields for n in pattern_binders(p)]
@@ -1076,6 +1086,9 @@ def check_pattern(pat: Any, line: int) -> None:
                 )
             for q in p.items:
                 walk(q)
+        elif isinstance(p, PSeq):
+            for q in p.items:
+                walk(q)
         elif isinstance(p, PNamed):
             for f, q in p.fields:
                 if p.ctor is not None and f not in _CTX.ctors[p.ctor][1]:
@@ -1085,10 +1098,12 @@ def check_pattern(pat: Any, line: int) -> None:
     walk(pat)
 
 
-def check_exhaustive(cases: list, line: int) -> None:
+def check_exhaustive(cases: list, line: int, fname: str = "") -> None:
     """選択肢の型の場合分けで、書かれていない形があればエラーにする"""
     names = set()
-    for pat, _ in cases:
+    for pat, guard, _ in cases:
+        if guard is not None:
+            continue  # 条件つきの場合は、形がそろっているかの数に入れない
         if isinstance(pat, PCtor):
             names.add(pat.ctor)
         elif isinstance(pat, PNamed) and pat.ctor:
@@ -1101,6 +1116,8 @@ def check_exhaustive(cases: list, line: int) -> None:
     if len(types) != 1:
         return
     missing = [c for c in _CTX.types[types.pop()] if c not in names]
+    if missing and fname:
+        raise SuruError(f"「{fname}」に「{'」「'.join(missing)}」の場合の定義がありません", line)
     if missing:
         raise SuruError(
             f"「{'」「'.join(missing)}」の場合がありません(すべての形を書くか、最後に「そうでなければ …」を書いてください)",
@@ -1117,6 +1134,7 @@ class ExprParser:
         # 場合分けの本体を読んでいる間は、区切り(「、」や行の切れ目)で値を終える
         self.stop_sep = False
         self.in_named = False  # 「横 は 値 …」の値を読んでいる
+        self.no_logic = False  # パターンを読んでいる間は「かつ」を条件の始まりとして残す
 
     def _skip(self, i: int) -> int:
         while i < len(self.tokens) and self.tokens[i].kind == "SEP":
@@ -1277,6 +1295,7 @@ class ExprParser:
                 return None
             self.next()
             pat = self.pattern()
+            guard = self.guard()
         except SuruError:
             return None
         if not is_kw(self.peek(), KW_THEN):
@@ -1286,7 +1305,7 @@ class ExprParser:
         while True:
             check_pattern(pat, self.peek().line)
             self.next()  # ならば
-            cases.append((pat, self.case_body()))
+            cases.append((pat, guard, self.case_body()))
             tok = self.peek()
             if is_kw(tok, KW_ELSE):
                 self.next()
@@ -1295,6 +1314,7 @@ class ExprParser:
             if tok is None or tok.kind in ("RP", "PERIOD") or not self.sep_here():
                 break
             pat = self.pattern()
+            guard = self.guard()
             tok = self.peek()
             if not is_kw(tok, KW_THEN):
                 raise SuruError("場合の後に「ならば」が必要です", tok.line if tok else self.last_line())
@@ -1324,7 +1344,37 @@ class ExprParser:
         p = self.try_ctor_pattern()
         if p is not None:
             return p
-        return PValue(self.list_expr())
+        save = self.no_logic
+        self.no_logic = True
+        try:
+            return PValue(self.list_expr())
+        finally:
+            self.no_logic = save
+
+    def guard(self) -> Any:
+        """パターンの後の「かつ 条件」。なければ None"""
+        if not is_kw(self.peek(), KW_KATSU):
+            return None
+        self.next()
+        save = self.no_logic
+        self.no_logic = False
+        try:
+            return self.logic()
+        finally:
+            self.no_logic = save
+
+    def param_pattern(self) -> Any:
+        """場合ごとの関数定義の引数のパターン。名前だけなら新しい変数、「a と b」は要素ごと"""
+        if self.at_named():
+            return self.named_pattern()
+        p = self.try_ctor_pattern()
+        if p is not None:
+            return p
+        items = [self.pattern_item()]
+        while is_kw(self.peek(), KW_TO):
+            self.next()
+            items.append(self.pattern_item())
+        return items[0] if len(items) == 1 else PSeq(items)
 
     def try_ctor_pattern(self) -> Any:
         """「x と y の 点」「赤」。形の名前で終わらなければ None(位置は戻す)"""
@@ -1445,10 +1495,10 @@ class ExprParser:
     def list_expr(self) -> Any:
         if self.at_named():
             return self.named_construct()
-        items = [self.comparison()]
+        items = [self.logic()]
         while is_kw(self.peek(), KW_TO) and not self.sep_stop():
             self.next()
-            items.append(self.comparison())
+            items.append(self.logic())
         if is_kw(self.peek(), KW_NO) and is_ctor(self.peek(1)) and not self.sep_stop():
             no = self.next()
             node = Construct(self.next().value, items, no.line)
@@ -1459,6 +1509,21 @@ class ExprParser:
                 )
             return node
         return items[0] if len(items) == 1 else ListLit(items)
+
+    # 論理 := 論理積 { または 論理積 }、論理積 := 比較 { かつ 比較 }
+    def logic(self) -> Any:
+        left = self.conjunction()
+        while is_kw(self.peek(), KW_MATAHA) and not self.sep_stop() and not self.no_logic:
+            tok = self.next()
+            left = BinOp(KW_MATAHA, left, self.conjunction(), tok.line)
+        return left
+
+    def conjunction(self) -> Any:
+        left = self.comparison()
+        while is_kw(self.peek(), KW_KATSU) and not self.sep_stop() and not self.no_logic:
+            tok = self.next()
+            left = BinOp(KW_KATSU, left, self.comparison(), tok.line)
+        return left
 
     def comparison(self) -> Any:
         left = self.additive()
@@ -1622,6 +1687,8 @@ def parse_definition_head(tokens: list[Token], line: int) -> tuple[str, list, bo
         return last.value, [], False  # 値の定義: 「税率 とは 0.1」
     if last.kind != "CALL" or last.form != SURU:
         raise SuruError("関数名は「する」で終わる必要があります", last.line)
+    if any(_is_pattern_token(t) for t in tokens[:-1]):
+        return last.value, parse_pattern_head(tokens[:-1], line), True
     params: list = []
     names: list[str] = []
     for t in tokens[:-1]:
@@ -1646,6 +1713,130 @@ def parse_definition_head(tokens: list[Token], line: int) -> tuple[str, list, bo
         raise SuruError("引数名の後には助詞(を・に・で・から・へ・より)が必要です", line)
     check_params(params, line)
     return last.value, params, True
+
+
+def _is_pattern_token(t: Token) -> bool:
+    """引数に値や形を書いた定義(場合ごとの関数定義)かどうか"""
+    if t.kind in ("NUM", "STR", "LP", "RP", "OP"):
+        return True
+    if t.kind == "KW" and t.value in (KW_NO, KW_WA):
+        return True
+    return t.kind == "WORD" and is_nullary(t.value)
+
+
+def parse_pattern_head(tokens: list[Token], line: int) -> list:
+    """「0 を」「先頭 は x で 残り は 他 を」「（半径 の 円） を」のような引数を [(助詞, パターン)] にする"""
+    segments: list = []
+    cur: list[Token] = []
+    depth = 0
+    for k, t in enumerate(tokens):
+        if t.kind == "LP":
+            depth += 1
+        elif t.kind == "RP":
+            depth -= 1
+        named_and = (
+            is_part(t, "で") and k + 2 < len(tokens) and tokens[k + 1].kind == "WORD" and is_kw(tokens[k + 2], KW_WA)
+        )
+        if t.kind == "PART" and depth == 0 and not named_and:
+            if not cur:
+                raise SuruError(f"助詞「{t.value}」の前に引数が必要です", t.line)
+            if any(p == t.value for p, _ in segments):
+                raise SuruError(f"助詞「{t.value}」が2回使われています(1つの関数で各助詞は1回まで)", t.line)
+            segments.append((t.value, cur))
+            cur = []
+        else:
+            cur.append(t)
+    if cur:
+        raise SuruError("引数の後には助詞(を・に・で・から・へ・より)が必要です", cur[-1].line)
+    params = []
+    for part, seg in segments:
+        parser = ExprParser(seg)
+        pat = parser.param_pattern()
+        rest = parser.peek()
+        if rest is not None:
+            raise SuruError(f"引数のパターンに「{rest.value}」は書けません", rest.line)
+        params.append((part, pat))
+    check_pattern(PSeq([p for _, p in params]), line)
+    return params
+
+
+def _is_simple_param(pat: Any) -> bool:
+    return isinstance(pat, str) or (isinstance(pat, list) and all(isinstance(x, str) for x in pat))
+
+
+def _param_to_pattern(pat: Any) -> Any:
+    if isinstance(pat, str):
+        return PBind(pat)
+    if isinstance(pat, list):
+        return PSeq([_param_to_pattern(x) for x in pat])
+    return pat
+
+
+def _matches_anything(pat: Any) -> bool:
+    return isinstance(pat, PBind)
+
+
+def combine_clauses(group: list) -> "Define":
+    """同じ関数の場合ごとの定義を、引数のパターンマッチ1つにまとめる"""
+    first = group[0]
+    name = first.name
+    order = [p for p, _ in first.params]
+    for d in group[1:]:
+        if sorted(p for p, _ in d.params) != sorted(order):
+            raise SuruError(
+                f"「{name}」の定義ごとに助詞が違います(場合ごとに定義するときは、どれも同じ助詞で書いてください。"
+                f"{first.line}行目は「{'・'.join(order) or 'なし'}」)",
+                d.line,
+            )
+    slot = {p: f"（{p}）" for p in order}
+    cases = []
+    for k, d in enumerate(group):
+        pats = {p: _param_to_pattern(x) for p, x in d.params}
+        items = [pats[p] for p in order]
+        pat = items[0] if len(items) == 1 else PSeq(items)
+        if k + 1 < len(group) and all(_matches_anything(x) for x in items):
+            raise SuruError(
+                f"「{name}」のこの定義はどんな値にも当てはまるので、{group[k + 1].line}行目からの定義が使われません"
+                "(決まった値や形の場合を先に書いてください)",
+                d.line,
+            )
+        cases.append((pat, None, d.body))
+    if len(order) == 1:
+        subject: Any = Var(slot[order[0]], first.line)
+        check_exhaustive(cases, first.line, name)
+    else:
+        subject = ListLit([Var(slot[p], first.line) for p in order])
+    body = Match(subject, cases, None, first.line, fname=name)
+    return Define(name, [(p, slot[p]) for p in order], body, True, first.line)
+
+
+def merge_clauses(statements: list) -> list:
+    """続けて書いた同じ名前の関数定義をまとめる。離れた場所で同じ関数を定義し直すとエラー"""
+    out: list = []
+    seen: dict[str, int] = {}
+    i = 0
+    while i < len(statements):
+        s = statements[i]
+        if not (isinstance(s, Define) and s.is_function):
+            out.append(s)
+            i += 1
+            continue
+        j = i + 1
+        while j < len(statements) and isinstance(statements[j], Define) and statements[j].is_function \
+                and statements[j].name == s.name:
+            j += 1
+        group = statements[i:j]
+        if s.name in seen:
+            raise SuruError(
+                f"「{s.name}」は{seen[s.name]}行目でも定義されています(場合ごとに定義するときは続けて書いてください)", s.line
+            )
+        seen[s.name] = s.line
+        if len(group) == 1 and all(_is_simple_param(p) for _, p in s.params):
+            out.append(s)
+        else:
+            out.append(combine_clauses(group))
+        i = j
+    return out
 
 
 def find_top_level(tokens: list[Token], value: str) -> int | None:
@@ -1871,7 +2062,7 @@ def attach_provisos(statements: list) -> list:
             if p.define is None and not isinstance(s, TraitDecl):
                 raise SuruError("「ただし」の後には「…とは」の定義を書いてください", p.line)
         if isinstance(s, Define):
-            s.body = Block([p.define for p in provisos] + [s.body])
+            s.body = Block(merge_clauses([p.define for p in provisos]) + [s.body])
         elif isinstance(s, TraitDecl):
             for p in provisos:
                 if p.define is None:
@@ -1881,7 +2072,12 @@ def attach_provisos(statements: list) -> list:
         else:
             for p in provisos:
                 s.defs.append(_function_define(p.define, f"「{s.type_name} は {s.trait}」の後", p.line))
-    return out
+    for s in out:
+        if isinstance(s, TraitImpl):
+            s.defs = merge_clauses(s.defs)
+        elif isinstance(s, TraitDecl):
+            s.defaults = merge_clauses(s.defaults)
+    return merge_clauses(out)
 
 
 def parse_block(nodes: list[Node]) -> Any:
@@ -2602,6 +2798,10 @@ class Interpreter:
             return True
         if isinstance(pat, PValue):
             return self.eval(pat.expr, env) == v
+        if isinstance(pat, PSeq):
+            if not isinstance(v, tuple) or len(v) != len(pat.items):
+                return False
+            return all(self.match(p, x, env) for p, x in zip(pat.items, v))
         if isinstance(pat, PCtor):
             if not isinstance(v, Record) or v.ctor != pat.ctor:
                 return False
@@ -2628,6 +2828,12 @@ class Interpreter:
         if len(values) != len(fields):
             raise SuruError(f"「{ctor}」には{len(fields)}個の値が必要です(渡されたのは{len(values)}個)", line)
         return Record(ctor, type_name, tuple(fields), tuple(values))
+
+    def truth(self, node: Any, env: Env, what: str) -> bool:
+        v = self.eval(node, env)
+        if not isinstance(v, bool):
+            raise SuruError(f"「{what}」の条件は 真 か 偽 でなければなりません(「{self.format(v)}」でした)", getattr(node, "line", None))
+        return v
 
     def define(self, d: Define, env: Env) -> None:
         if d.is_function:
@@ -2705,17 +2911,25 @@ class Interpreter:
             return Record(target.ctor, target.type_name, target.fields, tuple(values))
         if isinstance(node, Match):
             v = self.eval(node.subject, env)
-            for pat, body in node.cases:
+            for pat, guard, body in node.cases:
                 local = Env(env)
-                if self.match(pat, v, local):
+                if self.match(pat, v, local) and (guard is None or self.truth(guard, local, KW_KATSU)):
                     return self.eval(body, local)
             if node.default is not None:
                 return self.eval(node.default, env)
+            if node.fname:
+                raise SuruError(f"「{self.format(v)}」は「{node.fname}」のどの定義にも当てはまりません", node.line)
             raise SuruError(f"「{self.format(v)}」はどの場合にも当てはまりません", node.line)
         if isinstance(node, Each):
             return _list(self.eval(node.target, env), "「の それぞれ」の前", node.line)
         if isinstance(node, Neg):
             return -_num(self.eval(node.operand, env), None)
+        if isinstance(node, BinOp) and node.op in (KW_KATSU, KW_MATAHA):
+            # 左が決まれば右は計算しない
+            left = self.truth(node.left, env, node.op)
+            if left == (node.op == KW_MATAHA):
+                return left
+            return self.truth(node.right, env, node.op)
         if isinstance(node, BinOp):
             return apply_op(node.op, self.eval(node.left, env), self.eval(node.right, env), node.line)
         if isinstance(node, If):
