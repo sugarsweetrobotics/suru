@@ -43,56 +43,86 @@ OPERATORS = {
     "<": "<", ">": ">", "<=": "<=", "≦": "<=", "≤": "<=", ">=": ">=", "≧": ">=", "≥": ">=",
 }
 
-KW_TO = "と"          # 引数の区切り
-KW_WO = "を"          # 目的格(関数名の直前)
+KW_TO = "と"          # リストを作る: 1 と 2 と 3
 KW_TOWA = "とは"      # 定義
+KW_NO = "の"          # 性質: リスト の 先頭
+KW_GA = "が"          # 等しい: リスト が 空
 KW_IF = "もし"
 KW_THEN = "ならば"
 KW_ELSE = "そうでなければ"
-KEYWORDS = {KW_TO, KW_WO, KW_TOWA, KW_IF, KW_THEN, KW_ELSE}
+KW_LAMBDA = "受け取って"  # 無名関数: x を 受け取って x * 2 を 返すこと
+KW_RETURN = "返すこと"
+KW_EMPTY = "空"
+KEYWORDS = {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN}
 CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}  # 行頭に来たら前の文の続きとみなす
 
-SURU = "する"   # 終止形: パイプラインの終わり
-SHITE = "して"  # 連用形: 結果を次の関数の第1引数へ渡す
+# 引数を区別する格助詞。長いものから順に照合する(「より」「から」を先に)
+PARTICLES = ("より", "から", "を", "に", "で", "へ")
+WO = "を"
+
+# 将来の「改行を減らす書き方」のために予約している記号
+RESERVED_MARKS = {"、": "読点「、」", "・": "中黒「・」"}
+
+SURU = "する"       # 終止形: パイプラインの終わり
+SHITE = "して"      # 連用形: 結果を次の関数の「を」へ渡す
+KOTO = "すること"   # 名詞化: 関数そのもの(値)
+
+PROPERTIES = {"先頭", "残り", "最後", "長さ", "それぞれ"}
 
 
 @dataclass
 class Token:
-    kind: str  # NUM STR OP LP RP WORD KW CALL
+    kind: str  # NUM STR OP LP RP WORD KW PART CALL
     value: Any
     line: int
-    form: str = ""  # CALL のとき "する" か "して"
+    form: str = ""  # CALL のとき "する" / "して" / "すること"
 
     def __repr__(self) -> str:
         return f"{self.kind}:{self.value}{('/' + self.form) if self.form else ''}"
 
 
-def _classify(word: str, line: int) -> Token:
+def _is_hiragana(c: str) -> bool:
+    return "ぁ" <= c <= "ゟ"
+
+
+def _classify_call(word: str, line: int) -> Token | None:
+    for form in (KOTO, SURU, SHITE):
+        if word.endswith(form) and len(word) > len(form):
+            return Token("CALL", word[: -len(form)] + SURU, line, form)
+    return None
+
+
+def _classify(word: str, line: int) -> list[Token]:
     norm = unicodedata.normalize("NFKC", word)
     if norm in OPERATORS or word in OPERATORS:
-        return Token("OP", OPERATORS.get(norm, OPERATORS.get(word)), line)
-    try:
-        num = int(norm)
-        return Token("NUM", num, line)
-    except ValueError:
-        pass
-    try:
-        num = float(norm)
-        return Token("NUM", num, line)
-    except ValueError:
-        pass
+        return [Token("OP", OPERATORS.get(norm, OPERATORS.get(word)), line)]
+    for conv in (int, float):
+        try:
+            return [Token("NUM", conv(norm), line)]
+        except ValueError:
+            pass
+    if word in PARTICLES:
+        return [Token("PART", word, line)]
     if word in KEYWORDS:
-        return Token("KW", word, line)
+        return [Token("KW", word, line)]
     if word in ("真", "偽"):
-        return Token("NUM", word == "真", line)
-    for form in (SURU, SHITE):
-        if word.endswith(form) and len(word) > len(form):
-            stem = word[: -len(form)]
-            # 「を加算する」のように を が付いていれば取り除く
-            if stem.startswith(KW_WO) and len(stem) > 1:
-                stem = stem[1:]
-            return Token("CALL", stem + SURU, line, form)
-    return Token("WORD", word, line)
+        return [Token("NUM", word == "真", line)]
+    if word == KW_EMPTY:
+        return [Token("NUM", (), line)]
+    # 「を加算する」「で除算する」「を返すこと」のように助詞が関数名にくっついていたら分ける。
+    # ただし助詞の直後がひらがなのとき(「へんかんする」など)は分けない。
+    for p in PARTICLES:
+        rest = word[len(p):]
+        if word.startswith(p) and rest and not _is_hiragana(rest[0]):
+            if rest == KW_RETURN:
+                return [Token("PART", p, line), Token("KW", rest, line)]
+            call = _classify_call(rest, line)
+            if call is not None:
+                return [Token("PART", p, line), call]
+    call = _classify_call(word, line)
+    if call is not None:
+        return [call]
+    return [Token("WORD", word, line)]
 
 
 def tokenize_line(text: str, line: int) -> list[Token]:
@@ -103,7 +133,7 @@ def tokenize_line(text: str, line: int) -> list[Token]:
     def flush() -> None:
         nonlocal buf
         if buf:
-            tokens.append(_classify(buf, line))
+            tokens.extend(_classify(buf, line))
             buf = ""
 
     while i < n:
@@ -125,18 +155,13 @@ def tokenize_line(text: str, line: int) -> list[Token]:
         elif c in CLOSE_PARENS:
             flush()
             tokens.append(Token("RP", ")", line))
+        elif c in RESERVED_MARKS:
+            raise SuruError(f"{RESERVED_MARKS[c]}は将来の書き方のために予約されています(文字列の中では使えます)", line)
         else:
             buf += c
         i += 1
     flush()
-
-    # 「を 加算する」のように を が独立していても同じに扱う
-    merged: list[Token] = []
-    for t in tokens:
-        if t.kind == "CALL" and merged and merged[-1].kind == "KW" and merged[-1].value == KW_WO:
-            merged.pop()
-        merged.append(t)
-    return merged
+    return tokens
 
 
 @dataclass
@@ -183,6 +208,30 @@ class Var:
 
 
 @dataclass
+class ListLit:
+    """「1 と 2 と 3」"""
+
+    items: list
+
+
+@dataclass
+class Prop:
+    """「リスト の 先頭」"""
+
+    target: Any
+    name: str
+    line: int
+
+
+@dataclass
+class Each:
+    """「リスト の それぞれ」。呼び出しの引数に置くと、その呼び出しを要素ごとに行う"""
+
+    target: Any
+    line: int
+
+
+@dataclass
 class BinOp:
     op: str
     left: Any
@@ -198,7 +247,23 @@ class Neg:
 @dataclass
 class Call:
     name: str
-    args: list
+    args: dict  # 助詞 → 式
+    line: int
+
+
+@dataclass
+class Ref:
+    """「三倍すること」「1 を 加算すること」: 関数の値(引数が足りなければ部分適用)"""
+
+    name: str
+    args: dict
+    line: int
+
+
+@dataclass
+class Lambda:
+    params: list  # [(助詞, パターン)]。パターンは名前か名前のリスト
+    body: Any
     line: int
 
 
@@ -212,7 +277,7 @@ class If:
 @dataclass
 class Define:
     name: str
-    params: list[str]
+    params: list  # [(助詞, パターン)]
     body: Any  # 式 または Block
     is_function: bool
     line: int
@@ -287,6 +352,40 @@ def is_kw(tok: Token | None, value: str) -> bool:
     return tok is not None and tok.kind == "KW" and tok.value == value
 
 
+def is_part(tok: Token | None, value: str | None = None) -> bool:
+    return tok is not None and tok.kind == "PART" and (value is None or tok.value == value)
+
+
+def merge_piped(args: dict, piped: Any) -> dict:
+    """「して」の結果を「を」に入れる。「を」が既にあれば、前に並べてリストにする"""
+    args = dict(args)
+    if WO in args:
+        given = args[WO]
+        items = given.items if isinstance(given, ListLit) else [given]
+        args[WO] = ListLit([piped] + items)
+    else:
+        args = {WO: piped, **args}
+    return args
+
+
+def to_pattern(node: Any, line: int) -> str | list[str]:
+    """引数の名前: 「a」または「a と b」(リストを分解して受け取る)"""
+    if isinstance(node, Var):
+        return node.name
+    if isinstance(node, ListLit) and all(isinstance(i, Var) for i in node.items):
+        return [i.name for i in node.items]
+    raise SuruError("引数の名前には名前か「名前 と 名前」しか書けません", line)
+
+
+def check_params(params: list, line: int) -> None:
+    seen: set[str] = set()
+    for _, pat in params:
+        for name in [pat] if isinstance(pat, str) else pat:
+            if name in seen:
+                raise SuruError(f"引数名「{name}」が重複しています", line)
+            seen.add(name)
+
+
 class ExprParser:
     """1つの式(トークン列)を解析する"""
 
@@ -294,8 +393,9 @@ class ExprParser:
         self.tokens = tokens
         self.pos = 0
 
-    def peek(self) -> Token | None:
-        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+    def peek(self, k: int = 0) -> Token | None:
+        i = self.pos + k
+        return self.tokens[i] if i < len(self.tokens) else None
 
     def next(self) -> Token:
         tok = self.peek()
@@ -305,11 +405,16 @@ class ExprParser:
         self.pos += 1
         return tok
 
+    def last_line(self) -> int | None:
+        if not self.tokens:
+            return None
+        return self.tokens[min(self.pos, len(self.tokens) - 1)].line
+
     def parse_all(self) -> Any:
         expr = self.expr()
         tok = self.peek()
         if tok is not None:
-            raise SuruError(f"余分なトークン「{tok.value}」があります", tok.line)
+            raise SuruError(f"余分な「{tok.value}」があります", tok.line)
         return expr
 
     # 式 := もし 式 ならば 式 そうでなければ 式 | パイプライン
@@ -329,40 +434,100 @@ class ExprParser:
         return self.pipeline()
 
     # パイプライン := 区間 { 区間 }
-    # 区間 := [ 算術式 { と 算術式 } ] 呼び出し(…して | …する)
-    # 「…して」の結果は次の区間の第1引数になる。
+    # 区間 := { 値 助詞 } 呼び出し(…して | …する | …すること)
+    # 「…して」の結果は次の区間の「を」に入る。
     def pipeline(self) -> Any:
-        acc: Any = None
-        has_acc = False
+        piped: Any = None
+        has_piped = False
         while True:
-            args: list = []
+            args: dict = {}
+            while True:
+                tok = self.peek()
+                if tok is None or tok.kind == "RP" or (tok.kind == "KW" and tok.value in CONTINUATION_KEYWORDS):
+                    break
+                if tok.kind == "CALL" and tok.form != KOTO:
+                    break
+                if tok.kind == "CALL":  # …すること
+                    self.next()
+                    if not is_part(self.peek()):
+                        # 区間の最後の「こと」は、前に並んだ引数を受け取る(部分適用)
+                        if has_piped:
+                            args = merge_piped(args, piped)
+                        return Ref(tok.value, args, tok.line)
+                    # 後ろに助詞が続く「こと」は外側の呼び出しの引数(関数そのもの)
+                    value: Any = Ref(tok.value, {}, tok.line)
+                elif is_kw(tok, KW_LAMBDA):
+                    self.next()
+                    if has_piped:
+                        raise SuruError("「して」の後に「受け取って」は書けません", tok.line)
+                    value = self.lambda_rest(args, tok.line)
+                    args = {}
+                else:
+                    value = self.list_expr()
+                part = self.peek()
+                if is_part(part):
+                    if part.value == WO and is_kw(self.peek(1), KW_RETURN):
+                        # 「… を 返すこと」: 無名関数の本体の終わり
+                        if args or has_piped:
+                            raise SuruError("「返すこと」の前には値を1つだけ書いてください", part.line)
+                        return value
+                    self.next()
+                    if part.value in args:
+                        raise SuruError(f"助詞「{part.value}」が1つの呼び出しで2回使われています", part.line)
+                    args[part.value] = value
+                    continue
+                # 助詞の付かない値
+                if args or has_piped:
+                    line = part.line if part else self.last_line()
+                    raise SuruError("値の後に助詞(を・に・で・から・へ・より)か「…する」が必要です", line)
+                return value
             tok = self.peek()
             if tok is None or tok.kind != "CALL":
-                if has_acc and (tok is None or tok.kind in ("RP",) or tok.kind == "KW" and tok.value in (KW_THEN, KW_ELSE)):
-                    raise SuruError("「して」の後に関数呼び出しが必要です", self.tokens[self.pos - 1].line)
-                args.append(self.comparison())
-                while is_kw(self.peek(), KW_TO):
-                    self.next()
-                    args.append(self.comparison())
-            tok = self.peek()
-            if tok is not None and tok.kind == "CALL":
-                self.next()
-                acc = Call(tok.value, ([acc] if has_acc else []) + args, tok.line)
-                has_acc = True
-                if tok.form == SHITE:
-                    continue
-                return acc
-            # 呼び出しで終わらない
-            if has_acc:
-                line = tok.line if tok else self.tokens[-1].line
-                raise SuruError("「して」の後は「…する」で終わる必要があります", line)
-            if len(args) > 1:
-                raise SuruError("「と」で並べた値の後には「を…する」が必要です", self.tokens[0].line)
-            return args[0]
+                line = tok.line if tok else self.last_line()
+                if has_piped:
+                    raise SuruError("「して」の後は「…する」で終わる必要があります", line)
+                if args:
+                    raise SuruError("助詞の後に「…する」が必要です", line)
+                raise SuruError("式がありません", line)
+            self.next()
+            if has_piped:
+                args = merge_piped(args, piped)
+            piped = Call(tok.value, args, tok.line)
+            has_piped = True
+            if tok.form == SURU:
+                return piped
+
+    def lambda_rest(self, args: dict, line: int) -> Lambda:
+        """「x を 受け取って 本体 を 返すこと」の「受け取って」より後ろ"""
+        params = [(p, to_pattern(node, line)) for p, node in args.items()]
+        check_params(params, line)
+        body = self.expr()
+        tok = self.peek()
+        if tok is None:
+            raise SuruError("「受け取って」の後は「… を 返すこと」で終わる必要があります", self.last_line())
+        self.next()
+        if not is_part(tok, WO) or not is_kw(self.peek(), KW_RETURN):
+            raise SuruError("「受け取って」の後は「… を 返すこと」で終わる必要があります", tok.line)
+        self.next()
+        return Lambda(params, body, line)
+
+    # 値 := 比較 { と 比較 }  (2つ以上ならリスト)
+    def list_expr(self) -> Any:
+        first = self.comparison()
+        if not is_kw(self.peek(), KW_TO):
+            return first
+        items = [first]
+        while is_kw(self.peek(), KW_TO):
+            self.next()
+            items.append(self.comparison())
+        return ListLit(items)
 
     def comparison(self) -> Any:
         left = self.additive()
         tok = self.peek()
+        if is_kw(tok, KW_GA):
+            self.next()
+            return BinOp("==", left, self.additive(), tok.line)
         if tok is not None and tok.kind == "OP" and tok.value in ("==", "!=", "<", ">", "<=", ">="):
             self.next()
             right = self.additive()
@@ -391,12 +556,25 @@ class ExprParser:
         return self.power()
 
     def power(self) -> Any:
-        base = self.atom()
+        base = self.postfix()
         tok = self.peek()
         if tok is not None and tok.kind == "OP" and tok.value == "^":
             self.next()
             return BinOp("^", base, self.unary(), tok.line)  # 右結合
         return base
+
+    # 「リスト の 残り の 先頭」
+    def postfix(self) -> Any:
+        node = self.atom()
+        while is_kw(self.peek(), KW_NO):
+            no = self.next()
+            name = self.next()
+            if name.kind != "WORD" or name.value not in PROPERTIES:
+                raise SuruError(
+                    f"「の」の後には {'・'.join(sorted(PROPERTIES))} のどれかを書いてください", no.line
+                )
+            node = Each(node, no.line) if name.value == "それぞれ" else Prop(node, name.value, no.line)
+        return node
 
     def atom(self) -> Any:
         tok = self.next()
@@ -412,11 +590,13 @@ class ExprParser:
             if close.kind != "RP":
                 raise SuruError("「)」が必要です", close.line)
             return inner
+        if tok.kind == "CALL" and tok.form == KOTO:
+            return Ref(tok.value, {}, tok.line)
         raise SuruError(f"ここに「{tok.value}」は書けません", tok.line)
 
 
-def parse_definition_head(tokens: list[Token], line: int) -> tuple[str, list[str], bool]:
-    """「a と b を加算する」→ ("加算する", ["a", "b"], True)、「x」→ ("x", [], False)"""
+def parse_definition_head(tokens: list[Token], line: int) -> tuple[str, list, bool]:
+    """「a を b で 除算する」→ ("除算する", [("を", "a"), ("で", "b")], True)、「x」→ ("x", [], False)"""
     if not tokens:
         raise SuruError("「とは」の前に定義する名前が必要です", line)
     last = tokens[-1]
@@ -424,19 +604,29 @@ def parse_definition_head(tokens: list[Token], line: int) -> tuple[str, list[str
         return last.value, [], False  # 値の定義: 「税率 とは 0.1」
     if last.kind != "CALL" or last.form != SURU:
         raise SuruError("関数名は「する」で終わる必要があります", last.line)
-    params: list[str] = []
-    rest = tokens[:-1]
-    for i, t in enumerate(rest):
-        if i % 2 == 0:
-            if t.kind != "WORD":
-                raise SuruError(f"引数名に「{t.value}」は使えません", t.line)
-            if t.value in params:
-                raise SuruError(f"引数名「{t.value}」が重複しています", t.line)
-            params.append(t.value)
-        elif not is_kw(t, KW_TO):
-            raise SuruError("引数は「と」で区切ってください", t.line)
-    if rest and len(rest) % 2 == 0:
-        raise SuruError("「と」の後に引数名が必要です", rest[-1].line)
+    params: list = []
+    names: list[str] = []
+    for t in tokens[:-1]:
+        if t.kind == "WORD":
+            if names and not is_kw(prev, KW_TO):
+                raise SuruError("引数名の後には助詞(を・に・で・から・へ・より)が必要です", t.line)
+            names.append(t.value)
+        elif is_kw(t, KW_TO):
+            if not names or prev.kind != "WORD":
+                raise SuruError("「と」の前に引数名が必要です", t.line)
+        elif t.kind == "PART":
+            if not names or prev.kind != "WORD":
+                raise SuruError(f"助詞「{t.value}」の前に引数名が必要です", t.line)
+            if any(p == t.value for p, _ in params):
+                raise SuruError(f"助詞「{t.value}」が2回使われています(1つの関数で各助詞は1回まで)", t.line)
+            params.append((t.value, names[0] if len(names) == 1 else names))
+            names = []
+        else:
+            raise SuruError(f"引数名に「{t.value}」は使えません", t.line)
+        prev = t
+    if names:
+        raise SuruError("引数名の後には助詞(を・に・で・から・へ・より)が必要です", line)
+    check_params(params, line)
     return last.value, params, True
 
 
@@ -472,8 +662,9 @@ def parse_program(source: str) -> list:
 
 
 # ---------------------------------------------------------------------------
-# 評価
+# 値
 # ---------------------------------------------------------------------------
+# 数 int/float、真偽 bool、文字列 str、リスト tuple(変更できない)、関数 Function/Builtin/Partial
 
 
 class Env:
@@ -493,16 +684,40 @@ class Env:
 @dataclass
 class Function:
     name: str
-    params: list[str]
+    params: list  # [(助詞, パターン)]
     body: Any
     closure: Env
+
+    def slots(self) -> list[tuple[str, bool]]:
+        return [(p, True) for p, _ in self.params]
 
 
 @dataclass
 class Builtin:
     name: str
-    arity: int | None
+    params: list  # [(助詞, 必須か)]
+    fn: Any  # fn(interp, args: dict, line) -> 値
+
+    def slots(self) -> list[tuple[str, bool]]:
+        return list(self.params)
+
+
+@dataclass
+class Partial:
+    """引数の一部を先に渡した関数(「1 を 加算すること」)"""
+
     fn: Any
+    bound: dict
+
+    @property
+    def name(self) -> str:
+        return self.fn.name
+
+    def slots(self) -> list[tuple[str, bool]]:
+        return [(p, r) for p, r in self.fn.slots() if p not in self.bound]
+
+
+FUNCTION_TYPES = (Function, Builtin, Partial)
 
 
 @dataclass
@@ -515,21 +730,33 @@ class Lazy:
     done: bool = False
 
 
-def format_value(v: Any) -> str:
+def format_value(v: Any, nested: bool = False) -> str:
     if v is True:
         return "真"
     if v is False:
         return "偽"
     if isinstance(v, float) and v.is_integer():
         return str(int(v))
-    if isinstance(v, (Function, Builtin)):
+    if isinstance(v, tuple):
+        if not v:
+            return "空"
+        return "（" + " と ".join(format_value(x, True) for x in v) + "）"
+    if isinstance(v, str) and nested:
+        return f"「{v}」"
+    if isinstance(v, FUNCTION_TYPES):
         return f"<関数 {v.name}>"
     return str(v)
 
 
-def _num(v: Any, line: int) -> Any:
+def _num(v: Any, line: int | None) -> Any:
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise SuruError(f"数ではない値「{format_value(v)}」で計算しようとしました", line)
+    return v
+
+
+def _list(v: Any, what: str, line: int | None) -> tuple:
+    if not isinstance(v, tuple):
+        raise SuruError(f"{what}はリストでなければなりません(「{format_value(v)}」が渡されました)", line)
     return v
 
 
@@ -538,6 +765,8 @@ def apply_op(op: str, a: Any, b: Any, line: int) -> Any:
         return a == b
     if op == "!=":
         return a != b
+    if op == "+" and isinstance(a, tuple) and isinstance(b, tuple):
+        return a + b
     if op == "+" and (isinstance(a, str) or isinstance(b, str)):
         return format_value(a) + format_value(b)
     a, b = _num(a, line), _num(b, line)
@@ -568,15 +797,119 @@ def apply_op(op: str, a: Any, b: Any, line: int) -> Any:
     raise SuruError(f"未知の演算子 {op}", line)
 
 
+def get_prop(v: Any, name: str, line: int) -> Any:
+    if name == "長さ":
+        if isinstance(v, str):
+            return len(v)
+        return len(_list(v, "「の 長さ」の前", line))
+    lst = _list(v, f"「の {name}」の前", line)
+    if name == "残り":
+        if not lst:
+            raise SuruError("空のリストに「残り」はありません", line)
+        return lst[1:]
+    if not lst:
+        raise SuruError(f"空のリストに「{name}」はありません", line)
+    return lst[0] if name == "先頭" else lst[-1]
+
+
+# --- 組み込み関数 -------------------------------------------------------------
+
+
+def _items(v: Any) -> tuple:
+    return v if isinstance(v, tuple) else (v,)
+
+
+def _fold_op(op: str, values: tuple, line: int, unit: Any) -> Any:
+    if not values:
+        return unit
+    acc = values[0]
+    for x in values[1:]:
+        acc = apply_op(op, acc, x, line)
+    return acc
+
+
+def _b_add(it: "Interpreter", a: dict, line: int) -> Any:
+    return _fold_op("+", _items(a[WO]) + (_items(a["に"]) if "に" in a else ()), line, 0)
+
+
+def _b_mul(it: "Interpreter", a: dict, line: int) -> Any:
+    return _fold_op("*", _items(a[WO]) + (_items(a["に"]) if "に" in a else ()), line, 1)
+
+
+def _b_apply(it: "Interpreter", a: dict, line: int) -> Any:
+    if "に" in a:
+        return it.apply(a[WO], [a["に"]], line)
+    return it.call(a[WO], {}, line)
+
+
+def _b_filter(it: "Interpreter", a: dict, line: int) -> Any:
+    return tuple(x for x in _list(a["から"], "「選別する」の「から」", line) if it.apply(a["で"], [x], line))
+
+
+def _b_map(it: "Interpreter", a: dict, line: int) -> Any:
+    return tuple(it.apply(a["で"], [x], line) for x in _list(a[WO], "「写像する」の「を」", line))
+
+
+def _b_fold(it: "Interpreter", a: dict, line: int) -> Any:
+    fn = a["で"]
+    acc = a["から"]
+    two = sum(1 for _, req in it.slots_of(fn, line) if req) >= 2
+    for x in _list(a[WO], "「畳み込みする」の「を」", line):
+        # 引数が2つ以上ある関数には2つの値として、1つの関数には「acc と x」のリストとして渡す
+        acc = it.apply(fn, [acc, x] if two else [(acc, x)], line)
+    return acc
+
+
+def _show(it: "Interpreter", a: dict, line: int) -> Any:
+    print(format_value(a[WO]))
+    return a[WO]
+
+
+BUILTINS = [
+    Builtin("表示する", [(WO, True)], _show),
+    Builtin("絶対値にする", [(WO, True)], lambda it, a, line: abs(_num(a[WO], line))),
+    # a と b と c を 加算する / x を y に 加算する
+    Builtin("加算する", [(WO, True), ("に", False)], _b_add),
+    Builtin("乗算する", [(WO, True), ("に", False)], _b_mul),
+    # a から b を 減算する
+    Builtin("減算する", [("から", True), (WO, True)], lambda it, a, line: apply_op("-", a["から"], a[WO], line)),
+    # a を b で 除算する
+    Builtin("除算する", [(WO, True), ("で", True)], lambda it, a, line: apply_op("/", a[WO], a["で"], line)),
+    # x を リスト に 追加する(末尾へ) / x を リスト に 挿入する(先頭へ)
+    Builtin("追加する", [(WO, True), ("に", True)], lambda it, a, line: _list(a["に"], "「追加する」の「に」", line) + (a[WO],)),
+    Builtin("挿入する", [(WO, True), ("に", True)], lambda it, a, line: (a[WO],) + _list(a["に"], "「挿入する」の「に」", line)),
+    # 関数 を 値 に 適用する
+    Builtin("適用する", [(WO, True), ("に", False)], _b_apply),
+    # リスト から 関数 で 選別する / リスト を 関数 で 写像する / リスト を 初期値 から 関数 で 畳み込みする
+    Builtin("選別する", [("から", True), ("で", True)], _b_filter),
+    Builtin("写像する", [(WO, True), ("で", True)], _b_map),
+    Builtin("畳み込みする", [(WO, True), ("から", True), ("で", True)], _b_fold),
+]
+
+
 def make_global_env() -> Env:
     env = Env()
-    builtins = [
-        Builtin("表示する", 1, lambda x: (print(format_value(x)), x)[1]),
-        Builtin("絶対値にする", 1, abs),
-    ]
-    for b in builtins:
+    for b in BUILTINS:
         env.vars[b.name] = b
     return env
+
+
+# ---------------------------------------------------------------------------
+# 評価
+# ---------------------------------------------------------------------------
+
+
+def bind(env: Env, pattern: Any, value: Any, part: str, fname: str, line: int) -> None:
+    if isinstance(pattern, str):
+        env.vars[pattern] = value
+        return
+    if not isinstance(value, tuple) or len(value) != len(pattern):
+        got = f"{len(value)}個のリスト" if isinstance(value, tuple) else "1個の値"
+        raise SuruError(
+            f"「{fname}」の「{part}」には{len(pattern)}個の値が必要です(渡されたのは{got})", line
+        )
+    for name, v in zip(pattern, value):
+        env.vars[name] = v
 
 
 class Interpreter:
@@ -610,8 +943,14 @@ class Interpreter:
                     v.value, v.done = self.eval(v.expr, v.env), True
                 return v.value
             return v
+        if isinstance(node, ListLit):
+            return tuple(self.eval(i, env) for i in node.items)
+        if isinstance(node, Prop):
+            return get_prop(self.eval(node.target, env), node.name, node.line)
+        if isinstance(node, Each):
+            return _list(self.eval(node.target, env), "「の それぞれ」の前", node.line)
         if isinstance(node, Neg):
-            return -_num(self.eval(node.operand, env), 0)
+            return -_num(self.eval(node.operand, env), None)
         if isinstance(node, BinOp):
             return apply_op(node.op, self.eval(node.left, env), self.eval(node.right, env), node.line)
         if isinstance(node, If):
@@ -619,8 +958,28 @@ class Interpreter:
             return self.eval(node.then if cond else node.other, env)
         if isinstance(node, Call):
             fn = env.lookup(node.name, node.line)
-            args = [self.eval(a, env) for a in node.args]
-            return self.call(fn, args, node.line)
+            args = {p: self.eval(a, env) for p, a in node.args.items()}
+            each = [p for p, a in node.args.items() if isinstance(a, Each)]
+            if not each:
+                return self.call(fn, args, node.line)
+            # 「リスト の それぞれ を 三倍する」: 要素ごとに呼び出す
+            lengths = {len(args[p]) for p in each}
+            if len(lengths) > 1:
+                raise SuruError("「それぞれ」のリストの長さがそろっていません", node.line)
+            return tuple(
+                self.call(fn, {**args, **{p: args[p][i] for p in each}}, node.line)
+                for i in range(lengths.pop())
+            )
+        if isinstance(node, Ref):
+            fn = env.lookup(node.name, node.line)
+            if not isinstance(fn, FUNCTION_TYPES):
+                raise SuruError(f"「{node.name}」は関数ではありません", node.line)
+            if not node.args:
+                return fn
+            args = {p: self.eval(a, env) for p, a in node.args.items()}
+            return self.partial(fn, args, node.line)
+        if isinstance(node, Lambda):
+            return Function("無名関数", node.params, node.body, env)
         if isinstance(node, Block):
             local = Env(env)
             for s in node.statements:
@@ -633,20 +992,52 @@ class Interpreter:
             return result
         raise SuruError(f"評価できない構文 {node!r}")
 
-    def call(self, fn: Any, args: list, line: int) -> Any:
+    def slots_of(self, fn: Any, line: int) -> list[tuple[str, bool]]:
+        if not isinstance(fn, FUNCTION_TYPES):
+            raise SuruError(f"「{format_value(fn)}」は関数ではありません", line)
+        return fn.slots()
+
+    def partial(self, fn: Any, args: dict, line: int) -> Any:
+        slots = dict(self.slots_of(fn, line))
+        for p in args:
+            if p not in slots:
+                raise SuruError(f"「{fn.name}」は「{p}」の引数を受け取りません", line)
+        if isinstance(fn, Partial):
+            return Partial(fn.fn, {**fn.bound, **args})
+        return Partial(fn, args)
+
+    def apply(self, fn: Any, values: list, line: int) -> Any:
+        """関数の値に、まだ渡していない引数を定義の順に埋めて呼び出す。足りなければ部分適用"""
+        slots = self.slots_of(fn, line)
+        if len(values) > len(slots):
+            raise SuruError(f"「{fn.name}」に渡す値が多すぎます", line)
+        args = {p: v for (p, _), v in zip(slots, values)}
+        if any(req and p not in args for p, req in slots):
+            return self.partial(fn, args, line)
+        return self.call(fn, args, line)
+
+    def call(self, fn: Any, args: dict, line: int) -> Any:
+        if isinstance(fn, Partial):
+            dup = set(fn.bound) & set(args)
+            if dup:
+                raise SuruError(f"「{fn.name}」の「{dup.pop()}」は既に渡されています", line)
+            return self.call(fn.fn, {**fn.bound, **args}, line)
+        if not isinstance(fn, (Function, Builtin)):
+            raise SuruError(f"「{format_value(fn)}」は関数ではありません", line)
+        slots = fn.slots()
+        names = {p for p, _ in slots}
+        for p in args:
+            if p not in names:
+                raise SuruError(f"「{fn.name}」は「{p}」の引数を受け取りません", line)
+        for p, req in slots:
+            if req and p not in args:
+                raise SuruError(f"「{fn.name}」には「{p}」の引数が必要です", line)
         if isinstance(fn, Builtin):
-            if fn.arity is not None and len(args) != fn.arity:
-                raise SuruError(f"「{fn.name}」の引数は{fn.arity}個です(渡されたのは{len(args)}個)", line)
-            return fn.fn(*args)
-        if isinstance(fn, Function):
-            if len(args) != len(fn.params):
-                raise SuruError(
-                    f"「{fn.name}」の引数は{len(fn.params)}個です(渡されたのは{len(args)}個)", line
-                )
-            local = Env(fn.closure)
-            local.vars.update(zip(fn.params, args))
-            return self.eval(fn.body, local)
-        raise SuruError(f"「{format_value(fn)}」は関数ではありません", line)
+            return fn.fn(self, args, line)
+        local = Env(fn.closure)
+        for p, pat in fn.params:
+            bind(local, pat, args[p], p, fn.name, line)
+        return self.eval(fn.body, local)
 
 
 def run(source: str) -> list[Any]:
