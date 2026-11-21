@@ -943,7 +943,42 @@ class TraitImpl:
     line: int
 
 
-TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl)
+@dataclass
+class TypeSig:
+    """型の宣言(型注釈)。「数 を 階乗する は 数」「税率 は 数」。実行には使わず、型の検査で使う。
+    params は関数なら [(助詞, 型)]、値なら None。型は TypeName / TypeFun / TypeVarName"""
+
+    name: str
+    params: list | None
+    result: Any
+    line: int
+
+
+@dataclass
+class TypeName:
+    """「数」「数 の リスト」「（数 と 文字列） の 点」"""
+
+    name: str
+    args: list
+
+
+@dataclass
+class TypeFun:
+    """「（数 を 受け取って 数 を 返すこと）」"""
+
+    params: list  # [(助詞, 型)]
+    result: Any
+
+
+@dataclass
+class TypeVarName:
+    """「甲」「乙」: どんな型でもよい(同じ宣言の中では同じ型)"""
+
+    name: str
+
+
+TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig)
+TYPE_VAR_NAMES = "甲乙丙丁戊己庚辛壬癸"
 BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作")
 
 
@@ -1996,6 +2031,9 @@ def parse_statement(node: Node) -> Any:
         return typedef
     towa = find_top_level(tokens, KW_TOWA)
     if towa is None:
+        sig = try_parse_type_sig(nosep(flatten(node)))
+        if sig is not None:
+            return sig
         if len(tokens) == 3 and tokens[0].kind == "WORD" and is_kw(tokens[1], KW_WA) and tokens[2].kind == "WORD":
             return parse_trait_impl(node, tokens)
         return ExprParser(flatten(node)).parse_all()
@@ -2016,6 +2054,129 @@ def parse_statement(node: Node) -> Any:
             raise SuruError("「とは」の後に本体が必要です", node.line.number)
         body = parse_block(node.children)
     return Define(name, params, body, is_function, node.line.number)
+
+
+def _is_type_word(tok: Token) -> bool:
+    return tok.kind == "WORD" and (
+        tok.value in BUILTIN_TYPES or tok.value in _CTX.types or (len(tok.value) == 1 and tok.value in TYPE_VAR_NAMES)
+    )
+
+
+def try_parse_type_sig(tokens: list[Token]) -> TypeSig | None:
+    """「数 を 階乗する は 数」「税率 は 数」なら型の宣言を返す(そうでなければ None)"""
+    ha = find_top_level(tokens, KW_WA)
+    if ha is None or ha == 0 or ha == len(tokens) - 1:
+        return None
+    left, right = tokens[:ha], tokens[ha + 1 :]
+    line = tokens[0].line
+    last = left[-1]
+    if last.kind == "CALL" and last.form == SURU and not last.negated:
+        # 関数: 「型 助詞 型 助詞 … 名前する は 型」
+        params = []
+        i = 0
+        while i < len(left) - 1:
+            t, i = parse_type(left, i)
+            if i >= len(left) - 1 or not (left[i].kind == "PART" or is_kw(left[i], GA)):
+                raise SuruError("型の宣言では、引数の型の後に助詞を書いてください(「数 を 階乗する は 数」)", line)
+            params.append((left[i].value, t))
+            i += 1
+        name = last.value
+        if any(p == q for k, (p, _) in enumerate(params) for q, _ in params[:k]):
+            raise SuruError(f"「{name}」の型の宣言で同じ助詞が2回使われています", line)
+        return TypeSig(name, params, parse_type_all(right, line), line)
+    if len(left) == 1 and left[0].kind == "WORD" and right and (_is_type_word(right[0]) or right[0].kind == "LP"):
+        # 値: 「税率 は 数」(「点 は 比較可能」は性質の実装)
+        if len(right) == 1 and not _is_type_word(right[0]):
+            return None
+        return TypeSig(_check_name(left[0]), None, parse_type_all(right, line), line)
+    return None
+
+
+def parse_type_all(tokens: list[Token], line: int) -> Any:
+    if not tokens:
+        raise SuruError("「は」の後に型を書いてください", line)
+    t, i = parse_type(tokens, 0)
+    if i != len(tokens):
+        raise SuruError(f"型の書き方が正しくありません(「{tokens[i].value}」)", tokens[i].line)
+    return t
+
+
+def _matching(tokens: list[Token], i: int) -> int:
+    depth = 0
+    for j in range(i, len(tokens)):
+        if tokens[j].kind == "LP":
+            depth += 1
+        elif tokens[j].kind == "RP":
+            depth -= 1
+            if depth == 0:
+                return j
+    raise SuruError("「（」が閉じていません", tokens[i].line)
+
+
+def parse_type(tokens: list[Token], i: int) -> tuple[Any, int]:
+    """型を1つ読む: 「数」「甲」「数 の リスト」「（数 と 文字列） の 点」「（数 を 受け取って 数 を 返すこと）」"""
+    if i >= len(tokens):
+        raise SuruError("型が必要です", tokens[-1].line)
+    tok = tokens[i]
+    args: list | None = None
+    if tok.kind == "LP":
+        j = _matching(tokens, i)
+        inner = tokens[i + 1 : j]
+        i = j + 1
+        if find_top_level(inner, KW_RETURN) is not None:
+            t: Any = parse_fun_type(inner, tok.line)
+        elif find_top_level(inner, KW_TO) is not None:
+            args = [parse_type_all(part, tok.line) for part in split_top_level(inner, KW_TO)]
+            t = None
+        else:
+            t = parse_type_all(inner, tok.line)
+    elif tok.kind == "WORD":
+        t = _type_word(tok, [])
+        i += 1
+    else:
+        raise SuruError(f"「{tok.value}」は型ではありません", tok.line)
+    while i + 1 < len(tokens) and is_kw(tokens[i], KW_NO) and tokens[i + 1].kind == "WORD":
+        t = _type_word(tokens[i + 1], args if args is not None else [t])
+        args = None
+        i += 2
+    if args is not None:
+        raise SuruError("「（甲 と 乙）」の後には「の 型名」が必要です", tok.line)
+    return t, i
+
+
+def _type_word(tok: Token, args: list) -> Any:
+    name = tok.value
+    if len(name) == 1 and name in TYPE_VAR_NAMES and not tok.quoted:
+        if args:
+            raise SuruError(f"「{name}」は型の引数をとりません", tok.line)
+        return TypeVarName(name)
+    if name in ("数", "文字列", "真偽") and args:
+        raise SuruError(f"「{name}」は型の引数をとりません", tok.line)
+    if name in ("リスト", "動作") and len(args) != 1:
+        raise SuruError(f"「{name}」の前には型を1つ書いてください(「数 の {name}」)", tok.line)
+    if name not in BUILTIN_TYPES and name not in _CTX.types:
+        raise SuruError(f"「{name}」という型はありません", tok.line)
+    return TypeName(name, list(args))
+
+
+def parse_fun_type(tokens: list[Token], line: int) -> TypeFun:
+    """「数 を 数 で 受け取って 数 を 返すこと」「数 を 返すこと」"""
+    k = find_top_level(tokens, KW_LAMBDA)
+    params = []
+    if k is not None:
+        i = 0
+        while i < k:
+            t, i = parse_type(tokens[:k], i)
+            if i >= k or not (tokens[i].kind == "PART" or is_kw(tokens[i], GA)):
+                raise SuruError("関数の型では、引数の型の後に助詞を書いてください", line)
+            params.append((tokens[i].value, t))
+            i += 1
+        rest = tokens[k + 1 :]
+    else:
+        rest = tokens
+    if len(rest) < 3 or not (rest[-2].kind == "PART" and rest[-2].value == "を") or not is_kw(rest[-1], KW_RETURN):
+        raise SuruError("関数の型は「（数 を 受け取って 数 を 返すこと）」のように書きます", line)
+    return TypeFun(params, parse_type_all(rest[:-2], line))
 
 
 def split_top_level(tokens: list[Token], value: str) -> list[list[Token]]:
@@ -3186,31 +3347,49 @@ def repl() -> None:
             print("エラー: 再帰が深すぎます")
 
 
-CHECK_FLAGS = ("--検査", "--check")
+CHECK_FLAGS = ("--検査", "--check")  # 型の検査だけを行う(実行はしない)
+NO_CHECK_FLAGS = ("--検査なし", "--no-check")  # 型の検査をせずに実行する
+
+
+def type_check(source: str) -> bool:
+    """型を調べる。間違いがあれば表示して False"""
+    from suru_check import check
+
+    try:
+        check(source)
+    except Exception as e:  # suru_check は suru を別のモジュールとして読み込むので、名前で見分ける
+        if type(e).__name__ != "SuruError":
+            raise
+        print(format_error(e, source), file=sys.stderr)
+        return False
+    return True
 
 
 def main(argv: list[str]) -> int:
     sys.setrecursionlimit(10000)
     if len(argv) >= 3 and argv[1] in CHECK_FLAGS:
-        # 型の検査だけを行う(実行はしない)
-        from suru_check import check
-
         with open(argv[2], encoding="utf-8") as f:
             source = f.read()
-        try:
-            check(source)
-        except Exception as e:  # suru_check は suru を別のモジュールとして読み込むので、名前で見分ける
-            if type(e).__name__ != "SuruError":
-                raise
-            print(format_error(e, source), file=sys.stderr)
+        if not type_check(source):
             return 1
         print("型の検査で問題は見つかりませんでした")
         return 0
+    checking = True
+    if len(argv) >= 3 and argv[1] in NO_CHECK_FLAGS:
+        checking = False
+        argv = argv[:1] + argv[2:]
     if len(argv) < 2:
         repl()
         return 0
     with open(argv[1], encoding="utf-8") as f:
         source = f.read()
+    # 実行の前に必ず型を調べる(間違いがあれば実行しない)
+    try:
+        if checking and not type_check(source):
+            return 1
+    except SuruError as e:  # 構文のエラー
+        print(format_error(e, source), file=sys.stderr)
+        return 1
     interp = Interpreter()
     try:
         interp.run(source, emit=lambda v: print(interp.format(v)))

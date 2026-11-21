@@ -11,7 +11,7 @@
 
 自分の型は、フィールドごとに型の引数を持つ(「数 の 『たぶん』」)。自分自身を中に持つ
 フィールド(木の「左」)は、推論の途中で型が無限に続くと分かったところで「その型自身」とし、
-初めからやり直す。プログラムの中でいつも同じ型で使うフィールドは、引数にせずその型に決める。
+初めからやり直す。エラーでは、いつも同じ型で使うフィールドの型の引数は省いて表示する。
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from suru import (
     BinOp, Block, Call, Chain, Construct, Define, Do, Each, Field, If, KW_KATSU, KW_MATAHA, Lambda,
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
     PValue, Ref, RESULT, Run, Sequel, Str, SuruError, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
-    HOLE, TO_STRING, MAP, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
+    HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
     parse_program, collect_runs, _run_key,
 )
 
@@ -130,6 +130,10 @@ def occurs(v: TVar, t: Any) -> bool:
 BASIC = ("数", "文字列", "真偽")
 MONADS = ("動作", "リスト")  # 組み込みの連鎖可能な型
 
+# 自分の型のフィールドごとの、いつも使う型(型名 → 引数ごとの型か None)。エラーの表示で、
+# 引数がすべてこの型(かどうでもよい型変数)なら省く
+_usual: dict = {}
+
 # 「結果にする」の値を自分の型とそろえたもの(Checker が、その型の「結果にする」の実装で確かめる)
 _pure_deferred: list = []
 
@@ -196,6 +200,12 @@ class Namer:
             _count_vars(t, counts)
         self.lonely = {v for v, n in counts.items() if n == 1}
 
+    def ordinary(self, t: TCon) -> bool:
+        usual = _usual.get(t.name) or [None] * len(t.args)
+        if len(usual) != len(t.args):
+            return False
+        return all(prune(a) in self.lonely or (u is not None and _teq(a, u)) for a, u in zip(t.args, usual))
+
     def __call__(self, t: Any, nested: bool = False) -> str:
         t = prune(t)
         if isinstance(t, PureVar):
@@ -207,7 +217,7 @@ class Namer:
                 self.names[t] = VAR_NAMES[k] if k < len(VAR_NAMES) else f"型{k + 1}"
             return self.names[t]
         if isinstance(t, TCon):
-            if not t.args or (t.name not in MONADS and all(prune(a) in self.lonely for a in t.args)):
+            if not t.args or (t.name not in MONADS and self.ordinary(t)):
                 return t.name
             inner = " と ".join(self(a, True) for a in t.args)
             s = f"{inner} の {t.name}" if len(t.args) == 1 else f"（{inner}） の {t.name}"
@@ -446,7 +456,7 @@ class Shapes:
     """自分の型のフィールドの型の決め方。推論をやり直しても引き継ぐ。
     フィールドは (型名, フィールド名) で表し、同じ型の形どうしで同じ名前のフィールドは同じ型にする。
     ふつうのフィールドは型の引数になる。recursive は自分自身を中に持つフィールドの型(SELF と
-    ほかのフィールドの ph を含む)、fixed はプログラムの中でいつも同じ型で使うフィールドの型"""
+    ほかのフィールドの ph を含む)"""
 
     def __init__(self, ctx: ParseContext):
         self.keys: dict[str, list] = {}
@@ -457,10 +467,9 @@ class Shapes:
                     ks.append((tname, f))
         self.ph = {k: TVar() for ks in self.keys.values() for k in ks}
         self.recursive: dict = {}
-        self.fixed: dict = {}
 
     def params(self, tname: str) -> list:
-        return [k for k in self.keys.get(tname, []) if k not in self.recursive and k not in self.fixed]
+        return [k for k in self.keys.get(tname, []) if k not in self.recursive]
 
     def is_user(self, t: Any) -> bool:
         return isinstance(t, TCon) and t.name in self.keys and len(t.args) == len(self.params(t.name))
@@ -484,33 +493,20 @@ class Shapes:
                 return True
         return False
 
-    def fix(self, instances: list) -> bool:
-        """どの使い方でも同じ型(型変数を含まない)のフィールドを、その型に決める"""
-        before = {t: self.params(t) for t in self.keys}
-        found = {}
-        for tname, ps in before.items():
+    def learn_usual(self, instances: list) -> bool:
+        """どの使い方でも同じ型(型変数を含まない)のフィールドを覚える(エラーの表示を短くするため)"""
+        found = False
+        for tname in self.keys:
+            ps = self.params(tname)
             mine = [x for x in instances if x.name == tname and len(x.args) == len(ps)]
-            for j, k in enumerate(ps):
+            usual = []
+            for j in range(len(ps)):
                 ts = [prune(x.args[j]) for x in mine]
-                if ts and not any(ftv(x) for x in ts) and all(_teq(ts[0], x) for x in ts[1:]):
-                    found[k] = ts[0]
-        if not found:
-            return False
-        self.fixed.update(found)
-
-        def norm(t: Any) -> Any:
-            t = prune(t)
-            if isinstance(t, TCon) and t.name in before and len(t.args) == len(before[t.name]):
-                return TCon(t.name, tuple(norm(a) for k, a in zip(before[t.name], t.args) if k not in found))
-            if isinstance(t, TCon):
-                return TCon(t.name, tuple(norm(a) for a in t.args)) if t.args else t
-            if isinstance(t, TFun):
-                return TFun([(p, norm(a)) for p, a in t.params], norm(t.result))
-            return t
-
-        for k in found:
-            self.fixed[k] = norm(self.fixed[k])
-        return True
+                ok = bool(ts) and not any(ftv(x) for x in ts) and all(_teq(ts[0], x) for x in ts[1:])
+                usual.append(_subst(ts[0], {}) if ok else None)
+                found = found or ok
+            _usual[tname] = usual
+        return found
 
 
 def _nodes(t: Any, out: list | None = None) -> list:
@@ -643,7 +639,8 @@ class Checker:
         for d in defs:
             if d.name.startswith("\0"):
                 self.aliases.setdefault(d.name.split("\0")[-1], []).append(d.name)
-        env = self.infer_defs(defs, TEnv())
+        sigs = self.collect_sigs(program, defs)
+        env = self.infer_defs(defs, TEnv(), sigs)
         for s in program:
             if isinstance(s, (Define,) + TOP_LEVEL_ONLY):
                 continue
@@ -669,23 +666,37 @@ class Checker:
                     c.message = f"「{display_name(name)}」に渡した値: {c.message}"
         return t
 
-    def infer_defs(self, defs: list, env: TEnv) -> TEnv:
-        """定義の並びを推論し、それぞれの名前に多相な型を付けた新しい環境を返す"""
+    def infer_defs(self, defs: list, env: TEnv, sigs: dict | None = None) -> TEnv:
+        """定義の並びを推論し、それぞれの名前に多相な型を付けた新しい環境を返す。
+        sigs は一番外の型の宣言(名前 → TypeSig)"""
+        sigs = sigs or {}
         scope = TEnv(env)
         for comp in sccs(defs, self.aliases):
             mono = {d.name: TVar() for d in comp}
             inner = TEnv(scope)
             inner.vars.update(mono)
+            # 宣言した型を先に付ける
+            declared = {d.name: self.declared_type(sigs[d.name], d) for d in comp if d.name in sigs}
+            for name, (t, _) in declared.items():
+                if sigs[name].params is None:
+                    self.unify(mono[name], t)
             # 関数は先に引数の型を決めておく(互いに呼び合う中でも引数を調べられるように)
             heads = {d.name: self.function_head(d, inner, mono[d.name]) for d in comp if d.is_function}
+            for name, (t, _) in declared.items():
+                if name in heads:
+                    self.apply_sig(sigs[name], t, heads[name][1])
             for d in comp:
                 self.line = d.line
-                t = self.infer_define(d, inner, heads.get(d.name))
+                t = self.infer_define(d, inner, heads.get(d.name), sigs.get(d.name))
                 self.unify_or(
                     mono[d.name], t, d.line,
-                    lambda sa, sb, d=d: f"「{display_name(d.name)}」の型が合いません({sa} と {sb})",
+                    (lambda sa, sb, d=d: f"「{display_name(d.name)}」は{sa}と宣言されていますが、{sb}になっています")
+                    if d.name in declared and not d.is_function else
+                    (lambda sa, sb, d=d: f"「{display_name(d.name)}」の型が合いません({sa} と {sb})"),
                 )
             self.solve(inner)
+            for name, (_, tvars) in declared.items():
+                self.check_rigid(sigs[name], tvars)
             outer_free = scope.free_vars()
             taken: set = set()
             for d in comp:
@@ -805,6 +816,85 @@ class Checker:
             self.pending.append(Constraint(t, line, trait=trait, method=name, ftype=ftype))
         return ftype
 
+    # --- 型の宣言 ---------------------------------------------------------
+
+    def collect_sigs(self, program: list, defs: list) -> dict:
+        names = {d.name: d for d in defs}
+        sigs: dict = {}
+        for s in program:
+            if not isinstance(s, TypeSig):
+                continue
+            if s.name in sigs:
+                raise self.err(f"「{s.name}」の型が2回宣言されています", s.line)
+            if s.name in self.method_trait:
+                raise self.err(f"「{s.name}」は性質の関数なので、型は性質の宣言で決まります", s.line)
+            d = names.get(s.name)
+            if d is None:
+                raise self.err(f"「{s.name}」の型を宣言していますが、一番外にその定義がありません", s.line)
+            if (s.params is not None) != d.is_function:
+                what = "関数" if d.is_function else "値"
+                raise self.err(f"「{s.name}」は{what}なので、型の宣言の書き方が違います", s.line)
+            if s.params is not None:
+                want = sorted(p for p, _ in d.params)
+                got = sorted(p for p, _ in s.params)
+                if want != got:
+                    raise self.err(
+                        f"「{s.name}」の型の宣言の助詞({'・'.join(got) or 'なし'})が定義の助詞({'・'.join(want) or 'なし'})と違います",
+                        s.line)
+            sigs[s.name] = s
+        return sigs
+
+    def declared_type(self, sig: TypeSig, d: Define) -> tuple:
+        """宣言の型と、その中の型変数(甲・乙 … → TVar)"""
+        tvars: dict = {}
+        result = self.type_of(sig.result, tvars, sig.line)
+        if sig.params is None:
+            return result, tvars
+        return TFun([(p, self.type_of(t, tvars, sig.line)) for p, t in sig.params], result), tvars
+
+    def type_of(self, te: Any, tvars: dict, line: Any) -> Any:
+        """型の書き方(TypeName など)から型を作る"""
+        if isinstance(te, TypeVarName):
+            return tvars.setdefault(te.name, TVar())
+        if isinstance(te, TypeFun):
+            return TFun([(p, self.type_of(t, tvars, line)) for p, t in te.params], self.type_of(te.result, tvars, line))
+        args = [self.type_of(a, tvars, line) for a in te.args]
+        if te.name in BASIC:
+            return TCon(te.name)
+        if te.name in MONADS:
+            return TCon(te.name, (args[0],))
+        if te.name not in self.shapes.keys:
+            return TVar()  # 「関数」: どんな関数でもよい
+        inst = self.fresh_type(te.name)
+        keys = [k for k in self.shapes.keys[te.name] if k not in self.shapes.recursive]
+        if len(args) > len(keys):
+            raise self.err(f"「{te.name}」がとる型の引数は{len(keys)}個です(フィールド: {'・'.join(f for _, f in keys)})", line)
+        for k, a in zip(keys, args):
+            self.unify_or(self.field_type(inst, k), a, line,
+                          lambda sa, sb, k=k: f"「{te.name}」の「{k[1]}」は{sa}なので、{sb}にはできません")
+        return inst
+
+    def apply_sig(self, sig: TypeSig, declared: TFun, head: TFun) -> None:
+        """関数の宣言の型を、定義の引数(助詞ごと)と値に付ける"""
+        params = dict(head.params)
+        for p, t in declared.params:
+            self.unify_or(params[p], t, sig.line,
+                          lambda sa, sb, p=p: f"「{sig.name}」の「{p}」は{sb}と宣言されていますが、定義では{sa}です")
+        self.unify_or(head.result, declared.result, sig.line,
+                      lambda sa, sb: f"「{sig.name}」の値は{sb}と宣言されていますが、定義では{sa}です")
+
+    def check_rigid(self, sig: TypeSig, tvars: dict) -> None:
+        """甲・乙 … と宣言したところが、どんな型でもよいままか(決まった型や、互いに同じ型になっていないか)"""
+        seen: dict = {}
+        for name, v in tvars.items():
+            r = prune(v)
+            if not isinstance(r, TVar) or isinstance(r, PureVar):
+                raise self.err(f"「{sig.name}」の型の宣言の「{name}」は、定義では{show(r)[0]}に決まります"
+                               "(どんな型でもよいときだけ甲・乙 … を使います)", sig.line)
+            if r in seen:
+                raise self.err(f"「{sig.name}」の型の宣言の「{seen[r]}」と「{name}」は、定義では同じ型になります", sig.line)
+            seen[r] = name
+
     def function_head(self, d: Define, env: TEnv, mono: Any = None) -> tuple:
         local = TEnv(env)
         params = [(p, self.bind_param(pat, local)) for p, pat in d.params]
@@ -813,12 +903,15 @@ class Checker:
             self.unify(mono, t)
         return local, t
 
-    def infer_define(self, d: Define, env: TEnv, head: tuple | None = None) -> Any:
+    def infer_define(self, d: Define, env: TEnv, head: tuple | None = None, sig: Any = None) -> Any:
         if not d.is_function:
             return self.infer(d.body, env)
         local, t = head or self.function_head(d, env)
         params = t.params
         result = self.infer(d.body, local)
+        if sig is not None:
+            self.unify_or(t.result, result, d.line,
+                          lambda sa, sb: f"「{display_name(d.name)}」の値は{sa}と宣言されていますが、{sb}になっています")
         self.unify_or(t.result, result, d.line,
                       lambda sa, sb: f"「{display_name(d.name)}」の値の型が合いません({sa} と {sb})")
         if d.name in self.show_impls:
@@ -1092,8 +1185,6 @@ class Checker:
         ps = sh.params(key[0])
         if key in ps:
             return t.args[ps.index(key)]
-        if key in sh.fixed:
-            return sh.fixed[key]
         tmpl = sh.recursive[key]
         mapping: dict = {}
         for v in ftv(tmpl):
@@ -1640,12 +1731,13 @@ def check(source: str) -> None:
                 return e, checker
         return None, checker
 
+    _usual.clear()
     first, checker = attempt()
-    # いつも同じ型で使うフィールドを決めて、もう一度調べる(エラーの型の表示が短くなる)
-    if not shapes.fix(checker.instances):
-        if first:
-            raise first
+    if first is None:
         return
-    second, _ = attempt()
-    if first and second:
-        raise second
+    # いつも同じ型で使うフィールドを覚えて、もう一度調べる(エラーの型の表示が短くなる)
+    if shapes.learn_usual(checker.instances):
+        second, _ = attempt()
+        _usual.clear()
+        raise second or first
+    raise first
