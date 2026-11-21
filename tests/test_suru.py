@@ -904,3 +904,50 @@ def test_場合ごとの定義のエラー():
 def test_場合ごとの定義の例が動く():
     src = (ROOT / "examples" / "cases.suru").read_text(encoding="utf-8")
     assert _text(src) == ["3628800", "10", "12", "10", "黄", "大きい円", "正方形", "正の偶数", "真"]
+
+
+# --- 述語(である・でない・であること) ----------------------------------------
+
+EVEN = "n が 偶数である とは n % 2 が 0\n"
+
+
+def test_述語の定義と呼び出し():
+    assert run(EVEN + "4 が 偶数である\n3 が 偶数である\n3 が 偶数でない") == [True, False, True]
+
+
+def test_述語は条件に書ける():
+    assert run(EVEN + "もし 6 が 偶数である ならば 「偶」 そうでなければ 「奇」") == ["偶"]
+    assert run("nが正であるとは、n>0。もし-1が正でないならば「負か零」、そうでなければ「正」。") == ["負か零"]
+
+
+def test_であることは述語の値():
+    assert run(EVEN + "1 と 2 と 3 と 4 から 偶数であること で 選別する") == [(2, 4)]
+
+
+def test_述語と_かつ_または():
+    src = EVEN + "n が 正である とは n > 0\n"
+    assert run(src + "3 が 正である かつ 3 が 偶数でない\n1 > 0 かつ 3 が 偶数である") == [True, False]
+    assert run(src + "真 または 偽 かつ 1 が 偶数である") == [True]
+    assert run(src + "もし 1 が 1 かつ 2 が 偶数である ならば 「a」 そうでなければ 「b」") == ["a"]
+
+
+def test_して_の結果は述語の_が_に入る():
+    assert run(EVEN + "x を 三倍する とは x * 3\n4 を 三倍して 偶数である") == [True]
+
+
+def test_述語の引数と場合ごとの定義():
+    assert run("a が b で 割切である とは a % b が 0\n9 が 3 で 割切である") == [True]
+    assert run("0 が 零である とは 真\nn が 零である とは 偽\n0 が 零である\n2 が 零である") == [True, False]
+    assert run(EVEN + "（1 と 2） の それぞれ が 偶数である") == [(False, True)]
+
+
+def test_述語のエラー():
+    with pytest.raises(SuruError, match="真 か 偽 を返す必要があります"):
+        run("n が 変である とは 1\n1 が 変である")
+    with pytest.raises(SuruError, match="「…である」の形で定義"):
+        run("n が 奇数でない とは 真")
+
+
+def test_述語の例が動く():
+    src = (ROOT / "examples" / "predicate.suru").read_text(encoding="utf-8")
+    assert _text(src) == ["真", "真", "真", "（2 と 4）", "正の偶数", "偽", "負か零"]

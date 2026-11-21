@@ -121,6 +121,10 @@ SHITE = "して"      # 連用形: 結果を次の関数の「を」へ渡す
 KOTO = "すること"   # 名詞化: 関数そのもの(値)
 SHITEKARA = "してから"  # 前の動作を行ってから、その結果を次の関数の「を」へ渡す(バインド)
 SHITA = "した"      # 「入力した 結果」: 手順の中で動作を行い、その結果を値として使う
+DEARU = "である"    # 述語(真偽を返す関数): n が 偶数である
+DENAI = "でない"    # 述語の否定: n が 偶数でない
+DEARUKOTO = "であること"  # 述語そのもの(値): 偶数であること
+GA = "が"           # 述語の主語の助詞
 
 # 予約語ではなく、決まった位置でだけ特別な意味になる言葉
 RESULT = "結果"     # 「入力 の 結果 を 数値にする」「入力した 結果」
@@ -137,6 +141,7 @@ class Token:
     line: int
     form: str = ""  # CALL のとき "する" / "して" / "すること"
     quoted: bool = False  # 『』で囲んだ名前
+    negated: bool = False  # 「…でない」
 
     def __repr__(self) -> str:
         return f"{self.kind}:{self.value}{('/' + self.form) if self.form else ''}"
@@ -166,13 +171,26 @@ def hiragana_name_error(name: str, line: int) -> SuruError:
     )
 
 
+def call_token(stem: str, form: str, line: int) -> Token:
+    """呼び出しのトークン。述語(である/でない/であること)は「…である」という名前の関数にする"""
+    if form in (DEARU, DENAI):
+        return Token("CALL", stem + DEARU, line, SURU, negated=form == DENAI)
+    if form == DEARUKOTO:
+        return Token("CALL", stem + DEARU, line, KOTO)
+    return Token("CALL", stem + SURU, line, form)
+
+
+def is_predicate(name: str) -> bool:
+    return name.endswith(DEARU)
+
+
 def _classify_call(word: str, line: int) -> Token | None:
-    for form in (KOTO, SURU, SHITEKARA, SHITE, SHITA):
+    for form in (DEARUKOTO, DEARU, DENAI, KOTO, SURU, SHITEKARA, SHITE, SHITA):
         if word.endswith(form) and len(word) > len(form):
             stem = word[: -len(form)]
             if _is_all_hiragana(stem):
                 raise hiragana_function_error(stem, line)
-            return Token("CALL", stem + SURU, line, form)
+            return call_token(stem, form, line)
     return None
 
 
@@ -289,11 +307,11 @@ MIXED_NAMES = ("畳み込み",)
 HIRAGANA_WORDS = sorted(
     set(PARTICLES)
     | {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, KW_KA, KW_WA, KW_TOIU, KW_SOREKARA, KW_KATSU, KW_MATAHA}
-    | {"それぞれ", KOTO, SURU, SHITEKARA, SHITE, SHITA},
+    | {"それぞれ", KOTO, SURU, SHITEKARA, SHITE, SHITA, DEARUKOTO, DEARU, DENAI},
     key=len,
     reverse=True,
 )
-CALL_FORMS = (KOTO, SURU, SHITEKARA, SHITE, SHITA)
+CALL_FORMS = (KOTO, SURU, SHITEKARA, SHITE, SHITA, DEARUKOTO, DEARU, DENAI)
 
 
 def _nfkc(c: str) -> str:
@@ -460,7 +478,7 @@ def segment_run(pieces: list[tuple[str, bool, int]], line: int) -> list[Token]:
                 name_tok = tokens.pop()
                 if _is_all_hiragana(name_tok.value + stem):
                     raise hiragana_function_error(name_tok.value + stem, here)
-                tokens.append(Token("CALL", name_tok.value + stem + SURU, name_tok.line, words[k]))
+                tokens.append(call_token(name_tok.value + stem, words[k], name_tok.line))
                 words = words[k + 1 :]
             for w in words:
                 if w in CALL_FORMS:
@@ -698,6 +716,14 @@ class BinOp:
 @dataclass
 class Neg:
     operand: Any
+
+
+@dataclass
+class Not:
+    """「…でない」"""
+
+    operand: Any
+    line: int
 
 
 @dataclass
@@ -1027,15 +1053,15 @@ def is_part(tok: Token | None, value: str | None = None) -> bool:
     return tok is not None and tok.kind == "PART" and (value is None or tok.value == value)
 
 
-def merge_piped(args: dict, piped: Any) -> dict:
-    """「して」の結果を「を」に入れる。「を」が既にあれば、前に並べてリストにする"""
+def merge_piped(args: dict, piped: Any, key: str = WO) -> dict:
+    """「して」の結果を「を」(述語なら「が」)に入れる。既にあれば、前に並べてリストにする"""
     args = dict(args)
-    if WO in args:
-        given = args[WO]
+    if key in args:
+        given = args[key]
         items = given.items if isinstance(given, ListLit) else [given]
-        args[WO] = ListLit([piped] + items)
+        args[key] = ListLit([piped] + items)
     else:
-        args = {WO: piped, **args}
+        args = {key: piped, **args}
     return args
 
 
@@ -1196,7 +1222,46 @@ class ExprParser:
                 raise SuruError("「ならば」の後に「そうでなければ」が必要です", tok.line)
             other = self.expr()
             return If(cond, then, other)
-        return self.pipeline()
+        return self.logic_chain()
+
+    # 述語の呼び出しどうしを「かつ」「または」でつなぐ: n が 正である かつ n が 偶数でない
+    def logic_chain(self) -> Any:
+        left = self.and_chain()
+        while is_kw(self.peek(), KW_MATAHA) and not self.sep_stop() and not self.no_logic:
+            tok = self.next()
+            left = BinOp(KW_MATAHA, left, self.and_chain(), tok.line)
+        return left
+
+    def and_chain(self) -> Any:
+        left = self.pipeline()
+        while is_kw(self.peek(), KW_KATSU) and not self.sep_stop() and not self.no_logic:
+            tok = self.next()
+            left = BinOp(KW_KATSU, left, self.pipeline(), tok.line)
+        return left
+
+    def call_ahead(self, k: int, stops: tuple) -> bool:
+        """k 個先から、次の stops の言葉までに呼び出しがあるか(あれば「かつ」は呼び出しの外でつなぐ)"""
+        i = self._skip(self.pos)
+        for _ in range(k):
+            i = self._skip(i + 1)
+        depth = 0
+        while i < len(self.tokens):
+            t = self.tokens[i]
+            if t.kind == "LP":
+                depth += 1
+            elif t.kind == "RP":
+                depth -= 1
+                if depth < 0:
+                    return False
+            elif depth == 0:
+                if t.kind == "PERIOD" or (t.kind == "KW" and t.value in stops + (KW_THEN, KW_ELSE, KW_TOWA)):
+                    return False
+                if t.kind == "SEP" and self.stop_sep:
+                    return False
+                if t.kind == "CALL":
+                    return True
+            i += 1
+        return False
 
     # パイプライン := 区間 { 区間 }
     # 区間 := { 値 助詞 } 呼び出し(…して | …する | …すること)
@@ -1227,7 +1292,7 @@ class ExprParser:
                     if not is_part(self.peek()):
                         # 区間の最後の「こと」は、前に並んだ引数を受け取る(部分適用)
                         if has_piped:
-                            args = merge_piped(args, piped)
+                            args = merge_piped(args, piped, GA if is_predicate(tok.value) else WO)
                         return Ref(tok.value, args, tok.line)
                     # 後ろに助詞が続く「こと」は外側の呼び出しの引数(関数そのもの)
                     value = Ref(tok.value, {}, tok.line)
@@ -1240,6 +1305,9 @@ class ExprParser:
                 else:
                     value = self.list_expr()
                 part = self.peek()
+                if is_kw(part, KW_GA) and self.predicate_ahead(1):
+                    # 「n が 偶数である」: 述語の前の「が」は主語の助詞
+                    part = Token("PART", GA, part.line)
                 if is_part(part):
                     if part.value == WO and is_kw(self.peek(1), KW_RETURN):
                         # 「… を 返すこと」: 無名関数の本体の終わり
@@ -1266,11 +1334,11 @@ class ExprParser:
                 raise SuruError("式がありません", line)
             self.next()
             if has_piped:
-                args = merge_piped(args, piped)
+                args = merge_piped(args, piped, GA if is_predicate(tok.value) else WO)
             piped = Call(tok.value, args, tok.line)
             has_piped = True
             if tok.form == SURU:
-                return piped
+                return Not(piped, tok.line) if tok.negated else piped
             if tok.form == SHITEKARA:
                 # 残りは前の動作の結果を「を」に受け取る続き
                 cont = self.pipeline(Var(HOLE, tok.line), True)
@@ -1359,7 +1427,7 @@ class ExprParser:
         save = self.no_logic
         self.no_logic = False
         try:
-            return self.logic()
+            return self.logic_chain()
         finally:
             self.no_logic = save
 
@@ -1513,17 +1581,43 @@ class ExprParser:
     # 論理 := 論理積 { または 論理積 }、論理積 := 比較 { かつ 比較 }
     def logic(self) -> Any:
         left = self.conjunction()
-        while is_kw(self.peek(), KW_MATAHA) and not self.sep_stop() and not self.no_logic:
+        while is_kw(self.peek(), KW_MATAHA) and not self.sep_stop() and not self.no_logic \
+                and not self.call_ahead(1, (KW_MATAHA,)):
             tok = self.next()
             left = BinOp(KW_MATAHA, left, self.conjunction(), tok.line)
         return left
 
     def conjunction(self) -> Any:
         left = self.comparison()
-        while is_kw(self.peek(), KW_KATSU) and not self.sep_stop() and not self.no_logic:
+        while is_kw(self.peek(), KW_KATSU) and not self.sep_stop() and not self.no_logic \
+                and not self.call_ahead(1, (KW_KATSU, KW_MATAHA)):
             tok = self.next()
             left = BinOp(KW_KATSU, left, self.comparison(), tok.line)
         return left
+
+    def predicate_ahead(self, k: int) -> bool:
+        """k 個先から読んで、この呼び出しの終わりが述語(…である/でない)か"""
+        i = self._skip(self.pos)
+        for _ in range(k):
+            i = self._skip(i + 1)
+        depth = 0
+        while i < len(self.tokens):
+            t = self.tokens[i]
+            if t.kind == "LP":
+                depth += 1
+            elif t.kind == "RP":
+                depth -= 1
+                if depth < 0:
+                    return False
+            elif depth == 0:
+                if t.kind == "PERIOD" or (t.kind == "KW" and t.value in (KW_THEN, KW_ELSE, KW_GA, KW_TOWA, KW_KATSU, KW_MATAHA)):
+                    return False
+                if t.kind == "SEP" and self.stop_sep:
+                    return False
+                if t.kind == "CALL":
+                    return is_predicate(t.value) and t.form == SURU
+            i += 1
+        return False
 
     def comparison(self) -> Any:
         left = self.additive()
@@ -1534,7 +1628,7 @@ class ExprParser:
         tok = self.peek()
         if self.sep_stop():
             return left
-        if is_kw(tok, KW_GA):
+        if is_kw(tok, KW_GA) and not self.predicate_ahead(1):
             self.next()
             right = self.additive()
             if is_kw(self.peek(), KW_NO) and is_ctor(self.peek(1)):
@@ -1680,6 +1774,10 @@ def parse_definition_head(tokens: list[Token], line: int) -> tuple[str, list, bo
     if not tokens:
         raise SuruError("「とは」の前に定義する名前が必要です", line)
     last = tokens[-1]
+    if last.kind == "CALL" and is_predicate(last.value):
+        if last.negated:
+            raise SuruError("述語は「…である」の形で定義してください(「…でない」は自動で使えます)", last.line)
+        tokens = [Token("PART", GA, t.line) if is_kw(t, KW_GA) else t for t in tokens]
     for t in tokens:
         if t.kind == "WORD" and not t.quoted and _is_all_hiragana(t.value) and t.value != "それぞれ":
             raise hiragana_name_error(t.value, t.line)
@@ -2922,6 +3020,8 @@ class Interpreter:
             raise SuruError(f"「{self.format(v)}」はどの場合にも当てはまりません", node.line)
         if isinstance(node, Each):
             return _list(self.eval(node.target, env), "「の それぞれ」の前", node.line)
+        if isinstance(node, Not):
+            return not self.truth(node.operand, env, DENAI)
         if isinstance(node, Neg):
             return -_num(self.eval(node.operand, env), None)
         if isinstance(node, BinOp) and node.op in (KW_KATSU, KW_MATAHA):
@@ -3038,7 +3138,10 @@ class Interpreter:
         local = Env(fn.closure)
         for p, pat in fn.params:
             bind(local, pat, args[p], p, fn.name, line)
-        return self.eval(fn.body, local)
+        result = self.eval(fn.body, local)
+        if is_predicate(fn.name) and not isinstance(result, bool):
+            raise SuruError(f"述語「{fn.name}」は 真 か 偽 を返す必要があります(「{self.format(result)}」が返りました)", line)
+        return result
 
 
 def run(source: str) -> list[Any]:
