@@ -172,9 +172,12 @@ def test_助詞がくっついていてもよい():
     assert run("a を b で割る数にする とは a / b\n10 を 2 で割る数にする") == [5]
 
 
-def test_ひらがなが続くときは助詞を分けない():
+def test_ひらがなだけの関数名はエラー():
     from suru import tokenize_line
-    assert [t.kind for t in tokenize_line("をへんかんする", 1)] == ["CALL"]
+    with pytest.raises(SuruError, match="ひらがなだけの関数名"):
+        tokenize_line("をへんかんする", 1)
+    with pytest.raises(SuruError, match="ひらがなだけの関数名"):
+        run("x を へんかんする とは x")
     assert [t.kind for t in tokenize_line("を変換する", 1)] == ["PART", "CALL"]
 
 
@@ -250,9 +253,7 @@ def test_空のリストの先頭はエラー():
         run("空 の 先頭")
 
 
-def test_読点は予約():
-    with pytest.raises(SuruError, match="予約"):
-        run("1、2")
+def test_中黒は予約():
     with pytest.raises(SuruError, match="予約"):
         run("1・2")
 
@@ -317,3 +318,115 @@ def test_それぞれが2つならzip():
 def test_リストの例が動く():
     src = (ROOT / "examples" / "list.suru").read_text(encoding="utf-8")
     assert run(src)[-1] == (1, 4, 9, 16)
+
+
+# --- 句読点の書き方 ---------------------------------------------------------
+
+def test_句読点で詰めて書く():
+    src = "aとbを加算するとは、a+b。引数を三倍するとは、引数と引数を加算して、引数を加算する。1と2を加算する。5を三倍する。"
+    assert run(src) == [3, 15]
+
+
+def test_句読点と空白の書き方は同じ構文木():
+    spaced = parse_program(TRIPLE)
+    punct = parse_program("引数を三倍するとは、引数と引数を加算して、引数を加算する。")
+    assert punct == spaced
+
+
+def test_句読点の行と空白の行を混ぜてよい():
+    assert run(ADD + "1と2を加算する。\n3 と 4 を加算する") == [3, 7]
+
+
+def test_文は句点まで改行をまたぐ():
+    src = "nを階乗するとは、\n  もしn<=1ならば1、\n  そうでなければn-1を階乗して、nを乗算する。\n5を階乗する。"
+    assert run(src) == [120]
+
+
+def test_句点がない文はエラー():
+    with pytest.raises(SuruError, match="「。」が必要"):
+        run("1と2を加算する。3を三倍する")
+    with pytest.raises(SuruError, match="「。」が必要"):
+        run("1、2")
+
+
+def test_文字種の境目で切る():
+    from suru import tokenize_punct_line
+    kinds = [(t.kind, t.value) for t in tokenize_punct_line("x1とリストの長さを10で除算して", 1)]
+    assert kinds == [
+        ("WORD", "x1"), ("KW", "と"), ("WORD", "リスト"), ("KW", "の"), ("WORD", "長さ"),
+        ("PART", "を"), ("NUM", 10), ("PART", "で"), ("CALL", "除算する"),
+    ]
+    assert run("3*4+1。") == [13]
+
+
+def test_するの前のひらがなは関数名の一部():
+    assert run("-5を絶対値にする。") == [5]
+    assert run("xを三倍にするとは、x*3。2を三倍にする。") == [6]
+
+
+def test_ただしで局所定義():
+    src = "aとbを平均するとは、合計/2。ただし、合計とは、a+b。4と7を平均する。"
+    assert run(src) == [5.5]
+    src = "aとbを計算するとは、和*差。ただし、和とは、a+b。ただし、差とは、a-b。5と3を計算する。"
+    assert run(src) == [16]
+
+
+def test_ただしは空白の書き方でも使える():
+    assert run("a と b を平均する とは 合計 / 2\nただし 合計 とは a + b\n4 と 6 を平均する") == [5]
+
+
+def test_ただしの前には定義が必要():
+    with pytest.raises(SuruError, match="「ただし」の前"):
+        run("ただし、xとは1。")
+    with pytest.raises(SuruError, match="「ただし」の前"):
+        run("1+2。ただし、xとは1。")
+
+
+def test_括弧の中に文を並べる():
+    assert run("aとbを相乗平均するとは、（積とは、a*b。積^0.5）。4と9を相乗平均する。") == [6]
+    with pytest.raises(SuruError, match="最後は式"):
+        run("（xとは、1。）。")
+
+
+def test_もしの入れ子は閉じなくてよい():
+    assert run("もし1==1ならばもし2==3ならば10そうでなければ20そうでなければ30。") == [20]
+
+
+def test_句読点の高階関数():
+    src = "リストとは、1と2と3と4。リストのそれぞれを2に乗算する。リストから（nを受け取ってn%2==0を返すこと）で選別する。リストを0から加算することで畳み込みする。"
+    assert run(src) == [(2, 4, 6, 8), (2, 4), 10]
+
+
+def test_文字列の中の句読点はそのまま():
+    assert run("「こんにちは、世界。」") == ["こんにちは、世界。"]
+    assert run("「a、」+「b」。") == ["a、b"]
+
+
+def test_ひらがなだけの名前はエラー():
+    for src in ("するめいかとは、3。", "するめいか とは 3", "するめいかを三倍する。", "あを三倍するとは、あ*3。",
+                "あ を 受け取って あ を 返すこと"):
+        with pytest.raises(SuruError, match="ひらがなだけの名前「(するめいか|あ)」.*『』で囲んで"):
+            run(src)
+
+
+def test_ひらがなだけの関数名はエラー_句読点():
+    with pytest.raises(SuruError, match="ひらがなだけの関数名.*漢字かカタカナ"):
+        run("xをへんかんするとは、x。")
+    with pytest.raises(SuruError, match="ひらがなだけの関数名"):
+        run("『へんかん』するとは、5。")
+
+
+def test_ひらがなを含む名前は二重かぎで囲む():
+    assert run("『おやつの数』とは、3。『おやつの数』を2に乗算する。") == [6]
+    assert run("『するめいか』 とは 3\n『するめいか』 * 2") == [6]
+    assert run("a を b で 割る数にする とは a / b\n10を2で『割る数に』する。") == [5]
+
+
+def test_名前に混ざったひらがなはエラー():
+    with pytest.raises(SuruError, match="ひらがな「る」が混ざって"):
+        run("xを割る数にするとは、x。")
+
+
+def test_句読点の例が動く():
+    src = (ROOT / "examples" / "punct.suru").read_text(encoding="utf-8")
+    assert run(src) == [3, 15, 5.5, 6, 120, 10, 4, (3, 6, 9, 12), (2, 4), 24, 5, 9]

@@ -53,15 +53,21 @@ KW_ELSE = "そうでなければ"
 KW_LAMBDA = "受け取って"  # 無名関数: x を 受け取って x * 2 を 返すこと
 KW_RETURN = "返すこと"
 KW_EMPTY = "空"
-KEYWORDS = {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN}
+KW_PROVISO = "ただし"  # 局所定義を前の定義に付け足す: … 。ただし、合計とは、a+b。
+KEYWORDS = {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO}
 CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}  # 行頭に来たら前の文の続きとみなす
 
 # 引数を区別する格助詞。長いものから順に照合する(「より」「から」を先に)
 PARTICLES = ("より", "から", "を", "に", "で", "へ")
 WO = "を"
 
-# 将来の「改行を減らす書き方」のために予約している記号
-RESERVED_MARKS = {"、": "読点「、」", "・": "中黒「・」"}
+# 句読点の書き方: 「。」は文の終わり、「、」は区切り(スペースと同じ)
+PERIOD = "。"
+COMMA = "、"
+# ひらがなを含む名前を囲む括弧(「」は文字列なので『』を使う)
+NAME_OPEN, NAME_CLOSE = "『", "』"
+# 将来の書き方のために予約している記号
+RESERVED_MARKS = {"・": "中黒「・」"}
 
 SURU = "する"       # 終止形: パイプラインの終わり
 SHITE = "して"      # 連用形: 結果を次の関数の「を」へ渡す
@@ -72,10 +78,11 @@ PROPERTIES = {"先頭", "残り", "最後", "長さ", "それぞれ"}
 
 @dataclass
 class Token:
-    kind: str  # NUM STR OP LP RP WORD KW PART CALL
+    kind: str  # NUM STR OP LP RP WORD KW PART CALL PERIOD
     value: Any
     line: int
     form: str = ""  # CALL のとき "する" / "して" / "すること"
+    quoted: bool = False  # 『』で囲んだ名前
 
     def __repr__(self) -> str:
         return f"{self.kind}:{self.value}{('/' + self.form) if self.form else ''}"
@@ -85,14 +92,41 @@ def _is_hiragana(c: str) -> bool:
     return "ぁ" <= c <= "ゟ"
 
 
+def _is_all_hiragana(word: str) -> bool:
+    return bool(word) and all(_is_hiragana(c) for c in word)
+
+
+def hiragana_function_error(stem: str, line: int) -> SuruError:
+    return SuruError(
+        f"「{stem}する」のように、ひらがなだけの関数名は使えません。"
+        f"「する」の前に漢字かカタカナを入れてください(例:「{stem}」→「変換」「ヘンカン」)",
+        line,
+    )
+
+
+def hiragana_name_error(name: str, line: int) -> SuruError:
+    return SuruError(
+        f"ひらがなだけの名前「{name}」は使えません(助詞と区別できないため)。"
+        f"漢字かカタカナを使うか、{NAME_OPEN}{name}{NAME_CLOSE} のように{NAME_OPEN}{NAME_CLOSE}で囲んでください",
+        line,
+    )
+
+
 def _classify_call(word: str, line: int) -> Token | None:
     for form in (KOTO, SURU, SHITE):
         if word.endswith(form) and len(word) > len(form):
-            return Token("CALL", word[: -len(form)] + SURU, line, form)
+            stem = word[: -len(form)]
+            if _is_all_hiragana(stem):
+                raise hiragana_function_error(stem, line)
+            return Token("CALL", stem + SURU, line, form)
     return None
 
 
-def _classify(word: str, line: int) -> list[Token]:
+def _classify(word: str, line: int, quoted: bool = False) -> list[Token]:
+    if quoted:
+        # 『』で囲んだ部分は分けない。後ろに「する」などが続けば関数名
+        call = _classify_call(word, line)
+        return [call] if call is not None else [Token("WORD", word, line, quoted=True)]
     norm = unicodedata.normalize("NFKC", word)
     if norm in OPERATORS or word in OPERATORS:
         return [Token("OP", OPERATORS.get(norm, OPERATORS.get(word)), line)]
@@ -129,12 +163,14 @@ def tokenize_line(text: str, line: int) -> list[Token]:
     tokens: list[Token] = []
     i, n = 0, len(text)
     buf = ""
+    quoted = False
 
     def flush() -> None:
-        nonlocal buf
+        nonlocal buf, quoted
         if buf:
-            tokens.extend(_classify(buf, line))
+            tokens.extend(_classify(buf, line, quoted))
             buf = ""
+        quoted = False
 
     while i < n:
         c = text[i]
@@ -148,6 +184,11 @@ def tokenize_line(text: str, line: int) -> list[Token]:
             if j < 0:
                 raise SuruError("文字列の「に対応する」がありません", line)
             tokens.append(Token("STR", text[i + 1 : j], line))
+            i = j
+        elif c == NAME_OPEN:
+            j = _find_name_close(text, i, line)
+            buf += text[i + 1 : j]
+            quoted = True
             i = j
         elif c in OPEN_PARENS:
             flush()
@@ -164,25 +205,339 @@ def tokenize_line(text: str, line: int) -> list[Token]:
     return tokens
 
 
+def _find_name_close(text: str, i: int, line: int) -> int:
+    j = text.find(NAME_CLOSE, i + 1)
+    if j < 0:
+        raise SuruError(f"名前の{NAME_OPEN}に対応する{NAME_CLOSE}がありません", line)
+    if j == i + 1:
+        raise SuruError(f"{NAME_OPEN}{NAME_CLOSE}の中に名前がありません", line)
+    return j
+
+
+# --- 句読点の書き方(空白なしで詰めて書く) ------------------------------------
+#
+# 「。」か「、」を含む行は、文字の種類の境目で単語を切る:
+#   ・漢字・カタカナ・英字の並び → 名前(数字は英字の後ならば名前の続き)
+#   ・数字 → 数、記号 → 演算子
+#   ・ひらがなの並び → 助詞・キーワード・「する/して/すること」に分ける
+# 文は「。」まで続く(改行をまたいでもよい)。
+
+OPERATOR_CHARS = {c for op in OPERATORS for c in unicodedata.normalize("NFKC", op)} | set(OPERATORS)
+# 漢字とひらがなが混ざった決まった言葉(名前の切り出しより先に照合する)
+MIXED_WORDS = ("受け取って", "返すこと", "長さ", "残り")
+# ひらがなを含む組み込み関数の名前(「する」の前の部分)。名前として切り出す
+MIXED_NAMES = ("畳み込み",)
+# ひらがなの並びを分けるときの辞書。長いものから順に照合する
+HIRAGANA_WORDS = sorted(
+    set(PARTICLES) | {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, "それぞれ", KOTO, SURU, SHITE},
+    key=len,
+    reverse=True,
+)
+CALL_FORMS = (KOTO, SURU, SHITE)
+
+
+def _nfkc(c: str) -> str:
+    n = unicodedata.normalize("NFKC", c)
+    return n if len(n) == 1 else c
+
+
+def _char_class(c: str) -> str:
+    if _is_hiragana(c):
+        return "HIRA"
+    n = _nfkc(c)
+    if n.isascii() and n.isdigit():
+        return "DIGIT"
+    if c in OPERATOR_CHARS or n in OPERATOR_CHARS:
+        return "OP"
+    if n.isalpha() or n == "_":
+        return "NAME"
+    return "OTHER"
+
+
+def _mixed_word_at(text: str, i: int) -> str | None:
+    for w in MIXED_WORDS + MIXED_NAMES:
+        if text.startswith(w, i):
+            return w
+    return None
+
+
+def _split_operators(text: str, line: int) -> list[Token]:
+    norm = unicodedata.normalize("NFKC", text)
+    out = []
+    i = 0
+    while i < len(norm):
+        for size in (2, 1):
+            op = norm[i : i + size]
+            if len(op) == size and op in OPERATORS:
+                out.append(Token("OP", OPERATORS[op], line))
+                i += size
+                break
+        else:
+            raise SuruError(f"演算子「{norm[i:]}」が分かりません", line)
+    return out
+
+
+def _decompose(text: str) -> list[str] | None:
+    words = []
+    i = 0
+    while i < len(text):
+        w = next((w for w in HIRAGANA_WORDS if text.startswith(w, i)), None)
+        if w is None:
+            return None
+        words.append(w)
+        i += len(w)
+    return words
+
+
+def _split_hiragana(text: str, line: int, after_name: bool, after_value: bool) -> list[str]:
+    words = _decompose(text)
+    if words is not None:
+        return words
+    # 読めないひらがなを、前の助詞と後ろの「とは」「する」などから切り出してエラーにする
+    start = 0
+    if after_value:
+        lead = next((w for w in HIRAGANA_WORDS if text.startswith(w) and w not in CALL_FORMS), "")
+        start = len(lead)
+    end = next(e for e in range(start + 1, len(text) + 1) if _decompose(text[e:]) is not None)
+    unknown, rest = text[start:end], text[end:]
+    if after_name and start == 0:
+        raise SuruError(
+            f"名前にひらがな「{unknown}」が混ざっています。ひらがなを含む名前は "
+            f"{NAME_OPEN}割る数に{NAME_CLOSE}する のように{NAME_OPEN}{NAME_CLOSE}で囲んでください",
+            line,
+        )
+    if rest.startswith(CALL_FORMS):
+        raise hiragana_function_error(unknown, line)
+    raise hiragana_name_error(unknown, line)
+
+
+def _hiragana_word_token(w: str, line: int) -> Token:
+    if w in PARTICLES:
+        return Token("PART", w, line)
+    if w in KEYWORDS:
+        return Token("KW", w, line)
+    if w == "それぞれ":
+        return Token("WORD", w, line)
+    raise SuruError(f"「{w}」の前に関数名(漢字かカタカナ)が必要です", line)
+
+
+def segment_run(pieces: list[tuple[str, bool]], line: int) -> list[Token]:
+    """空白で区切られた1つの並び(『』で囲んだ部分を含む)を単語に分ける"""
+    # 1. 文字の種類で切る
+    parts: list[tuple[str, str]] = []  # (種類, 文字列)
+    for text, quoted in pieces:
+        if quoted:
+            parts.append(("QNAME", text))
+            continue
+        i = 0
+        while i < len(text):
+            mixed = _mixed_word_at(text, i)
+            if mixed:
+                parts.append(("NAME" if mixed in MIXED_NAMES else "MIXED", mixed))
+                i += len(mixed)
+                continue
+            cls = _char_class(text[i])
+            if cls == "OTHER":
+                raise SuruError(f"「{text[i]}」は使えない文字です", line)
+            j = i + 1
+            if cls == "NAME":
+                while j < len(text) and not _mixed_word_at(text, j):
+                    k = _char_class(text[j])
+                    # 数字は英字の後ならば名前の続き(x1 など)
+                    if k == "NAME" or (k == "DIGIT" and _nfkc(text[j - 1]).isascii()):
+                        j += 1
+                    else:
+                        break
+            elif cls == "DIGIT":
+                while j < len(text) and (
+                    _char_class(text[j]) == "DIGIT"
+                    or (_nfkc(text[j]) == "." and j + 1 < len(text) and _char_class(text[j + 1]) == "DIGIT")
+                ):
+                    j += 1
+            else:
+                while j < len(text) and _char_class(text[j]) == cls and not _mixed_word_at(text, j):
+                    j += 1
+            parts.append((cls, text[i:j]))
+            i = j
+
+    # 2. 単語にする。ひらがなの「する/して/すること」は直前の名前とつなげて関数名にする
+    tokens: list[Token] = []
+    for idx, (cls, text) in enumerate(parts):
+        if cls in ("NAME", "QNAME"):
+            if cls == "NAME" and text in ("真", "偽"):
+                tokens.append(Token("NUM", text == "真", line))
+            elif cls == "NAME" and text == KW_EMPTY:
+                tokens.append(Token("NUM", (), line))
+            else:
+                tokens.append(Token("WORD", text, line, quoted=cls == "QNAME"))
+        elif cls == "MIXED":
+            kind = "KW" if text in KEYWORDS else "WORD"
+            tokens.append(Token(kind, text, line))
+        elif cls == "DIGIT":
+            norm = unicodedata.normalize("NFKC", text)
+            tokens.append(Token("NUM", float(norm) if "." in norm else int(norm), line))
+        elif cls == "OP":
+            tokens.extend(_split_operators(text, line))
+        else:  # HIRA
+            words = _split_hiragana(text, line, idx > 0 and parts[idx - 1][0] in ("NAME", "QNAME"), idx > 0)
+            k = next((n for n, w in enumerate(words) if w in CALL_FORMS), None)
+            if k is not None:
+                # 「三倍にする」「絶対値にする」: 「する」の前のひらがなは関数名の一部
+                stem = "".join(words[:k])
+                prev = parts[idx - 1] if idx > 0 else None
+                if prev is None or prev[0] not in ("NAME", "QNAME"):
+                    if stem:
+                        raise hiragana_function_error(stem, line)
+                    raise SuruError(f"「{words[k]}」の前に関数名(漢字かカタカナ)が必要です", line)
+                name_tok = tokens.pop()
+                if _is_all_hiragana(name_tok.value + stem):
+                    raise hiragana_function_error(name_tok.value + stem, line)
+                tokens.append(Token("CALL", name_tok.value + stem + SURU, line, words[k]))
+                words = words[k + 1 :]
+            for w in words:
+                if w in CALL_FORMS:
+                    raise SuruError(f"「{w}」の前に関数名(漢字かカタカナ)が必要です", line)
+                tokens.append(_hiragana_word_token(w, line))
+    return tokens
+
+
+def tokenize_punct_line(text: str, line: int) -> list[Token]:
+    """句読点の書き方の1行を字句解析する。「。」は PERIOD トークンになる"""
+    tokens: list[Token] = []
+    run: list[tuple[str, bool]] = []
+    buf = ""
+    i, n = 0, len(text)
+
+    def flush() -> None:
+        nonlocal buf
+        if buf:
+            run.append((buf, False))
+            buf = ""
+        if run:
+            tokens.extend(segment_run(run, line))
+            run.clear()
+
+    while i < n:
+        c = text[i]
+        if c in SPACES or c == COMMA:
+            flush()
+        elif c in COMMENT_STARTS and not buf and not run:
+            break
+        elif c == "「":
+            flush()
+            j = text.find("」", i + 1)
+            if j < 0:
+                raise SuruError("文字列の「に対応する」がありません", line)
+            tokens.append(Token("STR", text[i + 1 : j], line))
+            i = j
+        elif c == NAME_OPEN:
+            j = _find_name_close(text, i, line)
+            if buf:
+                run.append((buf, False))
+                buf = ""
+            run.append((text[i + 1 : j], True))
+            i = j
+        elif c in OPEN_PARENS:
+            flush()
+            tokens.append(Token("LP", "(", line))
+        elif c in CLOSE_PARENS:
+            flush()
+            tokens.append(Token("RP", ")", line))
+        elif c == PERIOD:
+            flush()
+            tokens.append(Token("PERIOD", PERIOD, line))
+        elif c in RESERVED_MARKS:
+            raise SuruError(f"{RESERVED_MARKS[c]}は将来の書き方のために予約されています(文字列の中では使えます)", line)
+        else:
+            buf += c
+        i += 1
+    flush()
+    return tokens
+
+
+def is_punct_line(text: str) -> bool:
+    """文字列・名前・コメントの外に「。」か「、」があるか"""
+    i, n = 0, len(text)
+    at_token_start = True
+    while i < n:
+        c = text[i]
+        if c in ("「", NAME_OPEN):
+            j = text.find("」" if c == "「" else NAME_CLOSE, i + 1)
+            if j < 0:
+                return False
+            i = j
+        elif c in COMMENT_STARTS and at_token_start:
+            return False
+        elif c in (PERIOD, COMMA):
+            return True
+        at_token_start = c in SPACES or c in OPEN_PARENS or c in CLOSE_PARENS
+        i += 1
+    return False
+
+
 @dataclass
 class Line:
     indent: int
     tokens: list[Token]
     number: int
+    closed: bool = False  # 「。」で終わった文(後ろの深い行を続きとみなさない)
+
+
+def _depth_zero_periods(tokens: list[Token]) -> list[int]:
+    depth = 0
+    out = []
+    for i, t in enumerate(tokens):
+        if t.kind == "LP":
+            depth += 1
+        elif t.kind == "RP":
+            depth -= 1
+        elif t.kind == "PERIOD" and depth <= 0:
+            out.append(i)
+    return out
+
+
+def split_sentences(tokens: list[Token]) -> list[list[Token]]:
+    """括弧の外の「。」で文に分ける(最後の「。」の後ろは捨てる)"""
+    out, start = [], 0
+    for i in _depth_zero_periods(tokens):
+        if i > start:
+            out.append(tokens[start:i])
+        start = i + 1
+    return out
 
 
 def split_lines(source: str) -> list[Line]:
     lines = []
-    for number, raw in enumerate(source.splitlines(), start=1):
+    raws = source.splitlines()
+    k = 0
+    while k < len(raws):
+        raw, number = raws[k], k + 1
         indent = 0
         for c in raw:
             if c in INDENT_WIDTH:
                 indent += INDENT_WIDTH[c]
             else:
                 break
-        tokens = tokenize_line(raw, number)
-        if tokens:
-            lines.append(Line(indent, tokens, number))
+        if not is_punct_line(raw):
+            tokens = tokenize_line(raw, number)
+            if tokens:
+                lines.append(Line(indent, tokens, number))
+            k += 1
+            continue
+        # 句読点の書き方: 「。」で文が終わるまで次の行も読む
+        tokens = tokenize_punct_line(raw, number)
+        while True:
+            ends = _depth_zero_periods(tokens)
+            if not tokens or (ends and ends[-1] == len(tokens) - 1):
+                break
+            k += 1
+            if k >= len(raws):
+                first = tokens[(ends[-1] + 1) if ends else 0]
+                raise SuruError("文の終わりに「。」が必要です(句読点の書き方では文を「。」で終えます)", first.line)
+            tokens += tokenize_punct_line(raws[k], k + 1)
+        for sentence in split_sentences(tokens):
+            lines.append(Line(indent, sentence, sentence[0].line, closed=True))
+        k += 1
     return lines
 
 
@@ -205,6 +560,7 @@ class Str:
 class Var:
     name: str
     line: int
+    quoted: bool = field(default=False, compare=False)
 
 
 @dataclass
@@ -288,6 +644,14 @@ class Block:
     statements: list  # Define と式。最後は式
 
 
+@dataclass
+class Proviso:
+    """「ただし、合計とは、a+b。」: 直前の定義に付け足す局所定義"""
+
+    define: Define
+    line: int
+
+
 # ---------------------------------------------------------------------------
 # レイアウト(オフサイドルール)
 # ---------------------------------------------------------------------------
@@ -319,11 +683,11 @@ def build_layout(lines: list[Line]) -> list[Node]:
                 raise SuruError("予期しないインデントです", ln.number)
             pos += 1
             node = Node(ln)
-            if pos < len(lines) and lines[pos].indent > indent:
+            if not ln.closed and pos < len(lines) and lines[pos].indent > indent:
                 node.children = block(indent + 1)
             # 行頭が ならば/そうでなければ の行は前の文の続き
             first = ln.tokens[0]
-            if nodes and first.kind == "KW" and first.value in CONTINUATION_KEYWORDS:
+            if nodes and not ln.closed and not nodes[-1].line.closed and first.kind == "KW" and first.value in CONTINUATION_KEYWORDS:
                 prev = nodes[-1]
                 prev.children.append(node)
             else:
@@ -370,6 +734,9 @@ def merge_piped(args: dict, piped: Any) -> dict:
 
 def to_pattern(node: Any, line: int) -> str | list[str]:
     """引数の名前: 「a」または「a と b」(リストを分解して受け取る)"""
+    for v in node.items if isinstance(node, ListLit) else [node]:
+        if isinstance(v, Var) and not v.quoted and _is_all_hiragana(v.name) and v.name != "それぞれ":
+            raise hiragana_name_error(v.name, v.line)
     if isinstance(node, Var):
         return node.name
     if isinstance(node, ListLit) and all(isinstance(i, Var) for i in node.items):
@@ -414,6 +781,8 @@ class ExprParser:
         expr = self.expr()
         tok = self.peek()
         if tok is not None:
+            if tok.kind == "RP":
+                raise SuruError("対応する「(」のない「)」があります", tok.line)
             raise SuruError(f"余分な「{tok.value}」があります", tok.line)
         return expr
 
@@ -443,7 +812,7 @@ class ExprParser:
             args: dict = {}
             while True:
                 tok = self.peek()
-                if tok is None or tok.kind == "RP" or (tok.kind == "KW" and tok.value in CONTINUATION_KEYWORDS):
+                if tok is None or tok.kind in ("RP", "PERIOD") or (tok.kind == "KW" and tok.value in CONTINUATION_KEYWORDS):
                     break
                 if tok.kind == "CALL" and tok.form != KOTO:
                     break
@@ -576,6 +945,32 @@ class ExprParser:
             node = Each(node, no.line) if name.value == "それぞれ" else Prop(node, name.value, no.line)
         return node
 
+    def paren_block(self, open_tok: Token) -> Any:
+        """括弧の中に「。」か「とは」があれば文の並び(ブロック)として読む: （合計とは、a+b。合計/2）"""
+        depth, i, is_block = 0, self.pos, False
+        while i < len(self.tokens):
+            t = self.tokens[i]
+            if t.kind == "LP":
+                depth += 1
+            elif t.kind == "RP":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif depth == 0 and (t.kind == "PERIOD" or is_kw(t, KW_TOWA)):
+                is_block = True
+            i += 1
+        else:
+            raise SuruError("「(」に対応する「)」がありません", open_tok.line)
+        if not is_block:
+            return None
+        inner = self.tokens[self.pos : i]
+        self.pos = i + 1
+        sentences = split_sentences(inner + [Token("PERIOD", PERIOD, open_tok.line)])
+        if not sentences:
+            raise SuruError("括弧の中に式がありません", open_tok.line)
+        nodes = [Node(Line(0, s, s[0].line, closed=True)) for s in sentences]
+        return parse_block(nodes)
+
     def atom(self) -> Any:
         tok = self.next()
         if tok.kind == "NUM":
@@ -583,8 +978,11 @@ class ExprParser:
         if tok.kind == "STR":
             return Str(tok.value)
         if tok.kind == "WORD":
-            return Var(tok.value, tok.line)
+            return Var(tok.value, tok.line, tok.quoted)
         if tok.kind == "LP":
+            block = self.paren_block(tok)
+            if block is not None:
+                return block
             inner = self.expr()
             close = self.next()
             if close.kind != "RP":
@@ -600,6 +998,9 @@ def parse_definition_head(tokens: list[Token], line: int) -> tuple[str, list, bo
     if not tokens:
         raise SuruError("「とは」の前に定義する名前が必要です", line)
     last = tokens[-1]
+    for t in tokens:
+        if t.kind == "WORD" and not t.quoted and _is_all_hiragana(t.value) and t.value != "それぞれ":
+            raise hiragana_name_error(t.value, t.line)
     if last.kind == "WORD" and len(tokens) == 1:
         return last.value, [], False  # 値の定義: 「税率 とは 0.1」
     if last.kind != "CALL" or last.form != SURU:
@@ -630,9 +1031,28 @@ def parse_definition_head(tokens: list[Token], line: int) -> tuple[str, list, bo
     return last.value, params, True
 
 
+def find_top_level(tokens: list[Token], value: str) -> int | None:
+    depth = 0
+    for i, t in enumerate(tokens):
+        if t.kind == "LP":
+            depth += 1
+        elif t.kind == "RP":
+            depth -= 1
+        elif depth == 0 and is_kw(t, value):
+            return i
+    return None
+
+
 def parse_statement(node: Node) -> Any:
     tokens = node.line.tokens
-    towa = next((i for i, t in enumerate(tokens) if is_kw(t, KW_TOWA)), None)
+    if is_kw(tokens[0], KW_PROVISO):
+        if len(tokens) == 1:
+            raise SuruError("「ただし」の後に定義が必要です", tokens[0].line)
+        inner = parse_statement(Node(Line(node.line.indent, tokens[1:], node.line.number, node.line.closed), node.children))
+        if not isinstance(inner, Define):
+            raise SuruError("「ただし」の後には「…とは」の定義を書いてください", tokens[0].line)
+        return Proviso(inner, tokens[0].line)
+    towa = find_top_level(tokens, KW_TOWA)
     if towa is None:
         return ExprParser(flatten(node)).parse_all()
     name, params, is_function = parse_definition_head(tokens[:towa], node.line.number)
@@ -648,8 +1068,27 @@ def parse_statement(node: Node) -> Any:
     return Define(name, params, body, is_function, node.line.number)
 
 
+def attach_provisos(statements: list) -> list:
+    """「ただし」の定義を、直前の(ただしでない)定義の局所定義にする"""
+    out: list = []
+    target: Define | None = None
+    extra: dict[int, list] = {}
+    for s in statements:
+        if isinstance(s, Proviso):
+            if target is None:
+                raise SuruError("「ただし」の前に「…とは」の定義が必要です", s.line)
+            extra.setdefault(id(target), []).append(s.define)
+        else:
+            out.append(s)
+            target = s if isinstance(s, Define) else None
+    for s in out:
+        if isinstance(s, Define) and id(s) in extra:
+            s.body = Block(extra[id(s)] + [s.body])
+    return out
+
+
 def parse_block(nodes: list[Node]) -> Any:
-    statements = [parse_statement(n) for n in nodes]
+    statements = attach_provisos([parse_statement(n) for n in nodes])
     if isinstance(statements[-1], Define):
         raise SuruError("ブロックの最後は式でなければなりません", nodes[-1].line.number)
     if len(statements) == 1:
@@ -658,7 +1097,7 @@ def parse_block(nodes: list[Node]) -> Any:
 
 
 def parse_program(source: str) -> list:
-    return [parse_statement(n) for n in build_layout(split_lines(source))]
+    return attach_provisos([parse_statement(n) for n in build_layout(split_lines(source))])
 
 
 # ---------------------------------------------------------------------------
@@ -1061,7 +1500,12 @@ def repl() -> None:
             return
         # 「とは」で終わる行から始まる複数行の入力は、空行が来るまでまとめて読む
         buf.append(line)
-        if line.rstrip().endswith(KW_TOWA) or (len(buf) > 1 and line.strip()):
+        text = "\n".join(buf)
+        if is_punct_line(text):
+            # 句読点の書き方: 「。」で終わるまで読む
+            if not text.rstrip().endswith(PERIOD):
+                continue
+        elif line.rstrip().endswith(KW_TOWA) or (len(buf) > 1 and line.strip()):
             continue
         source = "\n".join(buf)
         buf = []
