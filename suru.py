@@ -667,11 +667,13 @@ def split_lines(source: str) -> list[Line]:
 @dataclass
 class Num:
     value: Any
+    line: int = field(default=0, compare=False)
 
 
 @dataclass
 class Str:
     value: str
+    line: int = field(default=0, compare=False)
 
 
 @dataclass
@@ -1742,9 +1744,9 @@ class ExprParser:
     def atom(self) -> Any:
         tok = self.next()
         if tok.kind == "NUM":
-            return Num(tok.value)
+            return Num(tok.value, tok.line)
         if tok.kind == "STR":
-            return Str(tok.value)
+            return Str(tok.value, tok.line)
         if tok.kind == "WORD":
             nxt = self.tokens[self.pos] if self.pos < len(self.tokens) else None
             if tok.value == TEJUN and not tok.quoted and nxt is not None and nxt.kind == "LP":
@@ -3184,8 +3186,26 @@ def repl() -> None:
             print("エラー: 再帰が深すぎます")
 
 
+CHECK_FLAGS = ("--検査", "--check")
+
+
 def main(argv: list[str]) -> int:
     sys.setrecursionlimit(10000)
+    if len(argv) >= 3 and argv[1] in CHECK_FLAGS:
+        # 型の検査だけを行う(実行はしない)
+        from suru_check import check
+
+        with open(argv[2], encoding="utf-8") as f:
+            source = f.read()
+        try:
+            check(source)
+        except Exception as e:  # suru_check は suru を別のモジュールとして読み込むので、名前で見分ける
+            if type(e).__name__ != "SuruError":
+                raise
+            print(format_error(e, source), file=sys.stderr)
+            return 1
+        print("型の検査で問題は見つかりませんでした")
+        return 0
     if len(argv) < 2:
         repl()
         return 0
