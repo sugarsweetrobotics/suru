@@ -125,3 +125,49 @@ def test_コマンドラインで検査する(tmp_path, capsys):
     assert suru.main(["suru.py", "--検査", str(bad)]) == 1
     err = capsys.readouterr().err
     assert "1行目" in err and "^" in err
+
+
+# --- 第2段階: 性質と、型の条件 ------------------------------------------------
+
+COMPARE = (
+    "比較可能 という 性質 とは\n  a と b を 比較する\n点 とは 横 と 縦 の 組\n点 は 比較可能\n"
+    "  a と b を 比較する とは a の 横 - b の 横\n数 は 比較可能\n  a と b を 比較する とは a - b\n"
+)
+
+
+def test_性質の関数は実装の型で調べる():
+    check(COMPARE + "（1 と 2 の 点） と （3 と 0 の 点） を 比較する\n（5 と 9 を 比較する） + 1")
+    e = _err(COMPARE + "「a」 と 「b」 を 比較する")
+    assert e.line == 8 and "文字列は性質「比較可能」を持っていません" in str(e)
+
+
+def test_性質の関数の値の型は実装から決まる():
+    assert "「+」の両側の型が違います(数 と 文字列)" in str(_err(COMPARE + "（5 と 9 を 比較する） + 「a」"))
+
+
+def test_性質を使う多相な関数():
+    src = COMPARE + "a と b を 大きい方にする とは もし （a と b を 比較する） > 0 ならば a そうでなければ b\n"
+    check(src + "5 と 9 を 大きい方にする")
+    e = _err(src + "「a」 と 「b」 を 大きい方にする")
+    assert e.line == 9 and "性質「比較可能」を持っていません" in str(e)
+
+
+def test_既定の実装():
+    src = (
+        "挨拶可能 という 性質 とは\n  x を 名乗る文にする\n  x を 挨拶する とは 「やあ、」 + （x を 名乗る文にする）\n"
+        "犬 とは 名前 の 組\n犬 は 挨拶可能\n  d を 名乗る文にする とは d の 名前\n"
+    )
+    check(src + "「ポチ」 の 犬 を 挨拶する")
+    assert "数は性質「挨拶可能」を持っていません" in str(_err(src + "5 を 挨拶する"))
+
+
+def test_表示可能の実装は文字列を返す():
+    check("箱 とは 幅 の 組\n箱 は 表示可能\n  b を 文字列化する とは （b の 幅 を 文字列化する）\n3 の 箱")
+    assert "文字列" in str(_err("箱 とは 幅 の 組\n箱 は 表示可能\n  b を 文字列化する とは 1"))
+
+
+def test_型の条件は呼び出し側まで運ぶ():
+    e = _err("x を 測る数にする とは x の 長さ\n「abc」 を 測る数にする\n5 を 測る数にする")
+    assert e.line == 3 and "「測る数にする」に渡した値: 「の 長さ」の前は文字列かリスト" in str(e)
+    e = _err("a と b を 足す数にする とは a + b\n「a」 と 「b」 を 足す数にする\n真 と 偽 を 足す数にする")
+    assert e.line == 3 and "「+」で足せるのは数・文字列・リスト" in str(e)
