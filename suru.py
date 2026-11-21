@@ -59,9 +59,10 @@ KW_WA = "は"          # 名前つきの組: 横 は 3 で 縦 は 4 の 点 / �
 KW_TOIU = "という"    # 性質の定義: 比較可能 という 性質 とは …
 KW_KUMI = "組"        # 組の定義: 点 とは 横 と 縦 の 組
 KW_SEISHITSU = "性質"
+KW_SOREKARA = "それから"  # 前の文に続けて行う: 「やあ」を表示する。それから、「またね」を表示する。
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
-    KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU,
+    KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA,
 }
 KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU}
 CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}  # 行頭に来たら前の文の続きとみなす
@@ -81,6 +82,13 @@ RESERVED_MARKS = {"・": "中黒「・」"}
 SURU = "する"       # 終止形: パイプラインの終わり
 SHITE = "して"      # 連用形: 結果を次の関数の「を」へ渡す
 KOTO = "すること"   # 名詞化: 関数そのもの(値)
+SHITEKARA = "してから"  # 前の動作を行ってから、その結果を次の関数の「を」へ渡す(バインド)
+SHITA = "した"      # 「入力した 結果」: 手順の中で動作を行い、その結果を値として使う
+
+# 予約語ではなく、決まった位置でだけ特別な意味になる言葉
+RESULT = "結果"     # 「入力 の 結果 を 数値にする」「入力した 結果」
+TEJUN = "手順"      # 「手順（文。文。…）」: 文を順に行う
+HOLE = "\0前の結果"  # 「してから」の後ろの関数に渡す値(内部の名前)
 
 PROPERTIES = {"先頭", "残り", "最後", "長さ", "それぞれ"}
 
@@ -122,7 +130,7 @@ def hiragana_name_error(name: str, line: int) -> SuruError:
 
 
 def _classify_call(word: str, line: int) -> Token | None:
-    for form in (KOTO, SURU, SHITE):
+    for form in (KOTO, SURU, SHITEKARA, SHITE, SHITA):
         if word.endswith(form) and len(word) > len(form):
             stem = word[: -len(form)]
             if _is_all_hiragana(stem):
@@ -239,12 +247,12 @@ MIXED_NAMES = ("畳み込み",)
 # ひらがなの並びを分けるときの辞書。長いものから順に照合する
 HIRAGANA_WORDS = sorted(
     set(PARTICLES)
-    | {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, KW_KA, KW_WA, KW_TOIU}
-    | {"それぞれ", KOTO, SURU, SHITE},
+    | {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, KW_KA, KW_WA, KW_TOIU, KW_SOREKARA}
+    | {"それぞれ", KOTO, SURU, SHITEKARA, SHITE, SHITA},
     key=len,
     reverse=True,
 )
-CALL_FORMS = (KOTO, SURU, SHITE)
+CALL_FORMS = (KOTO, SURU, SHITEKARA, SHITE, SHITA)
 
 
 def _nfkc(c: str) -> str:
@@ -538,6 +546,15 @@ def nosep(tokens: list[Token]) -> list[Token]:
     return [t for t in tokens if t.kind != "SEP"]
 
 
+def _opens_punct(raws: list[str], k: int) -> bool:
+    """「手順（」のように開き括弧で終わる行は、次の行が句読点の書き方ならそれに合わせる"""
+    text = raws[k].split("#")[0].rstrip()
+    if not text or text[-1] not in OPEN_PARENS:
+        return False
+    nxt = next((r for r in raws[k + 1 :] if r.strip()), None)
+    return nxt is not None and is_punct_line(nxt)
+
+
 def split_lines(source: str) -> list[Line]:
     lines = []
     raws = source.splitlines()
@@ -550,7 +567,7 @@ def split_lines(source: str) -> list[Line]:
                 indent += INDENT_WIDTH[c]
             else:
                 break
-        if not is_punct_line(raw):
+        if not is_punct_line(raw) and not _opens_punct(raws, k):
             tokens = tokenize_line(raw, number)
             if tokens:
                 lines.append(Line(indent, tokens, number))
@@ -688,6 +705,43 @@ class Proviso:
     sig: tuple | None = None  # (関数名, 引数)
 
 
+# --- 動作(副作用) ---
+
+
+@dataclass
+class Chain:
+    """「入力してから、表示する」: call の動作を行い、その結果を cont の中の HOLE に入れる"""
+
+    call: Any
+    cont: Any
+    line: int
+
+
+@dataclass(eq=False)
+class Run:
+    """「入力した 結果」: 手順の中で動作を行った結果"""
+
+    call: Any
+    line: int
+
+
+@dataclass
+class Do:
+    """「手順（文。文。…）」「…。それから、…。」: 文を順に行う"""
+
+    statements: list
+    line: int
+    sequel: bool = False  # 「それから」で作った並び
+
+
+@dataclass
+class Sequel:
+    """「それから、…」の文(前の文に付け足す)"""
+
+    expr: Any
+    line: int
+
+
 # --- 組・選択肢の型 ---
 
 
@@ -805,7 +859,7 @@ class TraitImpl:
 
 
 TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl)
-BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数")
+BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作")
 
 
 class ParseContext:
@@ -1082,18 +1136,28 @@ class ExprParser:
     # パイプライン := 区間 { 区間 }
     # 区間 := { 値 助詞 } 呼び出し(…して | …する | …すること)
     # 「…して」の結果は次の区間の「を」に入る。
-    def pipeline(self) -> Any:
-        piped: Any = None
-        has_piped = False
+    # 「…してから」の後ろは、前の動作の結果を受け取る続き(バインド)。
+    # 「…した 結果」は、その呼び出しを手順の中で行った結果の値。
+    def pipeline(self, piped: Any = None, has_piped: bool = False) -> Any:
         while True:
             args: dict = {}
             while True:
                 tok = self.peek()
                 if tok is None or tok.kind in ("RP", "PERIOD") or (tok.kind == "KW" and tok.value in CONTINUATION_KEYWORDS):
                     break
-                if tok.kind == "CALL" and tok.form != KOTO:
+                if tok.kind == "CALL" and tok.form == SHITA:
+                    self.next()
+                    res = self.peek()
+                    if res is None or res.kind != "WORD" or res.value != RESULT:
+                        raise SuruError(f"「{tok.value[:-len(SURU)]}した」の後には「結果」を書いてください", tok.line)
+                    self.next()
+                    if has_piped:
+                        args = merge_piped(args, piped)
+                    value: Any = Run(Call(tok.value, args, tok.line), tok.line)
+                    args, piped, has_piped = {}, None, False
+                elif tok.kind == "CALL" and tok.form != KOTO:
                     break
-                if tok.kind == "CALL":  # …すること
+                elif tok.kind == "CALL":  # …すること
                     self.next()
                     if not is_part(self.peek()):
                         # 区間の最後の「こと」は、前に並んだ引数を受け取る(部分適用)
@@ -1101,7 +1165,7 @@ class ExprParser:
                             args = merge_piped(args, piped)
                         return Ref(tok.value, args, tok.line)
                     # 後ろに助詞が続く「こと」は外側の呼び出しの引数(関数そのもの)
-                    value: Any = Ref(tok.value, {}, tok.line)
+                    value = Ref(tok.value, {}, tok.line)
                 elif is_kw(tok, KW_LAMBDA):
                     self.next()
                     if has_piped:
@@ -1142,6 +1206,12 @@ class ExprParser:
             has_piped = True
             if tok.form == SURU:
                 return piped
+            if tok.form == SHITEKARA:
+                # 残りは前の動作の結果を「を」に受け取る続き
+                cont = self.pipeline(Var(HOLE, tok.line), True)
+                return Chain(piped, cont, tok.line)
+            if tok.form == SHITA:
+                raise SuruError("「した」の後には「結果」を書いてください", tok.line)
 
     # --- パターンマッチ ---------------------------------------------------
     # もし 値 が パターン ならば 式 { 区切り パターン ならば 式 } [ そうでなければ 式 ]
@@ -1441,6 +1511,28 @@ class ExprParser:
         nodes = [Node(Line(0, s, s[0].line, closed=True)) for s in sentences]
         return parse_block(nodes)
 
+    def paren_do(self, open_tok: Token) -> Do:
+        """「手順（文。文。…）」: 括弧の中の文を順に行う"""
+        depth, i = 0, self.pos
+        while i < len(self.tokens):
+            t = self.tokens[i]
+            if t.kind == "LP":
+                depth += 1
+            elif t.kind == "RP":
+                if depth == 0:
+                    break
+                depth -= 1
+            i += 1
+        else:
+            raise SuruError("「(」に対応する「)」がありません", open_tok.line)
+        inner = self.tokens[self.pos : i]
+        self.pos = i + 1
+        sentences = [strip_seps(x) for x in split_sentences(inner + [Token("PERIOD", PERIOD, open_tok.line)])]
+        sentences = [x for x in sentences if x]
+        if not sentences:
+            raise SuruError("手順の中に文がありません", open_tok.line)
+        return parse_do([Node(Line(0, x, x[0].line, closed=True)) for x in sentences], open_tok.line)
+
     def atom(self) -> Any:
         tok = self.next()
         if tok.kind == "NUM":
@@ -1448,6 +1540,10 @@ class ExprParser:
         if tok.kind == "STR":
             return Str(tok.value)
         if tok.kind == "WORD":
+            nxt = self.tokens[self.pos] if self.pos < len(self.tokens) else None
+            if tok.value == TEJUN and not tok.quoted and nxt is not None and nxt.kind == "LP":
+                self.next()
+                return self.paren_do(nxt)
             return Var(tok.value, tok.line, tok.quoted)
         if tok.kind == "LP":
             block = self.paren_block(tok)
@@ -1532,6 +1628,15 @@ def _with_children(tokens: list[Token], children: list[Node]) -> list[Token]:
 def parse_statement(node: Node) -> Any:
     raw = node.line.tokens
     tokens = nosep(raw)
+    if is_kw(tokens[0], KW_SOREKARA):
+        rest = raw[_index_of(raw, tokens[0]) + 1 :]
+        inner_node = Node(Line(node.line.indent, rest, node.line.number, node.line.closed), node.children)
+        if not nosep(flatten(inner_node)):
+            raise SuruError("「それから」の後に文が必要です", tokens[0].line)
+        stmt = parse_statement(inner_node)
+        if isinstance(stmt, (Define, Proviso, Sequel) + TOP_LEVEL_ONLY):
+            raise SuruError("「それから」の後には行うこと(式)を書いてください", tokens[0].line)
+        return Sequel(stmt, tokens[0].line)
     if is_kw(tokens[0], KW_PROVISO):
         rest = raw[_index_of(raw, tokens[0]) + 1 :]
         if not nosep(rest):
@@ -1561,6 +1666,10 @@ def parse_statement(node: Node) -> Any:
     if len(head) == 3 and head[0].kind == "WORD" and is_kw(head[1], KW_TOIU) and is_kw(head[2], KW_SEISHITSU):
         return parse_trait_decl(node, head[0], after)
     name, params, is_function = parse_definition_head(head, node.line.number)
+    after_t = nosep(after)
+    if len(after_t) == 1 and after_t[0].kind == "WORD" and after_t[0].value == TEJUN and not after_t[0].quoted and node.children:
+        # 「挨拶する とは 手順」+ 深い行: 深い行を順に行う
+        return Define(name, params, parse_do(node.children, node.line.number), is_function, node.line.number)
     if nosep(after):
         # 同じ行に本体がある: 深い行はその続き
         body: Any = ExprParser(_with_children(after, node.children)).parse_all()
@@ -1676,12 +1785,30 @@ def parse_trait_impl(node: Node, tokens: list[Token]) -> TraitImpl:
     return impl
 
 
+def _then(first: Any, expr: Any) -> Do:
+    """「first。それから、expr。」"""
+    if isinstance(first, Do) and first.sequel:
+        first.statements.append(expr)
+        return first
+    return Do([first, expr], getattr(first, "line", 0) or 0, sequel=True)
+
+
 def attach_provisos(statements: list) -> list:
-    """「ただし」の定義を、直前の(ただしでない)定義の局所定義にする"""
+    """「ただし」の定義を、直前の(ただしでない)定義の局所定義にする。
+    「それから」の文は、直前の文(定義なら本体)の後に続けて行う並びにする"""
     out: list = []
     target: Any = None
     extra: dict[int, list] = {}
     for s in statements:
+        if isinstance(s, Sequel):
+            prev = out[-1] if out else None
+            if prev is None or isinstance(prev, TOP_LEVEL_ONLY):
+                raise SuruError("「それから」の前に行うことを書いてください", s.line)
+            if isinstance(prev, Define):
+                prev.body = _then(prev.body, s.expr)
+            else:
+                out[-1] = _then(prev, s.expr)
+            continue
         if isinstance(s, Proviso):
             if target is None:
                 raise SuruError("「ただし」の前に「…とは」の定義が必要です", s.line)
@@ -1720,6 +1847,16 @@ def parse_block(nodes: list[Node]) -> Any:
     if len(statements) == 1:
         return statements[0]
     return Block(statements)
+
+
+def parse_do(nodes: list[Node], line: int) -> Do:
+    statements = attach_provisos([parse_statement(n) for n in nodes])
+    for s in statements:
+        if isinstance(s, TOP_LEVEL_ONLY):
+            raise SuruError("型や性質の定義は一番外側(字下げなし)に書いてください", s.line)
+    if isinstance(statements[-1], Define):
+        raise SuruError("手順の最後は定義ではなく、行うこと(式)でなければなりません", statements[-1].line)
+    return Do(statements, line)
 
 
 def parse_program(source: str, ctx: ParseContext | None = None) -> list:
@@ -1810,6 +1947,24 @@ class TraitMethod:
 FUNCTION_TYPES = (Function, Builtin, Partial, TraitMethod)
 
 
+@dataclass(eq=False)
+class Action:
+    """動作(副作用のある計算)。作っただけでは何も起きず、トップレベルに置くと行われる"""
+
+    name: str
+    perform: Any  # perform(interp) -> 結果
+
+
+@dataclass
+class Pure:
+    """「x を 結果にする」: 何もせずに x を結果とする動作。連鎖する相手の型に合わせて使われる"""
+
+    value: Any
+
+
+ACTION_TYPES = (Action, Pure)
+
+
 @dataclass(frozen=True)
 class Record:
     """組の値。「（横 は 3 で 縦 は 4 の 点）」"""
@@ -1826,6 +1981,8 @@ class Record:
 def type_name_of(v: Any) -> str:
     if isinstance(v, Record):
         return v.type_name
+    if isinstance(v, ACTION_TYPES):
+        return "動作"
     if isinstance(v, bool):
         return "真偽"
     if isinstance(v, (int, float)):
@@ -1869,10 +2026,22 @@ def format_value(v: Any, nested: bool = False, fmt: Any = None) -> str:
         return f"「{v}」"
     if isinstance(v, FUNCTION_TYPES):
         return f"<関数 {v.name}>"
+    if isinstance(v, Action):
+        return f"<動作 {v.name}>"
+    if isinstance(v, Pure):
+        return "<動作 結果にする>"
     return str(v)
 
 
+def _action_hint(v: Any) -> str:
+    if isinstance(v, ACTION_TYPES):
+        return "。動作の結果を使うときは、「…してから」か、手順の中で「…した 結果」を使ってください"
+    return ""
+
+
 def _num(v: Any, line: int | None) -> Any:
+    if isinstance(v, ACTION_TYPES):
+        raise SuruError(f"動作「{format_value(v)}」で計算しようとしました{_action_hint(v)}", line)
     if isinstance(v, bool) or not isinstance(v, (int, float)):
         raise SuruError(f"数ではない値「{format_value(v)}」で計算しようとしました", line)
     return v
@@ -1993,12 +2162,59 @@ def _b_fold(it: "Interpreter", a: dict, line: int) -> Any:
 
 
 def _show(it: "Interpreter", a: dict, line: int) -> Any:
-    print(it.format(a[WO]))
-    return a[WO]
+    x = a[WO]
+
+    def perform(it2: "Interpreter") -> Any:
+        it2.out(it2.format(x))
+        return x
+
+    return Action("表示する", perform)
+
+
+def _input(it: "Interpreter", a: dict, line: int) -> Any:
+    prompt = it.format(a[WO]) if WO in a else ""
+
+    def perform(it2: "Interpreter") -> Any:
+        try:
+            return it2.read(prompt)
+        except EOFError:
+            raise SuruError("入力がありません", line) from None
+
+    return Action("入力する", perform)
+
+
+def _to_number(it: "Interpreter", a: dict, line: int) -> Any:
+    v = a[WO]
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        text = unicodedata.normalize("NFKC", v).strip().replace("−", "-")
+        for conv in (int, float):
+            try:
+                return conv(text)
+            except ValueError:
+                pass
+    raise SuruError(f"「{format_value(v)}」は数値にできません{_action_hint(v)}", line)
+
+
+def _run_all(it: "Interpreter", a: dict, line: int) -> Any:
+    acts = _list(a[WO], "「実行する」の「を」", line)
+    for x in acts:
+        if not isinstance(x, ACTION_TYPES):
+            raise SuruError(f"「{format_value(x)}」は動作ではありません(「実行する」には動作のリストを渡してください)", line)
+
+    def perform(it2: "Interpreter") -> Any:
+        return tuple(it2.perform(x) for x in acts)
+
+    return Action("実行する", perform)
 
 
 BUILTINS = [
+    # x を 表示する / 「質問」を 入力する / 動作のリスト を 実行する: どれも動作を返す
     Builtin("表示する", [(WO, True)], _show),
+    Builtin("入力する", [(WO, False)], _input),
+    Builtin("実行する", [(WO, True)], _run_all),
+    Builtin("数値にする", [(WO, True)], _to_number),
     Builtin("絶対値にする", [(WO, True)], lambda it, a, line: abs(_num(a[WO], line))),
     # a と b と c を 加算する / x を y に 加算する
     Builtin("加算する", [(WO, True), ("に", False)], _b_add),
@@ -2014,7 +2230,6 @@ BUILTINS = [
     Builtin("適用する", [(WO, True), ("に", False)], _b_apply),
     # リスト から 関数 で 選別する / リスト を 関数 で 写像する / リスト を 初期値 から 関数 で 畳み込みする
     Builtin("選別する", [("から", True), ("で", True)], _b_filter),
-    Builtin("写像する", [(WO, True), ("で", True)], _b_map),
     Builtin("畳み込みする", [(WO, True), ("から", True), ("で", True)], _b_fold),
 ]
 
@@ -2046,10 +2261,50 @@ def bind(env: Env, pattern: Any, value: Any, part: str, fname: str, line: int) -
 
 SHOWABLE = "表示可能"
 TO_STRING = "文字列化する"
+MAPPABLE = "写像可能"   # 関手: m を f で 写像する
+MONAD = "連鎖可能"      # モナド: m を f で 連鎖する / x を 結果にする
+MAP = "写像する"
+BIND = "連鎖する"
+UNIT = "結果にする"
+F_PARAMS = [(WO, "m"), ("で", "f")]
+
+
+def _run_key(node: Run) -> str:
+    return f"\0した結果{id(node)}"
+
+
+def collect_runs(node: Any, out: list) -> list:
+    """文の中の「した 結果」を、先に行うものから順に集める(関数の本体や条件分岐の枝の中は除く)"""
+    if isinstance(node, (Lambda, Do)):
+        return out
+    if isinstance(node, Define):
+        if not node.is_function:
+            collect_runs(node.body, out)
+        return out
+    if isinstance(node, If):
+        return collect_runs(node.cond, out)
+    if isinstance(node, Match):
+        return collect_runs(node.subject, out)
+    if isinstance(node, Run):
+        collect_runs(node.call, out)
+        out.append(node)
+        return out
+    if isinstance(node, (list, tuple)):
+        for x in node:
+            collect_runs(x, out)
+    elif isinstance(node, dict):
+        for x in node.values():
+            collect_runs(x, out)
+    elif hasattr(node, "__dataclass_fields__"):
+        for f in node.__dataclass_fields__:
+            collect_runs(getattr(node, f), out)
+    return out
 
 
 class Interpreter:
-    def __init__(self) -> None:
+    def __init__(self, out: Any = None, read: Any = None) -> None:
+        self.out = out or print  # 「表示する」の出力先
+        self.read = read or input  # 「入力する」の入力元
         self.globals = make_global_env()
         self.ctx = ParseContext()
         self.traits: dict[str, dict] = {}  # 性質 → {関数名: (引数, 既定の実装 or None)}
@@ -2057,9 +2312,23 @@ class Interpreter:
         self.fixed: set[str] = set()  # 形の名前・性質の関数の名前(上書きできない)
         # 組み込みの性質「表示可能」: 実装しなくても全部の型が持つ。実装すると表示が変わる
         self.register_trait(TraitDecl(SHOWABLE, [(TO_STRING, [(WO, "x")])], [], 0))
+        # 組み込みの性質「写像可能」「連鎖可能」。リストと動作が持つ
+        self.register_trait(TraitDecl(MAPPABLE, [(MAP, F_PARAMS)], [], 0))
+        self.register_trait(TraitDecl(MONAD, [(BIND, F_PARAMS), (UNIT, [(WO, "x")])], [], 0))
+        unit = Builtin(UNIT, [(WO, True)], lambda it, a, line: Pure(a[WO]))
+        self.traits[MONAD][UNIT] = ([(WO, "x")], unit)  # 結果にする は実装しなくてよい
+        self.globals.vars[UNIT] = unit  # 「を」の型で選ばず、いつも中立の Pure を作る
+        fmap = Builtin(MAP, [(WO, True), ("で", True)],
+                       lambda it, a, line: it.fmap(a[WO], lambda v: it.apply(a["で"], [v], line), line))
+        chain = Builtin(BIND, [(WO, True), ("で", True)],
+                        lambda it, a, line: it.chain(a[WO], lambda v: it.apply(a["で"], [v], line), line))
+        for tname in ("リスト", "動作"):
+            self.impls[(MAPPABLE, tname)] = {MAP: fmap}
+            self.impls[(MONAD, tname)] = {BIND: chain}
 
-    def run(self, source: str) -> list[Any]:
-        """プログラムを実行し、トップレベルの式の値のリストを返す"""
+    def run(self, source: str, emit: Any = None) -> list[Any]:
+        """プログラムを実行し、トップレベルの式の値のリストを返す。
+        値が動作なら、その場で行う(結果はリストに入れない)。emit を渡すと値ができるたびに呼ぶ"""
         ctx = self.ctx.copy()
         program = parse_program(source, ctx)
         self.ctx = ctx
@@ -2078,7 +2347,125 @@ class Interpreter:
                 if stmt.name in self.fixed:
                     raise SuruError(f"「{stmt.name}」は形か性質の関数の名前なので、定義し直せません", stmt.line)
                 self.define(stmt, self.globals)
-        return [self.eval(s, self.globals) for s in program if not isinstance(s, (Define,) + TOP_LEVEL_ONLY)]
+        results = []
+        for s in program:
+            if isinstance(s, (Define,) + TOP_LEVEL_ONLY):
+                continue
+            v = self.eval(s, self.globals)
+            if isinstance(v, ACTION_TYPES):
+                self.perform(v)
+                continue
+            results.append(v)
+            if emit is not None:
+                emit(v)
+        return results
+
+    # --- 動作 -------------------------------------------------------------
+
+    def perform(self, v: Any) -> Any:
+        """動作を行って結果を返す(動作でない値はそのまま)"""
+        while True:
+            if isinstance(v, Action):
+                v = v.perform(self)
+                if not isinstance(v, ACTION_TYPES):
+                    return v
+                continue  # 「してから」の続きが返した動作も続けて行う
+            if isinstance(v, Pure):
+                return v.value
+            return v
+
+    def monad_impl(self, m: Any) -> dict | None:
+        if isinstance(m, Record):
+            return self.impls.get((MONAD, m.type_name))
+        return None
+
+    def is_monadic(self, v: Any) -> bool:
+        return isinstance(v, ACTION_TYPES + (tuple,)) or self.monad_impl(v) is not None
+
+    def coerce(self, r: Any, like: Any, line: int) -> Any:
+        """「結果にする」で作った中立の値を、連鎖している相手(like)の型に合わせる"""
+        if not isinstance(r, Pure):
+            return r
+        if isinstance(like, tuple):
+            return (r.value,)
+        fns = self.monad_impl(like)
+        if fns is not None and UNIT in fns:
+            return self.call(fns[UNIT], {WO: r.value}, line)
+        return r
+
+    def chain(self, m: Any, f: Any, line: int) -> Any:
+        """m を行い(取り出し)、その結果を f(Python の関数)に渡す。モナドのバインド"""
+        if isinstance(m, Pure):
+            return f(m.value)
+        if isinstance(m, Action):
+            return Action(m.name, lambda it: it.perform(f(it.perform(m))))
+        if isinstance(m, tuple):
+            out: tuple = ()
+            for x in m:
+                r = self.coerce(f(x), m, line)
+                if not isinstance(r, tuple):
+                    raise SuruError(f"リストを連鎖するときは、続きもリストを返す必要があります(「{self.format(r)}」が返りました)", line)
+                out += r
+            return out
+        fns = self.monad_impl(m)
+        if fns is None:
+            raise SuruError(f"「{self.format(m)}」は動作ではありません(性質「{MONAD}」を持っていません)", line)
+        k = Builtin("続き", [(WO, True)], lambda it, a, l: it.coerce(f(a[WO]), m, line))
+        return self.call(self.globals.vars[BIND], {WO: m, "で": k}, line)
+
+    def fmap(self, m: Any, f: Any, line: int) -> Any:
+        """m の結果に f を適用したもの(写像)"""
+        if isinstance(m, Pure):
+            return Pure(f(m.value))
+        if isinstance(m, Action):
+            return Action(m.name, lambda it: f(it.perform(m)))
+        if isinstance(m, tuple):
+            return tuple(f(x) for x in m)
+        if isinstance(m, Record) and (MAPPABLE, m.type_name) in self.impls:
+            k = Builtin("関数", [(WO, True)], lambda it, a, l: f(a[WO]))
+            return self.call(self.globals.vars[MAP], {WO: m, "で": k}, line)
+        if self.monad_impl(m) is not None:
+            return self.chain(m, lambda v: Pure(f(v)), line)
+        raise SuruError(f"「{self.format(m)}」は性質「{MAPPABLE}」を持っていません(「の 結果」が使えません)", line)
+
+    def run_do(self, stmts: list, i: int, env: Env, line: int) -> Any:
+        """手順の i 番目からを行う。「した 結果」は連鎖に、途中の文は「それから」に置きかえる"""
+        s = stmts[i]
+        runs = [r for r in collect_runs(s, []) if not self._has(env, _run_key(r))]
+        if runs:
+            r = runs[0]
+            m = self.eval(r.call, env)
+            if not self.is_monadic(m):
+                raise SuruError(f"「{r.call.name[:-len(SURU)]}した 結果」: 「{self.format(m)}」は動作ではありません", r.line)
+
+            def k(v: Any) -> Any:
+                local = Env(env)
+                local.vars[_run_key(r)] = v
+                return self.run_do(stmts, i, local, line)
+
+            return self.chain(m, k, r.line)
+        if isinstance(s, Define):
+            local = Env(env)
+            if s.is_function:
+                self.define(s, local)
+            else:
+                local.vars[s.name] = self.eval(s.body, local)
+            return self.run_do(stmts, i + 1, local, line)
+        v = self.eval(s, env)
+        if i == len(stmts) - 1:
+            return v
+        if not self.is_monadic(v):
+            raise SuruError(f"手順の途中の文の値「{self.format(v)}」は動作ではありません", getattr(s, "line", line))
+        return self.chain(v, lambda _: self.run_do(stmts, i + 1, env, line), line)
+
+    @staticmethod
+    def _has(env: Env, key: str) -> bool:
+        e: Env | None = env
+        while e is not None:
+            if key in e.vars:
+                return True
+            e = e.parent
+        return False
 
     def run_text(self, source: str) -> list[str]:
         """実行して、トップレベルの式の値を表示用の文字列で返す"""
@@ -2218,7 +2605,37 @@ class Interpreter:
         if isinstance(node, Prop):
             return get_prop(self.eval(node.target, env), node.name, node.line)
         if isinstance(node, Field):
-            return get_field(self.eval(node.target, env), node.name, node.line)
+            target = self.eval(node.target, env)
+            if node.name == RESULT and not isinstance(target, Record) and self.is_monadic(target):
+                raise SuruError(
+                    "「の 結果」は「入力 の 結果 を 数値にする」のように呼び出しの引数に書いてください", node.line
+                )
+            return get_field(target, node.name, node.line)
+        if isinstance(node, Chain):
+            m = self.eval(node.call, env)
+            if not self.is_monadic(m):
+                raise SuruError(f"「してから」の前の「{self.format(m)}」は動作ではありません(純粋な値なら「して」を使います)", node.line)
+
+            def k(v: Any) -> Any:
+                local = Env(env)
+                local.vars[HOLE] = v
+                return self.eval(node.cont, local)
+
+            return self.chain(m, k, node.line)
+        if isinstance(node, Run):
+            key = _run_key(node)
+            e: Env | None = env
+            while e is not None:
+                if key in e.vars:
+                    return e.vars[key]
+                e = e.parent
+            raise SuruError(
+                "「した 結果」は手順の文の中で使ってください(関数の本体や条件分岐の枝の中では、そこを「手順（…）」で囲みます)",
+                node.line,
+            )
+        if isinstance(node, Do):
+            v = self.run_do(node.statements, 0, Env(env), node.line)
+            return v if self.is_monadic(v) else Pure(v)
         if isinstance(node, Construct):
             return self.make_record(node.ctor, [self.eval(i, env) for i in node.items], node.line)
         if isinstance(node, NamedConstruct):
@@ -2259,8 +2676,21 @@ class Interpreter:
             return self.eval(node.then if cond else node.other, env)
         if isinstance(node, Call):
             fn = env.lookup(node.name, node.line)
-            args = {p: self.eval(a, env) for p, a in node.args.items()}
+            args = {}
+            lifted = []  # 「入力 の 結果 を …」: 動作の結果に関数を適用する(写像)
+            for p, a in node.args.items():
+                if isinstance(a, Field) and a.name == RESULT:
+                    t = self.eval(a.target, env)
+                    if not (isinstance(t, Record) and RESULT in t.fields):
+                        args[p] = t
+                        lifted.append(p)
+                        continue
+                args[p] = self.eval(a, env)
             each = [p for p, a in node.args.items() if isinstance(a, Each)]
+            if lifted:
+                if each:
+                    raise SuruError("「の 結果」と「の それぞれ」は1つの呼び出しに一緒に書けません", node.line)
+                return self.lift_call(fn, args, lifted, node.line)
             if not each:
                 return self.call(fn, args, node.line)
             # 「リスト の それぞれ を 三倍する」: 要素ごとに呼び出す
@@ -2292,6 +2722,13 @@ class Interpreter:
                     result = self.eval(s, local)
             return result
         raise SuruError(f"評価できない構文 {node!r}")
+
+    def lift_call(self, fn: Any, args: dict, lifted: list, line: int) -> Any:
+        """「の 結果」の引数が1つなら写像、2つ以上なら前のものから順に連鎖して最後を写像する"""
+        p, rest = lifted[0], lifted[1:]
+        if not rest:
+            return self.fmap(args[p], lambda v: self.call(fn, {**args, p: v}, line), line)
+        return self.chain(args[p], lambda v: self.lift_call(fn, {**args, p: v}, rest, line), line)
 
     def slots_of(self, fn: Any, line: int) -> list[tuple[str, bool]]:
         if not isinstance(fn, FUNCTION_TYPES):
@@ -2376,8 +2813,7 @@ def repl() -> None:
         if not source.strip():
             continue
         try:
-            for v in interp.run(source):
-                print(interp.format(v))
+            interp.run(source, emit=lambda v: print(interp.format(v)))
         except SuruError as e:
             print(f"エラー: {e}")
         except RecursionError:
@@ -2393,8 +2829,7 @@ def main(argv: list[str]) -> int:
         source = f.read()
     interp = Interpreter()
     try:
-        for v in interp.run(source):
-            print(interp.format(v))
+        interp.run(source, emit=lambda v: print(interp.format(v)))
     except SuruError as e:
         print(f"エラー: {e}", file=sys.stderr)
         return 1

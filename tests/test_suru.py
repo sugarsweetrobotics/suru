@@ -615,3 +615,136 @@ def test_表示可能():
 def test_データの例が動く():
     src = (ROOT / "examples" / "data.suru").read_text(encoding="utf-8")
     assert _text(src)[-3:] == ["（横 は 3 で 縦 は 0 の 点）", "9", "2×3"]
+
+
+# --- 動作(副作用)・連鎖可能・手順 ---------------------------------------------
+
+def _io(src, inputs=()):
+    """実行して、(表示された行, トップレベルの値) を返す"""
+    from suru import Interpreter
+    out, feed = [], list(inputs)
+
+    def read(prompt):
+        out.append(prompt)
+        if not feed:
+            raise EOFError
+        return feed.pop(0)
+
+    values = Interpreter(out=out.append, read=read).run(src)
+    return out, values
+
+
+def test_表示するは動作を返しトップレベルで行う():
+    out, values = _io("「a」 を 表示する\n1 + 1\n「b」 を 表示する")
+    assert out == ["a", "b"] and values == [2]
+
+
+def test_作っただけの動作は行われない():
+    out, values = _io("（「a」 を 表示する） と 1")
+    assert out == [] and values[0][1] == 1
+
+
+def test_手順と入力():
+    src = "挨拶する とは 手順\n  名前 とは 「名前? 」 を 入力した 結果\n  「やあ、」 + 名前 を 表示する\n  名前 の 長さ を 結果にする\n"
+    out, _ = _io(src + "挨拶してから 表示する", ["太郎"])
+    assert out == ["名前? ", "やあ、太郎", "2"]
+
+
+def test_句読点の書き方の手順():
+    src = "手順（xとは、「? 」を入力した結果を数値にする。x*2を表示する）。"
+    assert _io(src, ["21"])[0] == ["? ", "42"]
+
+
+def test_手順の開き括弧だけの行():
+    src = "手順（\n  xとは、「? 」を入力した結果。\n  xを表示する）。"
+    assert _io(src, ["q"])[0] == ["? ", "q"]
+
+
+def test_してからはバインド():
+    out, _ = _io("x を 三倍する とは x * 3\n入力してから 数値にして 三倍して 表示する", ["5"])
+    assert out == ["", "15"]
+
+
+def test_してからの前が動作でないとエラー():
+    with pytest.raises(SuruError, match="動作ではありません"):
+        _io("1 を 加算してから 表示する")
+
+
+def test_の結果は写像():
+    out, _ = _io("（入力する） の 結果 を 数値にしてから 表示する", ["7"])
+    assert out == ["", "7"]
+    assert run(TRIPLE2 + "（1 と 2） の 結果 を 三倍する") == [(3, 6)]  # リストにも使える
+
+
+def test_結果は予約語ではない():
+    assert run("結果 とは 3\n結果 * 2") == [6]
+    pt = "点 とは 結果 と 他 の 組\n"
+    assert run(pt + "（1 と 2 の 点） の 結果") == [1]
+
+
+def test_それから():
+    src = "二回 とは 「A」 を 表示する\nそれから 「B」 を 表示する\n二回\n二回"
+    assert _io(src)[0] == ["A", "B", "A", "B"]
+    assert _io("「a」を表示する。それから、「b」を表示する。")[0] == ["a", "b"]
+
+
+def test_した結果は手順の外ではエラー():
+    with pytest.raises(SuruError, match="手順の文の中で使ってください"):
+        _io("x とは 入力した 結果\nx", ["a"])
+
+
+def test_手順の途中の文が動作でないとエラー():
+    with pytest.raises(SuruError, match="動作ではありません"):
+        _io("手順（1+1。「a」を表示する）。")
+
+
+def test_数値にする():
+    assert run("「12」 を 数値にする\n「１．５」 を 数値にする") == [12, 1.5]
+    with pytest.raises(SuruError, match="数値にできません"):
+        run("「abc」 を 数値にする")
+
+
+def test_動作で計算するとヒント():
+    with pytest.raises(SuruError, match="してから"):
+        run("（入力する） + 1")
+
+
+def test_実行する():
+    out, _ = _io("（1 と 2） の それぞれ を 表示して 実行する")
+    assert out == ["1", "2"]
+
+
+def test_リストの連鎖():
+    assert run("（1 と 2） を （n を 受け取って n と n を 返すこと） で 連鎖する") == [(1, 1, 2, 2)]
+    src = "手順（xとは、（1と2）を連鎖用にした結果。yとは、（10と20）を連鎖用にした結果。x+yを結果にする）。"
+    assert run("xsを連鎖用にするとは、xs。" + src) == [(11, 21, 12, 22)]
+
+
+MAYBE = (
+    "『たぶん』とは、値の有か無。\n"
+    "『たぶん』は連鎖可能。ただし、mをfで連鎖するとは、もしmが値の有ならばfを値に適用する、そうでなければ無。"
+    "ただし、xを結果にするとは、xの有。\n"
+    "xを半分にするとは、もしx%2==0ならばx/2の有、そうでなければ無。\n"
+)
+
+
+def test_自分の型を連鎖可能にする():
+    src = "手順（aとは、{}を半分にした結果。bとは、aを半分にした結果。a+bを結果にする）。"
+    assert _text(MAYBE + src.format(8)) == ["（値 は 6 の 有）"]
+    assert _text(MAYBE + src.format(6)) == ["無"]
+    assert _text(MAYBE + "（8を半分にする）の結果を三倍する。".replace("三倍", "倍化") + "\nxを倍化するとは、x*2。") == [
+        "（値 は 8 の 有）"]
+
+
+def test_動作の例が動く():
+    src = (ROOT / "examples" / "io.suru").read_text(encoding="utf-8")
+    out, values = _io(src, ["花子", "4", "5"])
+    assert out[:4] == ["こんにちは", "はじめ", "おわり", "お名前は? "]
+    assert "こんにちは、花子さん" in out and "12" in out and "15" in out
+    assert values == [(1, 10, 2, 20, 3, 30), (3, 6)]
+
+
+def test_対話版フィボナッチの例が動く():
+    src = (ROOT / "examples" / "fib_input.suru").read_text(encoding="utf-8")
+    out, _ = _io(src, ["6"])
+    assert out[1:] == ["0", "1", "1", "2", "3", "5"]
