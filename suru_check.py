@@ -1,13 +1,17 @@
-"""「する」の静的な型検査(第1段階)
+"""「する」の静的な型検査
 
 型を書かなくても、実行する前に型の間違いを見つける。Hindley–Milner の型推論を、
 助詞つきの引数に合わせて広げたもの。
 
     python3 suru.py --検査 ファイル
 
-第1段階で調べるもの: 数・文字列・真偽・リスト・関数・組・選択肢のある型・場合分け・
-場合ごとの定義・述語。性質の関数と、動作の中身の型(手順・してから・した 結果)は
-第2・第3段階で調べる予定で、今はどんな型とも合うものとして扱う。
+調べるもの: 数・文字列・真偽・リスト・関数・組・選択肢のある型・場合分け・場合ごとの定義・
+述語(第1段階)、性質の関数(第2段階)、動作(手順・してから・した 結果・結果にする・の 結果)と
+型の引数をとる型(第3段階)。
+
+自分の型は、フィールドごとに型の引数を持つ(「数 の 『たぶん』」)。自分自身を中に持つ
+フィールド(木の「左」)は、推論の途中で型が無限に続くと分かったところで「その型自身」とし、
+初めからやり直す。プログラムの中でいつも同じ型で使うフィールドは、引数にせずその型に決める。
 """
 
 from __future__ import annotations
@@ -21,7 +25,8 @@ from suru import (
     BinOp, Block, Call, Chain, Construct, Define, Do, Each, Field, If, KW_KATSU, KW_MATAHA, Lambda,
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
     PValue, Ref, RESULT, Run, Sequel, Str, SuruError, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
-    HOLE, TO_STRING, MAP, BIND, UNIT, SHOWABLE, TOP_LEVEL_ONLY, is_predicate, parse_program,
+    HOLE, TO_STRING, MAP, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
+    parse_program, collect_runs, _run_key,
 )
 
 # ---------------------------------------------------------------------------
@@ -39,6 +44,17 @@ class TVar:
     def __init__(self) -> None:
         self.id = next(_ids)
         self.ref: Any = None
+
+
+class PureVar(TVar):
+    """「x を 結果にする」の型。どの動作(連鎖可能な型)になるかは、連鎖する相手で決まる。
+    c は結果の型。動作やリストとそろえると、その結果の型を c とそろえる"""
+
+    __slots__ = ("c",)
+
+    def __init__(self, c: Any) -> None:
+        super().__init__()
+        self.c = c
 
 
 class TCon:
@@ -83,6 +99,8 @@ def ftv(t: Any, out: set | None = None) -> set:
     t = prune(t)
     if isinstance(t, TVar):
         out.add(t)
+        if isinstance(t, PureVar):
+            ftv(t.c, out)
     elif isinstance(t, TCon):
         for a in t.args:
             ftv(a, out)
@@ -97,18 +115,53 @@ class Mismatch(Exception):
     pass
 
 
+class Occurs(Mismatch):
+    """v を t にすると型が無限に続く"""
+
+    def __init__(self, v: TVar, t: Any):
+        super().__init__()
+        self.v, self.t = v, t
+
+
 def occurs(v: TVar, t: Any) -> bool:
     return v in ftv(t)
+
+
+BASIC = ("数", "文字列", "真偽")
+MONADS = ("動作", "リスト")  # 組み込みの連鎖可能な型
+
+# 「結果にする」の値を自分の型とそろえたもの(Checker が、その型の「結果にする」の実装で確かめる)
+_pure_deferred: list = []
+
+
+def _bind(v: TVar, t: Any) -> None:
+    if occurs(v, t):
+        raise Occurs(v, t)
+    v.ref = t
 
 
 def unify(a: Any, b: Any) -> None:
     a, b = prune(a), prune(b)
     if a is b:
         return
-    if isinstance(a, TVar):
-        if occurs(a, b):
+    if isinstance(b, PureVar) and not isinstance(a, PureVar):
+        a, b = b, a
+    if isinstance(a, PureVar):
+        if isinstance(b, PureVar):
+            unify(a.c, b.c)
+        elif isinstance(b, TVar):
+            _bind(b, a)
+            return
+        elif isinstance(b, TCon) and b.name in MONADS:
+            unify(a.c, b.args[0])
+        elif isinstance(b, TCon) and b.name not in BASIC:
+            _pure_deferred.append((a.c, b))
+        else:
             raise Mismatch()
-        a.ref = b
+        _bind(a, b)
+        return
+    if isinstance(a, TVar):
+        _bind(a, b)
         return
     if isinstance(b, TVar):
         unify(b, a)
@@ -135,20 +188,29 @@ VAR_NAMES = "甲乙丙丁戊己庚辛壬癸"
 
 
 class Namer:
-    def __init__(self) -> None:
+    def __init__(self, *ts: Any) -> None:
         self.names: dict[TVar, str] = {}
+        # 一度しか出てこない型変数(どんな型でもよいところ)。自分の型の引数がこれだけなら省く
+        counts: dict = {}
+        for t in ts:
+            _count_vars(t, counts)
+        self.lonely = {v for v, n in counts.items() if n == 1}
 
     def __call__(self, t: Any, nested: bool = False) -> str:
         t = prune(t)
+        if isinstance(t, PureVar):
+            s = f"{self(t.c, True)} を 結果にしたもの"
+            return f"（{s}）" if nested else s
         if isinstance(t, TVar):
             if t not in self.names:
                 k = len(self.names)
                 self.names[t] = VAR_NAMES[k] if k < len(VAR_NAMES) else f"型{k + 1}"
             return self.names[t]
         if isinstance(t, TCon):
-            if not t.args:
+            if not t.args or (t.name not in MONADS and all(prune(a) in self.lonely for a in t.args)):
                 return t.name
-            s = f"{self(t.args[0], True)} の {t.name}"
+            inner = " と ".join(self(a, True) for a in t.args)
+            s = f"{inner} の {t.name}" if len(t.args) == 1 else f"（{inner}） の {t.name}"
             return f"（{s}）" if nested else s
         if isinstance(t, TFun):
             if not t.params:
@@ -158,8 +220,23 @@ class Namer:
         return "?"
 
 
+def _count_vars(t: Any, counts: dict) -> None:
+    t = prune(t)
+    if isinstance(t, TVar):
+        counts[t] = counts.get(t, 0) + 1
+        if isinstance(t, PureVar):
+            _count_vars(t.c, counts)
+    elif isinstance(t, TCon):
+        for a in t.args:
+            _count_vars(a, counts)
+    elif isinstance(t, TFun):
+        for _, a in t.params:
+            _count_vars(a, counts)
+        _count_vars(t.result, counts)
+
+
 def show(*ts: Any) -> list[str]:
-    n = Namer()
+    n = Namer(*ts)
     return [n(t) for t in ts]
 
 
@@ -168,25 +245,32 @@ def show(*ts: Any) -> list[str]:
 
 class Constraint:
     """型の条件。t が決まったときに確かめる。
-    kinds があれば「t はこれらの型のどれか」、trait があれば「t は性質を持ち、method の型は実装の型と同じ」"""
+    kinds があれば「t はこれらの型のどれか」、trait があれば「t は性質を持ち、method の型は実装の型と同じ」。
+    op は動作の条件: "bind"(t を連鎖する。extra は 結果・続きの値・全体)、"map"(t を写像する。
+    extra は 結果・関数の値・全体)、"wrap"(手順の最後の値 t。extra は 手順の値)、
+    "flatten"(動作の続きの値 t。extra は 動作の結果)"""
 
-    __slots__ = ("t", "kinds", "message", "trait", "method", "ftype", "line")
+    __slots__ = ("t", "kinds", "message", "trait", "method", "ftype", "line", "op", "extra")
 
     def __init__(self, t: Any, line: Any, kinds: tuple = (), message: str = "",
-                 trait: str = "", method: str = "", ftype: Any = None):
+                 trait: str = "", method: str = "", ftype: Any = None, op: str = "", extra: tuple = ()):
         self.t, self.line, self.kinds, self.message = t, line, kinds, message
         self.trait, self.method, self.ftype = trait, method, ftype
+        self.op, self.extra = op, tuple(extra)
 
     def subst(self, m: dict) -> "Constraint":
         return Constraint(
             _subst(self.t, m), self.line, self.kinds, self.message, self.trait, self.method,
             _subst(self.ftype, m) if self.ftype is not None else None,
+            self.op, tuple(_subst(x, m) for x in self.extra),
         )
 
     def type_vars(self) -> set:
         out = ftv(self.t)
         if self.ftype is not None:
             ftv(self.ftype, out)
+        for x in self.extra:
+            ftv(x, out)
         return out
 
 
@@ -199,7 +283,10 @@ class Scheme:
         self.constraints = constraints or []
 
     def instantiate(self, pending: list | None = None) -> Any:
-        mapping = {v: TVar() for v in self.vars}
+        mapping: dict = {v: PureVar(None) if isinstance(v, PureVar) else TVar() for v in self.vars}
+        for v in self.vars:
+            if isinstance(v, PureVar):
+                mapping[v].c = _subst(v.c, mapping)
         if pending is not None:
             pending.extend(c.subst(mapping) for c in self.constraints)
         return _subst(self.t, mapping)
@@ -208,7 +295,11 @@ class Scheme:
 def _subst(t: Any, m: dict) -> Any:
     t = prune(t)
     if isinstance(t, TVar):
-        return m.get(t, t)
+        if t in m:
+            return m[t]
+        if isinstance(t, PureVar) and ftv(t.c) & m.keys():
+            return PureVar(_subst(t.c, m))
+        return t
     if isinstance(t, TCon):
         return TCon(t.name, tuple(_subst(a, m) for a in t.args)) if t.args else t
     if isinstance(t, TFun):
@@ -250,6 +341,10 @@ class TEnv:
 def referenced_names(node: Any, out: set) -> set:
     if isinstance(node, (Var, Call, Ref)):
         out.add(node.name)
+    if isinstance(node, (Do, Chain, Run)):
+        out.update((BIND, UNIT))  # 自分の型の「連鎖する」の実装を使う
+    if isinstance(node, Field) and node.name == RESULT:
+        out.update((MAP, BIND, UNIT))
     if isinstance(node, (list, tuple)):
         for x in node:
             referenced_names(x, out)
@@ -336,13 +431,157 @@ def first_line(node: Any) -> Any:
     return None
 
 
-class Checker:
+# ---------------------------------------------------------------------------
+# 自分の型の形(型の引数)
+# ---------------------------------------------------------------------------
+
+SELF = TCon("\0自身")  # 再帰するフィールドの型の中で「その型自身」を表す印
+
+
+class Restart(Exception):
+    """自分自身を中に持つフィールドが見つかったので、初めから推論し直す"""
+
+
+class Shapes:
+    """自分の型のフィールドの型の決め方。推論をやり直しても引き継ぐ。
+    フィールドは (型名, フィールド名) で表し、同じ型の形どうしで同じ名前のフィールドは同じ型にする。
+    ふつうのフィールドは型の引数になる。recursive は自分自身を中に持つフィールドの型(SELF と
+    ほかのフィールドの ph を含む)、fixed はプログラムの中でいつも同じ型で使うフィールドの型"""
+
     def __init__(self, ctx: ParseContext):
+        self.keys: dict[str, list] = {}
+        for _, (tname, fs) in ctx.ctors.items():
+            ks = self.keys.setdefault(tname, [])
+            for f in fs:
+                if (tname, f) not in ks:
+                    ks.append((tname, f))
+        self.ph = {k: TVar() for ks in self.keys.values() for k in ks}
+        self.recursive: dict = {}
+        self.fixed: dict = {}
+
+    def params(self, tname: str) -> list:
+        return [k for k in self.keys.get(tname, []) if k not in self.recursive and k not in self.fixed]
+
+    def is_user(self, t: Any) -> bool:
+        return isinstance(t, TCon) and t.name in self.keys and len(t.args) == len(self.params(t.name))
+
+    def find_recursion(self, v: TVar, t: Any) -> bool:
+        """v を t にそろえると型が無限に続くとき、t の中の自分の型で、引数に v を含むものがあれば、
+        そのフィールドを「自分自身を中に持つ」ことにする"""
+        for n in _nodes(t):
+            if not self.is_user(n):
+                continue
+            ps = self.params(n.name)
+            for i, a in enumerate(n.args):
+                if v not in ftv(a):
+                    continue
+                mapping: dict = {}
+                for j, b in enumerate(n.args):
+                    rb = prune(b)
+                    if j != i and isinstance(rb, TVar) and rb is not v:
+                        mapping[rb] = self.ph[ps[j]]
+                self.recursive[ps[i]] = _template(a, n, v, t, mapping)
+                return True
+        return False
+
+    def fix(self, instances: list) -> bool:
+        """どの使い方でも同じ型(型変数を含まない)のフィールドを、その型に決める"""
+        before = {t: self.params(t) for t in self.keys}
+        found = {}
+        for tname, ps in before.items():
+            mine = [x for x in instances if x.name == tname and len(x.args) == len(ps)]
+            for j, k in enumerate(ps):
+                ts = [prune(x.args[j]) for x in mine]
+                if ts and not any(ftv(x) for x in ts) and all(_teq(ts[0], x) for x in ts[1:]):
+                    found[k] = ts[0]
+        if not found:
+            return False
+        self.fixed.update(found)
+
+        def norm(t: Any) -> Any:
+            t = prune(t)
+            if isinstance(t, TCon) and t.name in before and len(t.args) == len(before[t.name]):
+                return TCon(t.name, tuple(norm(a) for k, a in zip(before[t.name], t.args) if k not in found))
+            if isinstance(t, TCon):
+                return TCon(t.name, tuple(norm(a) for a in t.args)) if t.args else t
+            if isinstance(t, TFun):
+                return TFun([(p, norm(a)) for p, a in t.params], norm(t.result))
+            return t
+
+        for k in found:
+            self.fixed[k] = norm(self.fixed[k])
+        return True
+
+
+def _nodes(t: Any, out: list | None = None) -> list:
+    out = [] if out is None else out
+    t = prune(t)
+    if isinstance(t, TCon):
+        out.append(t)
+        for a in t.args:
+            _nodes(a, out)
+    elif isinstance(t, TFun):
+        for _, a in t.params:
+            _nodes(a, out)
+        _nodes(t.result, out)
+    return out
+
+
+def _template(a: Any, node: TCon, v: TVar, t: Any, mapping: dict) -> Any:
+    """再帰するフィールドの型 a を、推論の型変数を含まない形にする(node は SELF、v は t)"""
+    fresh: dict = {}
+    seen = [False]
+
+    def build(x: Any) -> Any:
+        x = prune(x)
+        if x is node:
+            return SELF
+        if x is v:
+            if seen[0]:
+                return TVar()
+            seen[0] = True
+            return build(t)
+        if isinstance(x, TVar):
+            if x in mapping:
+                return mapping[x]
+            return fresh.setdefault(x, TVar())
+        if isinstance(x, TCon):
+            return TCon(x.name, tuple(build(y) for y in x.args)) if x.args else x
+        if isinstance(x, TFun):
+            return TFun([(p, build(y)) for p, y in x.params], build(x.result))
+        return x
+
+    return build(a)
+
+
+def _teq(a: Any, b: Any) -> bool:
+    a, b = prune(a), prune(b)
+    if isinstance(a, TCon) and isinstance(b, TCon):
+        return a.name == b.name and len(a.args) == len(b.args) and all(map(_teq, a.args, b.args))
+    if isinstance(a, TFun) and isinstance(b, TFun):
+        return (len(a.params) == len(b.params) and all(_teq(x, y) for (_, x), (_, y) in zip(a.params, b.params))
+                and _teq(a.result, b.result))
+    return a is b
+
+
+def _fill(t: Any, mapping: dict, self_t: Any) -> Any:
+    if t is SELF:
+        return self_t
+    if isinstance(t, TVar):
+        return mapping.get(t, t)
+    if isinstance(t, TCon):
+        return TCon(t.name, tuple(_fill(a, mapping, self_t) for a in t.args)) if t.args else t
+    if isinstance(t, TFun):
+        return TFun([(p, _fill(a, mapping, self_t)) for p, a in t.params], _fill(t.result, mapping, self_t))
+    return t
+
+
+class Checker:
+    def __init__(self, ctx: ParseContext, shapes: Shapes | None = None):
         self.ctx = ctx
-        # 形のフィールドの型。型の引数はまだないので、プログラム全体で1つの型にそろえる
-        self.field_types: dict[tuple[str, str], TVar] = {
-            (c, f): TVar() for c, (_, fs) in ctx.ctors.items() for f in fs
-        }
+        self.shapes = shapes or Shapes(ctx)
+        self.instances: list[TCon] = []  # 作った自分の型(いつも同じ型のフィールドを見つけるため)
+        _pure_deferred.clear()
         self.traits: dict[str, dict] = {}  # 性質 → {"methods": {関数名: 引数}, "defaults": {関数名}}
         self.method_trait: dict[str, str] = {}  # 性質の関数 → 性質
         self.impls: dict[tuple[str, str], set] = {}  # (性質, 型名) → 実装した関数
@@ -350,16 +589,26 @@ class Checker:
         self.aliases: dict[str, list] = {}
         self.pending: list[Constraint] = []  # まだ確かめていない条件
         self.line: Any = None  # 今見ている式の行(位置の分からない式のエラー用)
+        self.env: TEnv = TEnv()  # 組み込み関数の型を調べるときの環境
 
     # --- エラー ---------------------------------------------------------
 
     def err(self, message: str, line: Any) -> SuruError:
         return SuruError(message, line or self.line)
 
+    def unify(self, a: Any, b: Any) -> None:
+        """a と b をそろえる。自分の型が無限に続くなら、そのフィールドを再帰するものにしてやり直す"""
+        try:
+            unify(a, b)
+        except Occurs as e:
+            if self.shapes.find_recursion(e.v, e.t):
+                raise Restart() from None
+            raise Mismatch() from None
+
     def unify_or(self, a: Any, b: Any, line: Any, message: "Any") -> None:
         """a と b をそろえる。そろわなければ message(a, b の表示) のエラー"""
         try:
-            unify(a, b)
+            self.unify(a, b)
         except Mismatch:
             sa, sb = show(a, b)
             raise self.err(message(sa, sb), line) from None
@@ -427,9 +676,11 @@ class Checker:
             mono = {d.name: TVar() for d in comp}
             inner = TEnv(scope)
             inner.vars.update(mono)
+            # 関数は先に引数の型を決めておく(互いに呼び合う中でも引数を調べられるように)
+            heads = {d.name: self.function_head(d, inner, mono[d.name]) for d in comp if d.is_function}
             for d in comp:
                 self.line = d.line
-                t = self.infer_define(d, inner)
+                t = self.infer_define(d, inner, heads.get(d.name))
                 self.unify_or(
                     mono[d.name], t, d.line,
                     lambda sa, sb, d=d: f"「{display_name(d.name)}」の型が合いません({sa} と {sb})",
@@ -440,7 +691,13 @@ class Checker:
             for d in comp:
                 t = mono[d.name]
                 quantified = ftv(t) - outer_free
-                mine = [c for c in self.pending if c.type_vars() & quantified]
+                # 条件の中だけに出てくる型変数(手順の途中の結果など)も、使うたびに写す
+                while True:
+                    mine = [c for c in self.pending if c.type_vars() & quantified]
+                    more = set().union(*(c.type_vars() for c in mine)) - outer_free - quantified
+                    if not more:
+                        break
+                    quantified |= more
                 taken |= {id(c) for c in mine}
                 scope.vars[d.name] = Scheme(list(quantified), t, mine)
             self.pending = [c for c in self.pending if id(c) not in taken]
@@ -454,13 +711,49 @@ class Checker:
         while progress:
             progress = False
             for c in list(self.pending):
-                if isinstance(prune(c.t), TVar):
+                r = prune(c.t)
+                if isinstance(r, TVar) and not (c.op and isinstance(r, PureVar)):
                     continue
+                if c not in self.pending:
+                    continue
+                self.pending.remove(c)
                 if self.discharge(c, env):
-                    self.pending.remove(c)
+                    progress = True
+                else:
+                    self.pending.append(c)
+            for item in list(_pure_deferred):
+                if self.coerce_pure(*item, env):
+                    _pure_deferred.remove(item)
                     progress = True
 
+    def post(self, c: Constraint, env: TEnv) -> None:
+        self.pending.append(c)
+        self.solve(env)
+
+    def impl_type(self, trait: str, tname: str, method: str, env: TEnv) -> Any:
+        """自分の型の性質の実装の型(まだ推論していなければ None)"""
+        v = env.lookup(impl_key(trait, tname, method))
+        return None if v is None else prune(self.inst(v))
+
+    def coerce_pure(self, c: Any, t: TCon, env: TEnv) -> bool:
+        """「結果にする」の値を自分の型 t にした: t の「結果にする」の実装があれば、その型で確かめる"""
+        if UNIT not in self.impls.get((MONAD, t.name), ()):
+            return True  # 実装がなければ、何もしない動作のまま連鎖の相手に渡る
+        impl = self.impl_type(MONAD, t.name, UNIT, env)
+        if impl is None:
+            return False
+        if isinstance(impl, TFun) and impl.params:
+            self.unify_or(c, impl.params[0][1], self.line,
+                          lambda sa, sb: f"「{UNIT}」({t.name}の実装)には{sb}が必要ですが、{sa}が渡されています")
+            self.unify_or(t, impl.result, self.line, lambda sa, sb: f"「{UNIT}」の値の型が合いません({sa} と {sb})")
+        return True
+
     def discharge(self, c: Constraint, env: TEnv) -> bool:
+        if c.op:
+            try:
+                return getattr(self, "on_" + c.op)(prune(c.t), c, env)
+            except Mismatch:
+                raise self.err(f"動作の結果の型が合いません({show(c.t)[0]})", c.line) from None
         r = prune(c.t)
         name = r.name if isinstance(r, TCon) else "関数"
         if not c.trait:
@@ -512,12 +805,22 @@ class Checker:
             self.pending.append(Constraint(t, line, trait=trait, method=name, ftype=ftype))
         return ftype
 
-    def infer_define(self, d: Define, env: TEnv) -> Any:
-        if not d.is_function:
-            return self.infer(d.body, env)
+    def function_head(self, d: Define, env: TEnv, mono: Any = None) -> tuple:
         local = TEnv(env)
         params = [(p, self.bind_param(pat, local)) for p, pat in d.params]
+        t = TFun(params, TVar())
+        if mono is not None:
+            self.unify(mono, t)
+        return local, t
+
+    def infer_define(self, d: Define, env: TEnv, head: tuple | None = None) -> Any:
+        if not d.is_function:
+            return self.infer(d.body, env)
+        local, t = head or self.function_head(d, env)
+        params = t.params
         result = self.infer(d.body, local)
+        self.unify_or(t.result, result, d.line,
+                      lambda sa, sb: f"「{display_name(d.name)}」の値の型が合いません({sa} と {sb})")
         if d.name in self.show_impls:
             self.expect(result, STR, d.line, f"「{TO_STRING}」の値")
         if is_predicate(d.name):
@@ -543,7 +846,7 @@ class Checker:
             self.line = line
         method = getattr(self, "infer_" + type(node).__name__, None)
         if method is None:
-            return TVar()  # 第1段階では調べない式
+            return TVar()  # 調べない式
         return method(node, env)
 
     def infer_Num(self, node: Num, env: TEnv) -> Any:
@@ -562,7 +865,7 @@ class Checker:
             return self.inst(v, node.line)
         info = self.ctx.ctors.get(node.name)
         if info is not None and not info[1]:
-            return TCon(info[0])  # 中身のない形(「赤」)
+            return self.ctor_type(node.name)  # 中身のない形(「赤」)
         return TVar()  # 分からない名前は実行時にエラーになる
 
     def infer_ListLit(self, node: ListLit, env: TEnv) -> Any:
@@ -602,6 +905,11 @@ class Checker:
         a = self.infer(node.left, env)
         b = self.infer(node.right, env)
         op = node.op
+        for x in (a, b):
+            if _is_action(x):
+                raise self.err(
+                    f"「{op}」の{'左' if x is a else '右'}が動作({show(x)[0]})です。動作の結果で計算するときは"
+                    "「…してから」か「… の 結果 を …」を使ってください", node.line)
         if op in (KW_KATSU, KW_MATAHA):
             self.expect(a, BOOL, node.line, f"「{op}」の左")
             self.expect(b, BOOL, node.line, f"「{op}」の右")
@@ -660,7 +968,7 @@ class Checker:
     def infer_Call(self, node: Call, env: TEnv) -> Any:
         args: dict = {}
         each = False
-        lifted: list = []
+        lifted: list = []  # 「の 結果」の引数: (値の型, 結果の型, 行)
         for p, a in node.args.items():
             if isinstance(a, Each):
                 t = self.infer(a.target, env)
@@ -669,21 +977,27 @@ class Checker:
                 args[p] = elem
                 each = True
             elif isinstance(a, Field) and a.name == RESULT and not self._has_field(RESULT):
-                # 「入力 の 結果 を …」: 動作(やリスト)の結果に関数を適用する
-                t = prune(self.infer(a.target, env))
-                if isinstance(t, TCon) and t.name in ("動作", "リスト") and t.args:
-                    args[p] = t.args[0]
-                    lifted.append(t.name)
-                else:
-                    args[p] = TVar()
-                    lifted.append("?")
+                # 「入力 の 結果 を …」: 動作(や連鎖可能な型)の結果に関数を適用する
+                m = self.infer(a.target, env)
+                elem = TVar()
+                self.monad_elem(m, elem, env)
+                args[p] = elem
+                lifted.append((m, elem, a.line or node.line))
             else:
                 args[p] = self.infer(a, env)
         result = self.call_type(node.name, args, node.line, env)
         if each:
             result = lst(result)
-        if lifted:
-            result = TCon(lifted[-1], (result,)) if lifted[-1] != "?" else TVar()
+        # 最後の「の 結果」は写像、その前のものは前から順に連鎖する
+        for idx in reversed(range(len(lifted))):
+            m, elem, ln = lifted[idx]
+            if idx == len(lifted) - 1:
+                out = TVar()
+                self.post(Constraint(m, ln, message=f"{{t}}は性質「{MAPPABLE}」を持っていません(「の 結果」が使えません)",
+                                     op="map", extra=(elem, result, out)), env)
+                result = out
+            else:
+                result = self.bind(m, elem, result, ln, f"{{t}}は性質「{MONAD}」を持っていません(「の 結果」が使えません)", env)
         return result
 
     def call_type(self, name: str, args: dict, line: Any, env: TEnv) -> Any:
@@ -699,8 +1013,9 @@ class Checker:
             return result
         typer = BUILTIN_CALLS.get(name)
         if typer is not None:
+            self.env = env
             return typer(self, args, line)
-        return TVar()  # 性質の関数(第2段階)や、実行時にエラーになる名前
+        return TVar()  # 実行時にエラーになる名前
 
     def call_fun(self, name: str, t: TFun, args: dict, line: Any) -> Any:
         params = dict(t.params)
@@ -750,7 +1065,7 @@ class Checker:
         t = prune(fn)
         if isinstance(t, TVar):
             r = TVar()
-            unify(t, TFun([(WO, v) for v in values], r))
+            self.unify(t, TFun([(WO, v) for v in values], r))
             return r
         if not isinstance(t, TFun):
             raise self.err(f"{what}には関数が必要ですが、{show(t)[0]}になっています", line)
@@ -763,27 +1078,52 @@ class Checker:
 
     # --- 組 ---------------------------------------------------------------
 
+    def fresh_type(self, tname: str) -> TCon:
+        t = TCon(tname, tuple(TVar() for _ in self.shapes.params(tname)))
+        self.instances.append(t)
+        return t
+
     def ctor_type(self, ctor: str) -> TCon:
-        return TCon(self.ctx.ctors[ctor][0])
+        return self.fresh_type(self.ctx.ctors[ctor][0])
+
+    def field_type(self, t: Any, key: tuple, seen: frozenset = frozenset()) -> Any:
+        """自分の型 t(TCon)の値のフィールド key の型"""
+        sh = self.shapes
+        ps = sh.params(key[0])
+        if key in ps:
+            return t.args[ps.index(key)]
+        if key in sh.fixed:
+            return sh.fixed[key]
+        tmpl = sh.recursive[key]
+        mapping: dict = {}
+        for v in ftv(tmpl):
+            other = next((k for k, ph in sh.ph.items() if ph is v), None)
+            if other is not None and other[0] == key[0] and other not in seen:
+                mapping[v] = self.field_type(t, other, seen | {key})
+            else:
+                mapping[v] = TVar()
+        return _fill(tmpl, mapping, t)
+
+    def ctor_field(self, t: Any, ctor: str, f: str) -> Any:
+        return self.field_type(prune(t), (self.ctx.ctors[ctor][0], f))
 
     def _has_field(self, name: str) -> bool:
-        return any(f == name for (_, f) in self.field_types)
+        return any(name in fs for _, fs in self.ctx.ctors.values())
 
     def field_of(self, t: Any, name: str, line: Any) -> Any:
         """t の型の値の「name」フィールドの型"""
         r = prune(t)
-        candidates = [(c, f) for (c, f) in self.field_types if f == name]
+        types = {tn for tn, fs in self.ctx.ctors.values() if name in fs}
         if isinstance(r, TCon):
-            mine = [(c, f) for (c, f) in candidates if self.ctx.ctors[c][0] == r.name]
-            if not mine:
+            if r.name not in types or not self.shapes.is_user(r):
+                if name == RESULT and (r.name in MONADS or (MONAD, r.name) in self.impls):
+                    raise self.err("「の 結果」は「入力 の 結果 を 数値にする」のように呼び出しの引数に書いてください", line)
                 raise self.err(f"{show(r)[0]}には「{name}」というフィールドがありません", line)
-            ft = self.field_types[mine[0]]
-            for key in mine[1:]:
-                unify(self.field_types[key], ft)
-            return ft
-        types = {self.ctx.ctors[c][0] for c, _ in candidates}
+            return self.field_type(r, (r.name, name))
+        if isinstance(r, PureVar) and name == RESULT:
+            raise self.err("「の 結果」は「入力 の 結果 を 数値にする」のように呼び出しの引数に書いてください", line)
         if len(types) == 1:
-            self.expect(t, TCon(types.pop()), line, f"「の {name}」の前")
+            self.expect(t, self.fresh_type(types.pop()), line, f"「の {name}」の前")
             return self.field_of(t, name, line)
         return TVar()
 
@@ -797,23 +1137,24 @@ class Checker:
             items = [elem] * len(fields)
         if len(items) != len(fields):
             raise self.err(f"「{node.ctor}」には{len(fields)}個の値が必要です(渡されたのは{len(items)}個)", node.line)
+        result = self.ctor_type(node.ctor)
         for f, t in zip(fields, items):
             self.unify_or(
-                t, self.field_types[(node.ctor, f)], node.line,
+                t, self.ctor_field(result, node.ctor, f), node.line,
                 lambda sa, sb, f=f: f"「{node.ctor}」の「{f}」は{sb}ですが、{sa}が渡されています",
             )
-        return self.ctor_type(node.ctor)
+        return result
 
     def infer_NamedConstruct(self, node: NamedConstruct, env: TEnv) -> Any:
+        result = self.ctor_type(node.ctor)
         for f, e in node.fields:
-            key = (node.ctor, f)
-            if key not in self.field_types:
+            if f not in self.ctx.ctors[node.ctor][1]:
                 raise self.err(f"「{node.ctor}」には「{f}」というフィールドがありません", node.line)
             self.unify_or(
-                self.infer(e, env), self.field_types[key], node.line,
+                self.infer(e, env), self.ctor_field(result, node.ctor, f), node.line,
                 lambda sa, sb, f=f: f"「{node.ctor}」の「{f}」は{sb}ですが、{sa}が渡されています",
             )
-        return self.ctor_type(node.ctor)
+        return result
 
     def infer_Update(self, node: Update, env: TEnv) -> Any:
         t = self.infer(node.target, env)
@@ -870,14 +1211,16 @@ class Checker:
         elif isinstance(pat, PValue):
             self.unify_or(t, self.infer(pat.expr, env), line, mismatch)
         elif isinstance(pat, PCtor):
-            self.unify_or(t, self.ctor_type(pat.ctor), pat.line, mismatch)
+            ct = self.ctor_type(pat.ctor)
+            self.unify_or(t, ct, pat.line, mismatch)
             for f, p in zip(self.ctx.ctors[pat.ctor][1], pat.items):
-                self.bind_pattern(p, self.field_types[(pat.ctor, f)], env, pat.line)
+                self.bind_pattern(p, self.ctor_field(ct, pat.ctor, f), env, pat.line)
         elif isinstance(pat, PNamed):
             if pat.ctor is not None:
-                self.unify_or(t, self.ctor_type(pat.ctor), pat.line, mismatch)
+                ct = self.ctor_type(pat.ctor)
+                self.unify_or(t, ct, pat.line, mismatch)
                 for f, p in pat.fields:
-                    self.bind_pattern(p, self.field_types[(pat.ctor, f)], env, pat.line)
+                    self.bind_pattern(p, self.ctor_field(ct, pat.ctor, f), env, pat.line)
             elif all(f in ("先頭", "残り") for f, _ in pat.fields) and not prune_is_record(t):
                 elem = TVar()
                 self.unify_or(t, lst(elem), pat.line, mismatch)
@@ -892,31 +1235,178 @@ class Checker:
             for p in pat.items:
                 self.bind_pattern(p, elem, env, line)
 
-    # --- 動作(第3段階まではおおまかに) ----------------------------------
+    # --- 動作 -------------------------------------------------------------
+
+    def monad_elem(self, m: Any, elem: Any, env: TEnv | None = None) -> None:
+        """m の型が分かっていれば、その結果の型を elem とそろえる(続きを推論する前に)"""
+        r = prune(m)
+        if isinstance(r, PureVar):
+            self.unify(elem, r.c)
+        elif isinstance(r, TCon) and r.name in MONADS:
+            self.unify(elem, r.args[0])
+        elif isinstance(r, TCon) and env is not None:
+            # 自分の型: 「連鎖する」(なければ「写像する」)の実装で、関数に渡す値の型を見る
+            for trait, method in ((MONAD, BIND), (MAPPABLE, MAP)):
+                if method not in self.impls.get((trait, r.name), ()):
+                    continue
+                impl = self.impl_type(trait, r.name, method, env)
+                if isinstance(impl, TFun):
+                    params = dict(impl.params)
+                    f = prune(params.get("で"))
+                    if WO in params and isinstance(f, TFun) and f.params:
+                        try:
+                            self.unify(params[WO], r)
+                            self.unify(f.params[0][1], elem)
+                        except Mismatch:
+                            pass  # 連鎖するところでエラーにする
+                return
+
+    def bind(self, m: Any, elem: Any, k: Any, line: Any, message: str, env: TEnv) -> Any:
+        """m を行い、結果(elem)を続き(値 k)に渡したものの型"""
+        out = TVar()
+        self.post(Constraint(m, line, message=message, op="bind", extra=(elem, k, out)), env)
+        return out
+
+    def not_monad(self, m: Any, c: Constraint) -> SuruError:
+        return self.err(c.message.format(t=show(m)[0]), c.line)
+
+    def on_bind(self, m: Any, c: Constraint, env: TEnv) -> bool:
+        elem, k, out = c.extra
+        if isinstance(m, PureVar):  # 何もしない動作: 続きの値がそのまま全体の値
+            self.unify(elem, m.c)
+            self.unify(out, k)
+            return True
+        if not isinstance(m, TCon) or m.name in BASIC:
+            raise self.not_monad(m, c)
+        if m.name == "動作":
+            self.unify(elem, m.args[0])
+            b = TVar()
+            self.unify(out, act(b))
+            self.pending.append(Constraint(k, c.line, op="flatten", extra=(b,)))
+            return True
+        if m.name == "リスト":
+            self.unify(elem, m.args[0])
+            b = TVar()
+            self.unify_or(k, lst(b), c.line,
+                          lambda sa, sb: f"リストを連鎖するときは、続きもリストを返す必要があります({sa}が返ります)")
+            self.unify(out, lst(b))
+            return True
+        if (MONAD, m.name) not in self.impls:
+            raise self.not_monad(m, c)
+        impl = self.impl_type(MONAD, m.name, BIND, env)
+        if impl is None:
+            return False
+        self.use_impl(impl, m, elem, k, out, BIND, c.line)
+        return True
+
+    def use_impl(self, impl: Any, m: Any, elem: Any, k: Any, out: Any, method: str, line: Any) -> None:
+        """自分の型の「連鎖する」「写像する」の実装の型で、m を f(elem を受け取って k を返す)で使う"""
+        if not isinstance(impl, TFun):
+            return
+        params = dict(impl.params)
+        tname = prune(m).name
+        if WO in params:
+            self.unify_or(m, params[WO], line,
+                          lambda sa, sb: f"「{method}」({tname}の実装)の「を」には{sb}が必要ですが、{sa}が渡されています")
+        if "で" in params:
+            self.unify_or(TFun([(WO, elem)], k), params["で"], line,
+                          lambda sa, sb: f"「{method}」({tname}の実装)の「で」には{sb}が必要ですが、{sa}が渡されています")
+        self.unify_or(out, impl.result, line, lambda sa, sb: f"「{method}」({tname}の実装)の値の型が合いません({sa} と {sb})")
+
+    def on_flatten(self, k: Any, c: Constraint, env: TEnv) -> bool:
+        """動作の続きが返した値: 動作ならそれも行い、その結果が全体の結果になる"""
+        (b,) = c.extra
+        if isinstance(k, PureVar):
+            self.unify(b, k.c)
+        elif isinstance(k, TCon) and k.name == "動作":
+            self.unify(b, k.args[0])
+        else:
+            self.unify(b, k)
+        return True
+
+    def on_map(self, m: Any, c: Constraint, env: TEnv) -> bool:
+        elem, r, out = c.extra
+        if isinstance(m, PureVar):
+            self.unify(elem, m.c)
+            self.unify(out, PureVar(r))
+            return True
+        if isinstance(m, TCon) and m.name in MONADS:
+            self.unify(elem, m.args[0])
+            self.unify(out, TCon(m.name, (r,)))
+            return True
+        if isinstance(m, TCon) and (MAPPABLE, m.name) in self.impls:
+            impl = self.impl_type(MAPPABLE, m.name, MAP, env)
+            if impl is None:
+                return False
+            self.use_impl(impl, m, elem, r, out, MAP, c.line)
+            return True
+        if isinstance(m, TCon) and (MONAD, m.name) in self.impls:
+            self.pending.append(Constraint(m, c.line, message=c.message, op="bind", extra=(elem, PureVar(r), out)))
+            return True
+        raise self.not_monad(m, c)
+
+    def on_wrap(self, v: Any, c: Constraint, env: TEnv) -> bool:
+        """手順の最後の値: 動作でなければ、何もしない動作にする"""
+        (out,) = c.extra
+        if isinstance(v, PureVar) or (isinstance(v, TCon) and (v.name in MONADS or (MONAD, v.name) in self.impls)):
+            self.unify(out, v)
+        else:
+            self.unify(out, PureVar(v))
+        return True
 
     def infer_Run(self, node: Run, env: TEnv) -> Any:
-        self.infer(node.call, env)
-        return TVar()
+        t = env.lookup(_run_key(node))
+        if t is None:
+            raise self.err(
+                "「した 結果」は手順の文の中で使ってください(関数の本体や条件分岐の枝の中では、そこを「手順（…）」で囲みます)",
+                node.line,
+            )
+        return t
 
     def infer_Chain(self, node: Chain, env: TEnv) -> Any:
-        self.infer(node.call, env)
+        m = self.infer(node.call, env)
+        elem = TVar()
+        self.monad_elem(m, elem, env)
         local = TEnv(env)
-        local.vars[HOLE] = TVar()
-        self.infer(node.cont, local)
-        return TVar()
+        local.vars[HOLE] = elem
+        k = self.infer(node.cont, local)
+        return self.bind(m, elem, k, node.line,
+                         "「してから」の前の値({t})は動作ではありません(純粋な値なら「して」を使います)", env)
 
     def infer_Do(self, node: Do, env: TEnv) -> Any:
-        local = TEnv(env)
-        for s in node.statements:
-            if isinstance(s, Define):
-                local = self.infer_defs([s], local)
-            else:
-                self.infer(s, local)
-        return TVar()
+        return self.do_type(node.statements, 0, TEnv(env), node.line)
+
+    def do_type(self, stmts: list, i: int, env: TEnv, line: Any) -> Any:
+        """手順の i 番目からの型。「した 結果」は連鎖に、途中の文は「それから」になる"""
+        s = stmts[i]
+        for r in collect_runs(s, []):
+            key = _run_key(r)
+            if env.lookup(key) is not None:
+                continue
+            m = self.infer(r.call, env)
+            elem = TVar()
+            self.monad_elem(m, elem, env)
+            local = TEnv(env)
+            local.vars[key] = elem
+            k = self.do_type(stmts, i, local, line)
+            name = getattr(r.call, "name", "")
+            name = name[: -len(SURU)] if name.endswith(SURU) else name
+            return self.bind(m, elem, k, r.line, f"「{name}した 結果」: {{t}}は動作ではありません", env)
+        if isinstance(s, Define):
+            local = self.infer_defs([s], env)
+            if i + 1 == len(stmts):
+                return TVar()
+            return self.do_type(stmts, i + 1, local, line)
+        v = self.infer(s, env)
+        if i + 1 == len(stmts):
+            out = TVar()
+            self.post(Constraint(v, first_line(s) or line, op="wrap", extra=(out,)), env)
+            return out
+        k = self.do_type(stmts, i + 1, env, line)
+        return self.bind(v, TVar(), k, first_line(s) or line, "手順の途中の文の値({t})は動作ではありません", env)
 
     def infer_Sequel(self, node: Sequel, env: TEnv) -> Any:
-        self.infer(node.expr, env)
-        return TVar()
+        return self.infer(node.expr, env)
 
 
 def impl_key(trait: str, type_name: str, method: str) -> str:
@@ -926,6 +1416,11 @@ def impl_key(trait: str, type_name: str, method: str) -> str:
 
 def display_name(name: str) -> str:
     return name.split("\0")[-1]
+
+
+def _is_action(t: Any) -> bool:
+    r = prune(t)
+    return isinstance(r, PureVar) or (isinstance(r, TCon) and r.name == "動作")
 
 
 def prune_is_record(t: Any) -> bool:
@@ -979,8 +1474,9 @@ def _t_input(c, a, line):
 
 @builtin("実行する", {WO: True})
 def _t_run(c, a, line):
-    _need(c, a, WO, lst(act(TVar())), line, "実行する")
-    return act(TVar())
+    r = TVar()
+    _need(c, a, WO, lst(act(r)), line, "実行する")
+    return act(lst(r))
 
 
 @builtin("数値にする", {WO: True})
@@ -1070,16 +1566,13 @@ def _t_fold(c, a, line):
 
 @builtin(MAP, {WO: True, "で": True})
 def _t_map(c, a, line):
-    m = prune(a[WO])
-    if isinstance(m, TCon) and m.name == "動作":
-        r = c.apply(a["で"], [m.args[0]], line, "「写像する」の「で」")
-        return act(r)
-    if isinstance(m, TCon) and m.name not in ("リスト",):
-        c.apply(a["で"], [TVar()], line, "「写像する」の「で」")
-        return TVar()  # 自分の型の写像可能(第2段階)
     elem = TVar()
-    _need(c, a, WO, lst(elem), line, MAP)
-    return lst(c.apply(a["で"], [elem], line, "「写像する」の「で」"))
+    c.monad_elem(a[WO], elem, c.env)
+    r = c.apply(a["で"], [elem], line, "「写像する」の「で」")
+    out = TVar()
+    c.post(Constraint(a[WO], line, message=f"「写像する」の「を」の{{t}}は性質「{MAPPABLE}」を持っていません",
+                      op="map", extra=(elem, r, out)), c.env)
+    return out
 
 
 @builtin(TO_STRING, {WO: True})
@@ -1089,12 +1582,15 @@ def _t_to_string(c, a, line):
 
 @builtin(BIND, {WO: True, "で": True})
 def _t_bind(c, a, line):
-    return TVar()  # 第3段階
+    elem = TVar()
+    c.monad_elem(a[WO], elem, c.env)
+    k = c.apply(a["で"], [elem], line, "「連鎖する」の「で」")
+    return c.bind(a[WO], elem, k, line, f"「連鎖する」の「を」の{{t}}は性質「{MONAD}」を持っていません", c.env)
 
 
 @builtin(UNIT, {WO: True})
 def _t_unit(c, a, line):
-    return TVar()  # 第3段階
+    return PureVar(a[WO])
 
 
 # 関数の値(「加算すること」)として使うときの型
@@ -1108,6 +1604,7 @@ BUILTIN_FUNS = {
     "減算する": lambda: TFun([("から", NUM), (WO, NUM)], NUM),
     "除算する": lambda: TFun([(WO, NUM), ("で", NUM)], NUM),
     TO_STRING: lambda: TFun([(WO, TVar())], STR),
+    UNIT: lambda: (lambda x: TFun([(WO, x)], PureVar(x)))(TVar()),
 }
 
 
@@ -1129,4 +1626,26 @@ def check(source: str) -> None:
     """型を調べる。間違いがあれば SuruError を出す"""
     ctx = ParseContext()
     program = parse_program(source, ctx)
-    Checker(ctx).check_program(program)
+    shapes = Shapes(ctx)
+
+    def attempt() -> tuple:
+        for _ in range(100):
+            checker = Checker(ctx, shapes)
+            try:
+                checker.check_program(program)
+                return None, checker
+            except Restart:
+                continue
+            except SuruError as e:
+                return e, checker
+        return None, checker
+
+    first, checker = attempt()
+    # いつも同じ型で使うフィールドを決めて、もう一度調べる(エラーの型の表示が短くなる)
+    if not shapes.fix(checker.instances):
+        if first:
+            raise first
+        return
+    second, _ = attempt()
+    if first and second:
+        raise second
