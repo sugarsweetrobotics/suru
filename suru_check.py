@@ -21,7 +21,7 @@ from suru import (
     BinOp, Block, Call, Chain, Construct, Define, Do, Each, Field, If, KW_KATSU, KW_MATAHA, Lambda,
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
     PValue, Ref, RESULT, Run, Sequel, Str, SuruError, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
-    HOLE, TO_STRING, MAP, BIND, UNIT, is_predicate, parse_program,
+    HOLE, TO_STRING, MAP, BIND, UNIT, SHOWABLE, TOP_LEVEL_ONLY, is_predicate, parse_program,
 )
 
 # ---------------------------------------------------------------------------
@@ -166,13 +166,42 @@ def show(*ts: Any) -> list[str]:
 # --- 型スキーム(多相) ---
 
 
+class Constraint:
+    """型の条件。t が決まったときに確かめる。
+    kinds があれば「t はこれらの型のどれか」、trait があれば「t は性質を持ち、method の型は実装の型と同じ」"""
+
+    __slots__ = ("t", "kinds", "message", "trait", "method", "ftype", "line")
+
+    def __init__(self, t: Any, line: Any, kinds: tuple = (), message: str = "",
+                 trait: str = "", method: str = "", ftype: Any = None):
+        self.t, self.line, self.kinds, self.message = t, line, kinds, message
+        self.trait, self.method, self.ftype = trait, method, ftype
+
+    def subst(self, m: dict) -> "Constraint":
+        return Constraint(
+            _subst(self.t, m), self.line, self.kinds, self.message, self.trait, self.method,
+            _subst(self.ftype, m) if self.ftype is not None else None,
+        )
+
+    def type_vars(self) -> set:
+        out = ftv(self.t)
+        if self.ftype is not None:
+            ftv(self.ftype, out)
+        return out
+
+
 class Scheme:
-    def __init__(self, vars_: list, t: Any):
+    """多相な型: 「すべての vars について t」。constraints は使うたびに写して確かめる条件"""
+
+    def __init__(self, vars_: list, t: Any, constraints: list | None = None):
         self.vars = vars_
         self.t = t
+        self.constraints = constraints or []
 
-    def instantiate(self) -> Any:
+    def instantiate(self, pending: list | None = None) -> Any:
         mapping = {v: TVar() for v in self.vars}
+        if pending is not None:
+            pending.extend(c.subst(mapping) for c in self.constraints)
         return _subst(self.t, mapping)
 
 
@@ -213,10 +242,6 @@ class TEnv:
         return out
 
 
-def instantiate(v: Any) -> Any:
-    return v.instantiate() if isinstance(v, Scheme) else v
-
-
 # ---------------------------------------------------------------------------
 # 依存関係(相互再帰する定義をまとめて推論するため)
 # ---------------------------------------------------------------------------
@@ -237,10 +262,18 @@ def referenced_names(node: Any, out: set) -> set:
     return out
 
 
-def sccs(defs: list) -> list[list]:
-    """強連結成分。依存される側から順に返す(Tarjan)"""
+def sccs(defs: list, aliases: dict | None = None) -> list[list]:
+    """強連結成分。依存される側から順に返す(Tarjan)。
+    aliases は「性質の関数の名前 → その実装の定義の名前」(呼び出しは実装に依存する)"""
+    aliases = aliases or {}
     names = {d.name: d for d in defs}
-    graph = {d.name: [n for n in referenced_names(d.body, set()) if n in names] for d in defs}
+    graph = {}
+    for d in defs:
+        refs = set()
+        for n in referenced_names(d.body, set()):
+            refs.add(n)
+            refs.update(aliases.get(n, ()))
+        graph[d.name] = [n for n in refs if n in names]
     index: dict[str, int] = {}
     low: dict[str, int] = {}
     stack: list[str] = []
@@ -310,8 +343,12 @@ class Checker:
         self.field_types: dict[tuple[str, str], TVar] = {
             (c, f): TVar() for c, (_, fs) in ctx.ctors.items() for f in fs
         }
-        self.trait_methods: set[str] = set()
-        self.kind_checks: list = []  # 最後に確かめる「数か文字列かリスト」などの条件
+        self.traits: dict[str, dict] = {}  # 性質 → {"methods": {関数名: 引数}, "defaults": {関数名}}
+        self.method_trait: dict[str, str] = {}  # 性質の関数 → 性質
+        self.impls: dict[tuple[str, str], set] = {}  # (性質, 型名) → 実装した関数
+        self.show_impls: set[str] = set()  # 「表示可能」の実装の定義の名前(文字列を返す)
+        self.aliases: dict[str, list] = {}
+        self.pending: list[Constraint] = []  # まだ確かめていない条件
         self.line: Any = None  # 今見ている式の行(位置の分からない式のエラー用)
 
     # --- エラー ---------------------------------------------------------
@@ -336,29 +373,57 @@ class Checker:
     # --- プログラム -----------------------------------------------------
 
     def check_program(self, program: list) -> None:
+        defs = [s for s in program if isinstance(s, Define)]
         for s in program:
             if isinstance(s, TraitDecl):
-                self.trait_methods |= {n for n, _ in s.sigs} | {d.name for d in s.defaults}
-        env = TEnv()
-        defs = [s for s in program if isinstance(s, Define)]
-        env = self.infer_defs(defs, env)
+                methods = dict(s.sigs)
+                methods.update({d.name: d.params for d in s.defaults})
+                self.traits[s.name] = {"methods": methods, "defaults": {d.name for d in s.defaults}}
+                for m in methods:
+                    self.method_trait[m] = s.name
+                for d in s.defaults:
+                    defs.append(self._renamed(d, impl_key(s.name, "", d.name)))
         for s in program:
-            if isinstance(s, (Define, TypeDef, TraitDecl)):
-                if isinstance(s, TraitDecl):
-                    self.infer_defs(s.defaults, TEnv(env))
-                continue
             if isinstance(s, TraitImpl):
-                self.infer_defs(s.defs, TEnv(env))
+                self.impls[(s.trait, s.type_name)] = {d.name for d in s.defs}
+                for d in s.defs:
+                    key = impl_key(s.trait, s.type_name, d.name)
+                    if s.trait == SHOWABLE:
+                        self.show_impls.add(key)
+                    defs.append(self._renamed(d, key))
+        for d in defs:
+            if d.name.startswith("\0"):
+                self.aliases.setdefault(d.name.split("\0")[-1], []).append(d.name)
+        env = self.infer_defs(defs, TEnv())
+        for s in program:
+            if isinstance(s, (Define,) + TOP_LEVEL_ONLY):
                 continue
             self.line = first_line(s)
             self.infer(s, env)
-        for check in self.kind_checks:
-            check()
+            self.solve(env)
+        self.solve(env)
+
+    @staticmethod
+    def _renamed(d: Define, name: str) -> Define:
+        return Define(name, d.params, d.body, d.is_function, d.line)
+
+    def inst(self, v: Any, line: Any = None, name: str = "") -> Any:
+        """多相な型を写す。条件は呼んだ場所(line)のものとして確かめる"""
+        if not isinstance(v, Scheme):
+            return v
+        start = len(self.pending)
+        t = v.instantiate(self.pending)
+        if line:
+            for c in self.pending[start:]:
+                c.line = line
+                if c.kinds and name and "に渡した値: " not in c.message:
+                    c.message = f"「{display_name(name)}」に渡した値: {c.message}"
+        return t
 
     def infer_defs(self, defs: list, env: TEnv) -> TEnv:
         """定義の並びを推論し、それぞれの名前に多相な型を付けた新しい環境を返す"""
         scope = TEnv(env)
-        for comp in sccs(defs):
+        for comp in sccs(defs, self.aliases):
             mono = {d.name: TVar() for d in comp}
             inner = TEnv(scope)
             inner.vars.update(mono)
@@ -367,13 +432,85 @@ class Checker:
                 t = self.infer_define(d, inner)
                 self.unify_or(
                     mono[d.name], t, d.line,
-                    lambda sa, sb, d=d: f"「{d.name}」の型が合いません({sa} と {sb})",
+                    lambda sa, sb, d=d: f"「{display_name(d.name)}」の型が合いません({sa} と {sb})",
                 )
+            self.solve(inner)
             outer_free = scope.free_vars()
+            taken: set = set()
             for d in comp:
                 t = mono[d.name]
-                scope.vars[d.name] = Scheme(list(ftv(t) - outer_free), t)
+                quantified = ftv(t) - outer_free
+                mine = [c for c in self.pending if c.type_vars() & quantified]
+                taken |= {id(c) for c in mine}
+                scope.vars[d.name] = Scheme(list(quantified), t, mine)
+            self.pending = [c for c in self.pending if id(c) not in taken]
         return scope
+
+    # --- 型の条件 ---------------------------------------------------------
+
+    def solve(self, env: TEnv) -> None:
+        """型が決まった条件を確かめる"""
+        progress = True
+        while progress:
+            progress = False
+            for c in list(self.pending):
+                if isinstance(prune(c.t), TVar):
+                    continue
+                if self.discharge(c, env):
+                    self.pending.remove(c)
+                    progress = True
+
+    def discharge(self, c: Constraint, env: TEnv) -> bool:
+        r = prune(c.t)
+        name = r.name if isinstance(r, TCon) else "関数"
+        if not c.trait:
+            if name not in c.kinds:
+                raise self.err(f"{c.message}です({show(r)[0]}になっています)", c.line)
+            return True
+        methods = self.impls.get((c.trait, name))
+        if methods is None:
+            raise self.err(f"{show(r)[0]}は性質「{c.trait}」を持っていません(「{c.method}」が使えません)", c.line)
+        if c.method in methods:
+            key = impl_key(c.trait, name, c.method)
+        elif c.method in self.traits[c.trait]["defaults"]:
+            key = impl_key(c.trait, "", c.method)
+        else:
+            return True  # 実装の足りない性質は実行時にエラーになる
+        v = env.lookup(key)
+        if v is None:
+            return False
+        impl = prune(self.inst(v))
+        if not isinstance(impl, TFun):
+            return True
+        params = dict(impl.params)
+        for p, t in c.ftype.params:
+            if p in params:
+                self.unify_or(
+                    t, params[p], c.line,
+                    lambda sa, sb, p=p: f"「{c.method}」({show(r)[0]}の実装)の「{p}」には{sb}が必要ですが、{sa}が渡されています",
+                )
+        self.unify_or(
+            c.ftype.result, impl.result, c.line,
+            lambda sa, sb: f"「{c.method}」({show(r)[0]}の実装)の値の型が合いません({sb} と {sa})",
+        )
+        return True
+
+    def trait_fun(self, name: str, line: Any) -> TFun:
+        """性質の関数の型。「を」(なければ最初の引数)の型で実装を選ぶ"""
+        trait = self.method_trait[name]
+        sig = self.traits[trait]["methods"][name]
+        t = TVar()
+        dispatch = next((p for p, _ in sig if p == WO), sig[0][0] if sig else None)
+        params = []
+        for p, pat in sig:
+            if p == dispatch:
+                params.append((p, t if isinstance(pat, str) else lst(t)))
+            else:
+                params.append((p, TVar()))
+        ftype = TFun(params, TVar())
+        if sig:
+            self.pending.append(Constraint(t, line, trait=trait, method=name, ftype=ftype))
+        return ftype
 
     def infer_define(self, d: Define, env: TEnv) -> Any:
         if not d.is_function:
@@ -381,6 +518,8 @@ class Checker:
         local = TEnv(env)
         params = [(p, self.bind_param(pat, local)) for p, pat in d.params]
         result = self.infer(d.body, local)
+        if d.name in self.show_impls:
+            self.expect(result, STR, d.line, f"「{TO_STRING}」の値")
         if is_predicate(d.name):
             self.expect(result, BOOL, d.line, f"述語「{d.name}」の値")
         return TFun(params, result)
@@ -420,7 +559,7 @@ class Checker:
     def infer_Var(self, node: Var, env: TEnv) -> Any:
         v = env.lookup(node.name)
         if v is not None:
-            return instantiate(v)
+            return self.inst(v, node.line)
         info = self.ctx.ctors.get(node.name)
         if info is not None and not info[1]:
             return TCon(info[0])  # 中身のない形(「赤」)
@@ -487,21 +626,12 @@ class Checker:
         return NUM
 
     def need_kind(self, t: Any, kinds: tuple, line: Any, message: str) -> None:
-        """t が kinds のどれかの型であること(推論の終わりに確かめる)"""
-
-        def check() -> None:
-            r = prune(t)
-            if isinstance(r, TVar):
-                return
-            name = r.name if isinstance(r, TCon) else "関数"
-            if name not in kinds:
-                raise self.err(f"{message}です({show(r)[0]}になっています)", line)
-
-        r = prune(t)
-        if isinstance(r, TVar):
-            self.kind_checks.append(check)
+        """t が kinds のどれかの型であること(t がまだ決まっていなければ、決まったときに確かめる)"""
+        c = Constraint(t, line, kinds, message)
+        if isinstance(prune(t), TVar):
+            self.pending.append(c)
         else:
-            check()
+            self.discharge(c, TEnv())
 
     def infer_If(self, node: If, env: TEnv) -> Any:
         line = first_line(node) or self.line
@@ -559,10 +689,14 @@ class Checker:
     def call_type(self, name: str, args: dict, line: Any, env: TEnv) -> Any:
         v = env.lookup(name)
         if v is not None:
-            t = prune(instantiate(v))
+            t = prune(self.inst(v, line, name))
             if isinstance(t, TFun):
                 return self.call_fun(name, t, args, line)
             return TVar()
+        if name in self.method_trait:
+            result = self.call_fun(name, self.trait_fun(name, line), args, line)
+            self.solve(env)
+            return result
         typer = BUILTIN_CALLS.get(name)
         if typer is not None:
             return typer(self, args, line)
@@ -589,7 +723,9 @@ class Checker:
         """「三倍すること」の型"""
         v = env.lookup(name)
         if v is not None:
-            return instantiate(v)
+            return self.inst(v, line, name)
+        if name in self.method_trait:
+            return self.trait_fun(name, line)
         sig = BUILTIN_FUNS.get(name)
         if sig is not None:
             return sig()
@@ -781,6 +917,15 @@ class Checker:
     def infer_Sequel(self, node: Sequel, env: TEnv) -> Any:
         self.infer(node.expr, env)
         return TVar()
+
+
+def impl_key(trait: str, type_name: str, method: str) -> str:
+    """性質の実装(型名が空なら既定の実装)の定義に付ける内部の名前"""
+    return f"\0{trait}\0{type_name}\0{method}"
+
+
+def display_name(name: str) -> str:
+    return name.split("\0")[-1]
 
 
 def prune_is_record(t: Any) -> bool:
