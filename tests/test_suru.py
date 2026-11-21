@@ -951,3 +951,51 @@ def test_述語のエラー():
 def test_述語の例が動く():
     src = (ROOT / "examples" / "predicate.suru").read_text(encoding="utf-8")
     assert _text(src) == ["真", "真", "真", "（2 と 4）", "正の偶数", "偽", "負か零"]
+
+
+# --- 丁寧語の文末 -----------------------------------------------------------
+
+def test_しますはすると同じ():
+    assert run(TRIPLE + ADD + "5　を三倍します") == [15]
+    assert run("nを三倍するとは、n*3。5を三倍します。") == [15]
+
+
+def test_しましてはしてと同じ():
+    assert run("nを三倍するとは、n*3。5を三倍しまして、三倍します。") == [45]
+    assert run("n を 三倍する とは n * 3\n5 を 三倍しまして 三倍します") == [45]
+
+
+def test_しますで定義してもよい():
+    assert run("nを三倍しますとは、n*3。5を三倍する。") == [15]
+
+
+def test_しましてからはしてからと同じ(capsys):
+    _text("「やあ」を表示しましてから、表示します。")
+    assert capsys.readouterr().out.split() == ["やあ", "やあ"]
+
+
+def test_文末のですは読み捨てる():
+    assert run("xとは、7です。xを三倍するとは、x*3です。x。") == [7]
+    assert run("x とは 7 です\nx") == [7]
+    assert run("x とは 7です\nx") == [7]
+    assert _text(POINT + "p とは 3 と 4 の 点 です。\npの横。") == ["3"]
+
+
+def test_ならばの後のです():
+    src = "nを判定するとは、もしn>0ならば「正」です、そうでなければ「負」です。3を判定する。-1を判定する。"
+    assert run(src) == ["正", "負"]
+    src = "n を 判定する とは\n  もし n > 0 ならば 「正」 です\n  そうでなければ 「負」 です\n3 を 判定する"
+    assert run(src) == ["正"]
+
+
+def test_文の途中のですはエラー():
+    with pytest.raises(SuruError, match="です"):
+        run("x とは 3 です と 4")
+    with pytest.raises(SuruError, match="です"):
+        run("xとは、3です と4。")
+
+
+def test_丁寧語の例が動く(capsys):
+    src = (ROOT / "examples" / "polite.suru").read_text(encoding="utf-8")
+    _text(src)
+    assert capsys.readouterr().out.split() == ["15", "120", "零か負", "21"]
