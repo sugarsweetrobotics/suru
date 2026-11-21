@@ -17,12 +17,47 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 
+class Pos(int):
+    """行番号。int として使えるが、何文字目か(col)も覚えている"""
+
+    col: int | None
+
+    def __new__(cls, line: int, col: int | None = None) -> "Pos":
+        obj = int.__new__(cls, line)
+        obj.col = col
+        return obj
+
+
+def _where(line: int | None) -> str:
+    col = getattr(line, "col", None)
+    return f"{line}行目 {col}文字目" if col else f"{line}行目"
+
+
 class SuruError(Exception):
     """「する」の実行時・構文エラー"""
 
     def __init__(self, message: str, line: int | None = None):
         self.line = line
-        super().__init__(f"{line}行目: {message}" if line else message)
+        self.col = getattr(line, "col", None)
+        self.message = message
+        super().__init__(f"{_where(line)}: {message}" if line else message)
+
+
+def _display_width(text: str) -> int:
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+
+
+def format_error(e: "SuruError", source: str | None = None) -> str:
+    """エラーの文と、分かれば該当する行と位置の印(^)を返す"""
+    out = f"エラー: {e}"
+    lines = source.splitlines() if source is not None else []
+    if e.line and 0 < e.line <= len(lines):
+        text = lines[e.line - 1].replace("\t", "    ")
+        out += f"\n  {text}"
+        if e.col:
+            raw = lines[e.line - 1][: e.col - 1].replace("\t", "    ")
+            out += "\n  " + " " * _display_width(raw) + "^"
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -180,17 +215,21 @@ def tokenize_line(text: str, line: int) -> list[Token]:
     tokens: list[Token] = []
     i, n = 0, len(text)
     buf = ""
+    start = 0
     quoted = False
 
     def flush() -> None:
         nonlocal buf, quoted
         if buf:
-            tokens.extend(_classify(buf, line, quoted))
+            tokens.extend(_classify(buf, Pos(line, start + 1), quoted))
             buf = ""
         quoted = False
 
     while i < n:
         c = text[i]
+        here = Pos(line, i + 1)
+        if not buf and c not in SPACES:
+            start = i
         if c in SPACES:
             flush()
         elif c in COMMENT_STARTS and not buf:
@@ -199,22 +238,22 @@ def tokenize_line(text: str, line: int) -> list[Token]:
             flush()
             j = text.find("」", i + 1)
             if j < 0:
-                raise SuruError("文字列の「に対応する」がありません", line)
-            tokens.append(Token("STR", text[i + 1 : j], line))
+                raise SuruError("文字列の「に対応する」がありません", here)
+            tokens.append(Token("STR", text[i + 1 : j], here))
             i = j
         elif c == NAME_OPEN:
-            j = _find_name_close(text, i, line)
+            j = _find_name_close(text, i, here)
             buf += text[i + 1 : j]
             quoted = True
             i = j
         elif c in OPEN_PARENS:
             flush()
-            tokens.append(Token("LP", "(", line))
+            tokens.append(Token("LP", "(", here))
         elif c in CLOSE_PARENS:
             flush()
-            tokens.append(Token("RP", ")", line))
+            tokens.append(Token("RP", ")", here))
         elif c in RESERVED_MARKS:
-            raise SuruError(f"{RESERVED_MARKS[c]}は将来の書き方のために予約されています(文字列の中では使えます)", line)
+            raise SuruError(f"{RESERVED_MARKS[c]}は将来の書き方のために予約されています(文字列の中では使えます)", here)
         else:
             buf += c
         i += 1
@@ -342,24 +381,27 @@ def _hiragana_word_token(w: str, line: int) -> Token:
     raise SuruError(f"「{w}」の前に関数名(漢字かカタカナ)が必要です", line)
 
 
-def segment_run(pieces: list[tuple[str, bool]], line: int) -> list[Token]:
+def segment_run(pieces: list[tuple[str, bool, int]], line: int) -> list[Token]:
     """空白で区切られた1つの並び(『』で囲んだ部分を含む)を単語に分ける"""
     # 1. 文字の種類で切る
     parts: list[tuple[str, str]] = []  # (種類, 文字列)
-    for text, quoted in pieces:
+    cols: list[int] = []  # 各部分が何文字目から始まるか
+    for text, quoted, col in pieces:
         if quoted:
             parts.append(("QNAME", text))
+            cols.append(col)
             continue
         i = 0
         while i < len(text):
             mixed = _mixed_word_at(text, i)
+            cols.append(col + i)
             if mixed:
                 parts.append(("NAME" if mixed in MIXED_NAMES else "MIXED", mixed))
                 i += len(mixed)
                 continue
             cls = _char_class(text[i])
             if cls == "OTHER":
-                raise SuruError(f"「{text[i]}」は使えない文字です", line)
+                raise SuruError(f"「{text[i]}」は使えない文字です", Pos(line, col + i))
             j = i + 1
             if cls == "NAME":
                 while j < len(text) and not _mixed_word_at(text, j):
@@ -384,25 +426,26 @@ def segment_run(pieces: list[tuple[str, bool]], line: int) -> list[Token]:
     # 2. 単語にする。ひらがなの「する/して/すること」は直前の名前とつなげて関数名にする
     tokens: list[Token] = []
     for idx, (cls, text) in enumerate(parts):
+        here = Pos(line, cols[idx])
         if cls in ("NAME", "QNAME"):
             if cls == "NAME" and text in ("真", "偽"):
-                tokens.append(Token("NUM", text == "真", line))
+                tokens.append(Token("NUM", text == "真", here))
             elif cls == "NAME" and text == KW_EMPTY:
-                tokens.append(Token("NUM", (), line))
+                tokens.append(Token("NUM", (), here))
             elif cls == "NAME" and text in KANJI_KEYWORDS:
-                tokens.append(Token("KW", text, line))
+                tokens.append(Token("KW", text, here))
             else:
-                tokens.append(Token("WORD", text, line, quoted=cls == "QNAME"))
+                tokens.append(Token("WORD", text, here, quoted=cls == "QNAME"))
         elif cls == "MIXED":
             kind = "KW" if text in KEYWORDS else "WORD"
-            tokens.append(Token(kind, text, line))
+            tokens.append(Token(kind, text, here))
         elif cls == "DIGIT":
             norm = unicodedata.normalize("NFKC", text)
-            tokens.append(Token("NUM", float(norm) if "." in norm else int(norm), line))
+            tokens.append(Token("NUM", float(norm) if "." in norm else int(norm), here))
         elif cls == "OP":
-            tokens.extend(_split_operators(text, line))
+            tokens.extend(_split_operators(text, here))
         else:  # HIRA
-            words = _split_hiragana(text, line, idx > 0 and parts[idx - 1][0] in ("NAME", "QNAME"), idx > 0)
+            words = _split_hiragana(text, here, idx > 0 and parts[idx - 1][0] in ("NAME", "QNAME"), idx > 0)
             k = next((n for n, w in enumerate(words) if w in CALL_FORMS), None)
             if k is not None:
                 # 「三倍にする」「絶対値にする」: 「する」の前のひらがなは関数名の一部
@@ -410,70 +453,74 @@ def segment_run(pieces: list[tuple[str, bool]], line: int) -> list[Token]:
                 prev = parts[idx - 1] if idx > 0 else None
                 if prev is None or prev[0] not in ("NAME", "QNAME"):
                     if stem:
-                        raise hiragana_function_error(stem, line)
-                    raise SuruError(f"「{words[k]}」の前に関数名(漢字かカタカナ)が必要です", line)
+                        raise hiragana_function_error(stem, here)
+                    raise SuruError(f"「{words[k]}」の前に関数名(漢字かカタカナ)が必要です", here)
                 name_tok = tokens.pop()
                 if _is_all_hiragana(name_tok.value + stem):
-                    raise hiragana_function_error(name_tok.value + stem, line)
-                tokens.append(Token("CALL", name_tok.value + stem + SURU, line, words[k]))
+                    raise hiragana_function_error(name_tok.value + stem, here)
+                tokens.append(Token("CALL", name_tok.value + stem + SURU, name_tok.line, words[k]))
                 words = words[k + 1 :]
             for w in words:
                 if w in CALL_FORMS:
-                    raise SuruError(f"「{w}」の前に関数名(漢字かカタカナ)が必要です", line)
-                tokens.append(_hiragana_word_token(w, line))
+                    raise SuruError(f"「{w}」の前に関数名(漢字かカタカナ)が必要です", here)
+                tokens.append(_hiragana_word_token(w, here))
     return tokens
 
 
 def tokenize_punct_line(text: str, line: int) -> list[Token]:
     """句読点の書き方の1行を字句解析する。「。」は PERIOD トークンになる"""
     tokens: list[Token] = []
-    run: list[tuple[str, bool]] = []
+    run: list[tuple[str, bool, int]] = []
     buf = ""
+    start = 0
     i, n = 0, len(text)
 
     def flush() -> None:
         nonlocal buf
         if buf:
-            run.append((buf, False))
+            run.append((buf, False, start + 1))
             buf = ""
         if run:
-            tokens.extend(segment_run(run, line))
+            tokens.extend(segment_run(run, here))
             run.clear()
 
     while i < n:
         c = text[i]
+        here = Pos(line, i + 1)
+        if not buf and c not in SPACES and c != NAME_OPEN:
+            start = i
         if c in SPACES:
             flush()
         elif c == COMMA:
             flush()
-            tokens.append(Token("SEP", COMMA, line))
+            tokens.append(Token("SEP", COMMA, here))
         elif c in COMMENT_STARTS and not buf and not run:
             break
         elif c == "「":
             flush()
             j = text.find("」", i + 1)
             if j < 0:
-                raise SuruError("文字列の「に対応する」がありません", line)
-            tokens.append(Token("STR", text[i + 1 : j], line))
+                raise SuruError("文字列の「に対応する」がありません", here)
+            tokens.append(Token("STR", text[i + 1 : j], here))
             i = j
         elif c == NAME_OPEN:
-            j = _find_name_close(text, i, line)
+            j = _find_name_close(text, i, here)
             if buf:
-                run.append((buf, False))
+                run.append((buf, False, start + 1))
                 buf = ""
-            run.append((text[i + 1 : j], True))
+            run.append((text[i + 1 : j], True, i + 1))
             i = j
         elif c in OPEN_PARENS:
             flush()
-            tokens.append(Token("LP", "(", line))
+            tokens.append(Token("LP", "(", here))
         elif c in CLOSE_PARENS:
             flush()
-            tokens.append(Token("RP", ")", line))
+            tokens.append(Token("RP", ")", here))
         elif c == PERIOD:
             flush()
-            tokens.append(Token("PERIOD", PERIOD, line))
+            tokens.append(Token("PERIOD", PERIOD, here))
         elif c in RESERVED_MARKS:
-            raise SuruError(f"{RESERVED_MARKS[c]}は将来の書き方のために予約されています(文字列の中では使えます)", line)
+            raise SuruError(f"{RESERVED_MARKS[c]}は将来の書き方のために予約されています(文字列の中では使えます)", here)
         else:
             buf += c
         i += 1
@@ -2815,7 +2862,7 @@ def repl() -> None:
         try:
             interp.run(source, emit=lambda v: print(interp.format(v)))
         except SuruError as e:
-            print(f"エラー: {e}")
+            print(format_error(e, source))
         except RecursionError:
             print("エラー: 再帰が深すぎます")
 
@@ -2831,7 +2878,7 @@ def main(argv: list[str]) -> int:
     try:
         interp.run(source, emit=lambda v: print(interp.format(v)))
     except SuruError as e:
-        print(f"エラー: {e}", file=sys.stderr)
+        print(format_error(e, source), file=sys.stderr)
         return 1
     return 0
 

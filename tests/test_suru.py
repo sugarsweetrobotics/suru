@@ -6,7 +6,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from suru import Call, ListLit, SuruError, Var, parse_program, run  # noqa: E402
+from suru import Call, ListLit, SuruError, Var, format_error, parse_program, run  # noqa: E402
 
 ADD = "a　と　b　を加算する　とは　a + b\n"
 TRIPLE = "引数　を三倍する　とは　引数　と　引数　を加算して　引数　を加算する\n"
@@ -748,3 +748,43 @@ def test_対話版フィボナッチの例が動く():
     src = (ROOT / "examples" / "fib_input.suru").read_text(encoding="utf-8")
     out, _ = _io(src, ["6"])
     assert out[1:] == ["0", "1", "1", "2", "3", "5"]
+
+
+# --- エラー位置の列表示 -----------------------------------------------------
+
+def _error(src: str) -> SuruError:
+    with pytest.raises(SuruError) as info:
+        run(src)
+    return info.value
+
+
+def test_エラーに何文字目かが付く():
+    e = _error("税率 とは 0.1\n10 を 存在しない数にする")
+    assert (e.line, e.col) == (2, 6)
+    assert str(e).startswith("2行目 6文字目: ")
+
+
+def test_句読点の書き方でも何文字目かが分かる():
+    e = _error("xを三倍するとは、x*3。5を三倍する。7を増加する。")
+    assert e.line == 1 and e.col == 23
+
+
+def test_実行時のエラーも位置が分かる():
+    e = _error("n を 割る数にする とは 10 / n\n0 を 割る数にする")
+    assert (e.line, e.col) == (1, 18)
+
+
+def test_エラーの行と印を表示する():
+    src = "x とは 1・2"
+    text = format_error(_error(src), src)
+    assert text.splitlines() == [
+        "エラー: 1行目 7文字目: 中黒「・」は将来の書き方のために予約されています(文字列の中では使えます)",
+        "  x とは 1・2",
+        "          ^",
+    ]
+
+
+def test_全角の字下げでも印の位置が合う():
+    src = "　　xを三倍するとは、x*3。"
+    lines = format_error(_error(src), src).splitlines()
+    assert lines[2].index("^") == 2 + 4
