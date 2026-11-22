@@ -165,3 +165,15 @@ def test_ファイルがないと使い方(tmp_path):
     r = run_lint("interp", tmp_path)
     assert r.returncode == 2
     assert "使い方" in r.stderr
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_代わりのファイル(kind, tmp_path):
+    # エディターが保存していない中身を別のファイルで渡すとき: 知らせは本当の道で出し、読み込みは本当の道のフォルダから探す
+    (tmp_path / "本当").mkdir()
+    (tmp_path / "本当" / "型.suru").write_text(TYPES, encoding="utf-8")
+    (tmp_path / "中身.txt").write_text("「型」 を 読み込んで 使う\n「数学」 を 読み込む\n3 を 二倍する\n", encoding="utf-8")
+    (tmp_path / "good.suru").write_text("x とは 1\nx を 表示する\n", encoding="utf-8")
+    r = run_lint(kind, tmp_path, "--代わり", "中身.txt", "本当/a.suru", "good.suru")
+    assert r.returncode == 1, r.stderr
+    assert r.stdout == "本当/a.suru:2:1: 未使用の読み込み: 「数学」を読み込んでいますが、中の名前を使っていません\n"
