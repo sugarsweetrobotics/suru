@@ -4205,6 +4205,66 @@ def repl() -> None:
 CHECK_FLAGS = ("--検査", "--check")  # 型の検査だけを行う(実行はしない)
 NO_CHECK_FLAGS = ("--検査なし", "--no-check")  # 型の検査をせずに実行する
 COMPILE_FLAGS = ("--翻訳", "--compile")  # バイナリにコンパイルする(suru_compile.py)
+LINT_FLAGS = ("--点検", "--lint")  # lib/点検.suru(する で書いた点検)でファイルを調べる
+LINT_SOURCE = "「点検」 を 読み込む\n点検内の点検実行する\n"
+
+
+def lint_binary() -> str | None:
+    """点検をバイナリにしたもの。clang があれば初めに一度だけ作って、キャッシュに置く(lib が変われば作り直す)。
+    作れなければ None(インタプリタで動かす)"""
+    import hashlib
+
+    import suru_compile
+
+    cc = suru_compile.find_cc()
+    if cc is None or os.environ.get("SURU_LINT_INTERP"):
+        return None
+    h = hashlib.sha256((__version__ + cc).encode())
+    for name in sorted(os.listdir(LIB_DIR)):
+        if name.endswith(SOURCE_SUFFIX):
+            with open(os.path.join(LIB_DIR, name), "rb") as f:
+                h.update(name.encode() + b"\0" + f.read())
+    with open(suru_compile.RUNTIME, "rb") as f:
+        h.update(f.read())
+    cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"), "suru")
+    exe = os.path.join(cache, f"点検-{h.hexdigest()[:16]}")
+    if os.path.exists(exe):
+        return exe
+    try:
+        os.makedirs(cache, exist_ok=True)
+        ir = suru_compile.compile_source(LINT_SOURCE, LIB_DIR, os.path.join(LIB_DIR, "点検実行.suru"), True)
+        ll = f"{exe}.{os.getpid()}.ll"
+        with open(ll, "w", encoding="utf-8") as f:
+            f.write(ir)
+        tmp = f"{exe}.{os.getpid()}.tmp"
+        suru_compile.build(ll, tmp)
+        os.remove(ll)
+        os.replace(tmp, exe)
+    except Exception as e:  # suru_compile は suru を別のモジュールとして読み込むので、名前で見分ける
+        if type(e).__name__ != "SuruError" and not isinstance(e, OSError):
+            raise
+        return None
+    return exe if os.path.exists(exe) else None
+
+
+def lint(paths: list[str]) -> int:
+    """「suru --点検 a.suru b.suru」: 知らせを「道:行:桁: 規則: 説明」で表示する。知らせがあれば 1"""
+    import subprocess
+
+    exe = lint_binary()
+    if exe is not None:
+        return subprocess.call([exe, *paths])
+    PROGRAM_ARGS[:] = paths
+    interp = Interpreter()
+    interp.ctx.base_dir = LIB_DIR
+    try:
+        interp.run(LINT_SOURCE, emit=lambda v: None)
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else 1
+    except SuruError as e:
+        print(format_error(e, LINT_SOURCE), file=sys.stderr)
+        return 1
+    return 0
 
 
 def type_check(source: str, base_dir: str = ".") -> bool:
@@ -4230,6 +4290,11 @@ def main(argv: list[str]) -> int:
         import suru_compile
 
         return suru_compile.main(argv[:1] + argv[2:])
+    if len(argv) >= 2 and argv[1] in LINT_FLAGS:
+        if len(argv) < 3:
+            print("使い方: suru --点検 ファイル.suru …", file=sys.stderr)
+            return 2
+        return lint(argv[2:])
     if len(argv) >= 3 and argv[1] in CHECK_FLAGS:
         with open(argv[2], encoding="utf-8") as f:
             source = f.read()
