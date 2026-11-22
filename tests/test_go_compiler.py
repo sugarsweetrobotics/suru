@@ -76,3 +76,11 @@ def test_バイナリを作って動かす(suruc, tmp_path):
     subprocess.run([str(suruc), str(src), "-o", str(tmp_path / "fib")], check=True)
     r = subprocess.run([str(tmp_path / "fib")], capture_output=True, text=True, check=True)
     assert r.stdout == "6765\n"
+
+
+def test_通信のサーバーで同じIR(suruc, tmp_path):
+    from net_helper import SERVER
+
+    path = tmp_path / "srv.suru"
+    path.write_text(SERVER.replace("PORT", "8080"), encoding="utf-8")
+    compare(path, suruc, tmp_path)

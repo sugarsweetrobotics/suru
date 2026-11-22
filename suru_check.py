@@ -28,7 +28,7 @@ from suru import (
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
     PValue, Ref, RESULT, Run, Sequel, Str, SuruError, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
     HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, Import, Module, MODULE_SEP, SOURCE_SUFFIX, _where, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
-    parse_program, collect_runs, _run_key, STD_PATH, GA,
+    parse_program, collect_runs, _run_key, LIB_PRIMITIVES, GA,
 )
 
 # ---------------------------------------------------------------------------
@@ -684,7 +684,8 @@ class Checker:
         scope = self.checked.get(module.path)
         if scope is None:
             try:
-                prims = {n: PrimRef(n) for n in PRIM_CALLS} if module.path == STD_PATH else None
+                names = [b.name for b in LIB_PRIMITIVES.get(module.path, ())]
+                prims = {n: PrimRef(n) for n in names} if names else None
                 scope = self.checked[module.path] = self.check_unit(module.program, prims)
                 for n, v in (prims or {}).items():
                     scope.vars.setdefault(n, v)
@@ -1813,6 +1814,16 @@ for _n in ("大文字にする", "小文字にする", "空白除去する"):
     _simple(_n, [(WO, STR)], STR)
 for _n in ("先頭一致である", "末尾一致である"):
     _simple(_n, [(GA, STR), ("で", STR)], BOOL)
+_simple("バイト数にする", [(WO, STR)], NUM)
+_simple("文字にする", [(WO, NUM)], STR)
+_simple("文字コードにする", [(WO, STR)], NUM)
+# 通信(「通信」の組み込み)。待受口と接続は番号
+_simple("待受開始する", [(WO, NUM)], act(NUM))
+_simple("接続受付する", [("から", NUM)], act(NUM))
+_simple("行受信する", [("から", NUM)], act(STR))
+_simple("受信する", [("から", NUM), (WO, NUM)], act(STR))
+_simple("送信する", [(WO, STR), ("へ", NUM)], act(NUM))
+_simple("切断する", [(WO, NUM)], act(NUM))
 
 
 def _seq_fun():

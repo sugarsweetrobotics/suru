@@ -1055,13 +1055,11 @@ func (c *Compiler) module(program []Node, path string) *scope {
 	sc := newScope(nil, nil)
 	c.modules[path] = sc
 	ini := c.initFg
-	if path == StdPath {
-		for _, b := range stdPrimitives {
-			g := c.newGlobal("gp")
-			v := ini.call("i64", "@rt_std", "ptr "+c.cstr(b.Name))
-			ini.emit(fmt.Sprintf("store i64 %s, ptr %s", v, g))
-			sc.set(b.Name, &binding{kind: "gconst", g: g})
-		}
+	for _, b := range libPrimitives(path) {
+		g := c.newGlobal("gp")
+		v := ini.call("i64", "@rt_std", "ptr "+c.cstr(b.Name))
+		ini.emit(fmt.Sprintf("store i64 %s, ptr %s", v, g))
+		sc.set(b.Name, &binding{kind: "gconst", g: g})
 	}
 	for _, s := range program {
 		if imp, ok := s.(*Import); ok {
