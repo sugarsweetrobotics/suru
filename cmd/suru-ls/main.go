@@ -79,10 +79,11 @@ type server struct {
 }
 
 type document struct {
-	uri      string
-	text     string
-	lines    []string
-	analysis *compiler.Analysis
+	uri         string
+	text        string
+	lines       []string
+	analysis    *compiler.Analysis
+	completions []compiler.Completion
 }
 
 func (s *server) send(m message) {
@@ -209,9 +210,18 @@ func (s *server) update(uri, text string) {
 		base = filepath.Dir(p)
 	}
 	d.analysis = analyze(text, base)
+	// 書いている途中で構文が崩れているときは、前に分かった名前で補完する
+	d.completions = d.analysis.Completions
+	if old := s.docs[uri]; old != nil && len(d.analysis.Defs) == 0 && d.analysis.Error != nil {
+		d.completions = old.completions
+	}
 	s.docs[uri] = d
 	diags := []map[string]any{}
-	if e := d.analysis.Error; e != nil {
+	errs := d.analysis.Errors
+	if len(errs) == 0 && d.analysis.Error != nil {
+		errs = []*compiler.SuruError{d.analysis.Error}
+	}
+	for _, e := range errs {
 		var r rng
 		if e.Line.Line == 0 {
 			r = rng{position{0, 0}, toUTF16(d.lines, 1, len([]rune(lineText(d.lines, 1)))+1)}
@@ -341,6 +351,12 @@ func (s *server) handle(m message) {
 				"hoverProvider":          true,
 				"definitionProvider":     true,
 				"documentSymbolProvider": true,
+				"completionProvider":     map[string]any{"triggerCharacters": []string{"の"}},
+				"renameProvider":         map[string]any{"prepareProvider": true},
+				"semanticTokensProvider": map[string]any{
+					"legend": map[string]any{"tokenTypes": semanticTypes, "tokenModifiers": []string{}},
+					"full":   true,
+				},
 			},
 			"serverInfo": map[string]any{"name": "suru-ls", "version": version},
 		})
@@ -401,6 +417,39 @@ func (s *server) handle(m message) {
 		} else {
 			s.reply(m.ID, s.definition(p))
 		}
+	case "textDocument/completion":
+		var p textDocumentPosition
+		_ = json.Unmarshal(m.Params, &p)
+		s.reply(m.ID, s.complete(p))
+	case "textDocument/semanticTokens/full":
+		var p struct {
+			TextDocument struct {
+				URI string `json:"uri"`
+			} `json:"textDocument"`
+		}
+		_ = json.Unmarshal(m.Params, &p)
+		s.reply(m.ID, s.semanticTokens(p.TextDocument.URI))
+	case "textDocument/prepareRename":
+		var p textDocumentPosition
+		_ = json.Unmarshal(m.Params, &p)
+		r, err := s.prepareRename(p)
+		if err != "" {
+			s.send(message{ID: m.ID, Error: &rpcError{-32803, err}})
+			return
+		}
+		s.reply(m.ID, r)
+	case "textDocument/rename":
+		var p struct {
+			textDocumentPosition
+			NewName string `json:"newName"`
+		}
+		_ = json.Unmarshal(m.Params, &p)
+		r, err := s.rename(p.textDocumentPosition, p.NewName)
+		if err != "" {
+			s.send(message{ID: m.ID, Error: &rpcError{-32803, err}})
+			return
+		}
+		s.reply(m.ID, r)
 	case "textDocument/documentSymbol":
 		var p struct {
 			TextDocument struct {

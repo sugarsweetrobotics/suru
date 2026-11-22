@@ -60,3 +60,24 @@ func TestAnalyzeSpans(t *testing.T) {
 		t.Fatalf("丁寧語の形: %v", ti)
 	}
 }
+
+// 書いている途中(ファイルの先頭から1文字ずつ)のどこでも、解析が止まらない
+func TestAnalyzeWhileTyping(t *testing.T) {
+	for _, f := range []string{"../examples/punct.suru", "../examples/cases.suru", "../examples/io.suru"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rs := []rune(string(b))
+		for i := 0; i <= len(rs); i++ {
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						t.Fatalf("%s の %d 文字目まで: %v", f, i, r)
+					}
+				}()
+				Analyze(string(rs[:i]), "..")
+			}()
+		}
+	}
+}
