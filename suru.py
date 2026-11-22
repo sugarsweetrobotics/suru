@@ -4285,6 +4285,7 @@ def lint(paths: list[str]) -> int:
     """「suru --点検 a.suru b.suru」: 知らせを「道:行:桁: 規則: 説明」で表示する。知らせがあれば 1"""
     import subprocess
 
+    os.environ.setdefault("SURU_LIB", LIB_DIR)  # 「読み込んで 使う」ファイルの中の名前を調べるのに使う
     exe = lint_binary()
     if exe is not None:
         return subprocess.call([exe, *paths])
