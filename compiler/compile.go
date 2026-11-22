@@ -11,10 +11,17 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"sort"
 	"strings"
 )
 
 // --- LLVM IR の生成(suru_compile.py と同じ IR を出す) ---
+
+// ffiIR は外部の関数の C の型 → LLVM IR の型
+var ffiIR = map[string]string{"i64": "i64", "f64": "double", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr"}
+
+// LinkMark は IR の中の、リンクするライブラリの印(ビルドで読む)
+const LinkMark = "; suru-link: "
 
 var partIDs = map[string]int{"を": 0, "に": 1, "で": 2, "から": 3, "へ": 4, "より": 5, "が": 6}
 var opIDs = map[string]int{"+": 0, "-": 1, "*": 2, "/": 3, "%": 4, "^": 5, "<": 6, ">": 7, "<=": 8, ">=": 9, "==": 10, "!=": 11}
@@ -24,6 +31,18 @@ var intMin = new(big.Int).Neg(new(big.Int).Lsh(big.NewInt(1), 62))
 
 const decls = `
 declare ptr @rt_alloc(i64)
+declare i64 @rt_ffi_i64(i64, ptr, i32, i32)
+declare i32 @rt_ffi_i32(i64, ptr, i32, i32)
+declare double @rt_ffi_f64(i64, ptr, i32, i32)
+declare i32 @rt_ffi_bool(i64, ptr, i32, i32)
+declare ptr @rt_ffi_str(i64, ptr, i32, i32)
+declare ptr @rt_ffi_ptr(i64, ptr, i32, i32)
+declare i64 @rt_ffi_from_i64(i64, ptr, i32)
+declare i64 @rt_ffi_from_i32(i32)
+declare i64 @rt_ffi_from_bool(i32)
+declare i64 @rt_ffi_from_str(ptr)
+declare i64 @rt_ffi_from_ptr(ptr)
+declare i64 @rt_ffi_action(i64, ptr, i32)
 declare i64 @rt_bool(i32)
 declare i64 @rt_float(double)
 declare i64 @rt_str(ptr, i64)
@@ -287,12 +306,14 @@ type Compiler struct {
 	n           int
 	modules     map[string]*scope
 	initFg      *fnGen
+	ffiDecls    map[string]string // 外部の関数の名前 → declare の行
+	linkLibs    []string          // リンクするライブラリ(ExternLib.Path)
 }
 
 func newCompiler(ctx *ParseContext, source string) *Compiler {
 	return &Compiler{ctx: ctx, source: source, cstrings: map[string]string{}, partArrays: map[string]string{},
 		ptrArrays: map[string]string{}, strValues: map[string]string{}, floatValues: map[uint64]string{},
-		globalCache: map[string]string{}, modules: map[string]*scope{}}
+		globalCache: map[string]string{}, modules: map[string]*scope{}, ffiDecls: map[string]string{}}
 }
 
 func (c *Compiler) uid() int {
@@ -749,6 +770,11 @@ func (c *Compiler) genFunction(name string, params []Param, body fnBody, sc *sco
 			}
 		}
 	}
+	if eb, ok := body.(exprBody); ok {
+		if ext, ok := eb.node.(*Extern); ok {
+			body = c.externBody(name, params, ext)
+		}
+	}
 	var r string
 	switch b := body.(type) {
 	case genBody:
@@ -777,6 +803,54 @@ func (c *Compiler) genFunction(name string, params []Param, body fnBody, sc *sco
 	w = append(w, fmt.Sprintf("  %%r = call i64 %s(ptr %%up, %si32 %%pos)", info.direct, loads.String()))
 	w = append(w, "  ret i64 %r", "}")
 	c.functions = append(c.functions, strings.Join(w, "\n"))
+}
+
+// externBody は外部の関数の本体: 引数を C の値にして呼び、値を戻す。値が動作なら、行ったときに呼ぶ動作を返す
+func (c *Compiler) externBody(name string, params []Param, ext *Extern) genBody {
+	for _, lib := range ext.Libs {
+		found := false
+		for _, l := range c.linkLibs {
+			found = found || l == lib
+		}
+		if !found {
+			c.linkLibs = append(c.linkLibs, lib)
+		}
+	}
+	ret := ffiIR[ext.Result]
+	ps := make([]string, len(ext.Params))
+	for i, t := range ext.Params {
+		ps[i] = ffiIR[t]
+	}
+	decl := "declare " + ret + " @" + ext.Symbol + "(" + strings.Join(ps, ", ") + ")"
+	if prev, ok := c.ffiDecls[ext.Symbol]; ok && prev != decl {
+		raise(ext.Line, "外部の関数「"+ext.Symbol+"」が違う型で2回宣言されています")
+	}
+	c.ffiDecls[ext.Symbol] = decl
+	fname := c.cstr(name)
+	call := func(sc *scope, fg *fnGen) string {
+		args := make([]string, len(params))
+		for i, p := range params {
+			t := ext.Params[i]
+			v := c.varValue(p.Name, sc, fg, ext.Line)
+			cv := fg.call(ffiIR[t], "@rt_ffi_"+t, fmt.Sprintf("i64 %s, ptr %s, i32 %d, i32 %%pos", v, fname, partIDs[p.Part]))
+			args[i] = ffiIR[t] + " " + cv
+		}
+		r := fg.call(ret, "@"+ext.Symbol, strings.Join(args, ", "))
+		switch ext.Result {
+		case "i64":
+			return fg.call("i64", "@rt_ffi_from_i64", fmt.Sprintf("i64 %s, ptr %s, i32 %%pos", r, fname))
+		case "f64":
+			return fg.call("i64", "@rt_float", "double "+r)
+		}
+		return fg.call("i64", "@rt_ffi_from_"+ext.Result, ret+" "+r)
+	}
+	if !ext.Action {
+		return call
+	}
+	return func(sc *scope, fg *fnGen) string {
+		k := c.closure(name, []Param{{Part: WO, Name: fmt.Sprintf("\x00捨てる%d", c.uid())}}, genBody(call), sc, fg, false)
+		return fg.call("i64", "@rt_ffi_action", fmt.Sprintf("i64 %s, ptr %s, i32 %%pos", k, fname))
+	}
 }
 
 func (c *Compiler) newInfo(name string, params []Param) *fnInfo {
@@ -1192,7 +1266,18 @@ func (c *Compiler) compile(program []Node, path string) string {
 	}
 	b.Grow(size)
 	b.WriteString("; 「する」のコンパイラが作った LLVM IR\n")
+	for _, lib := range c.linkLibs {
+		b.WriteString(LinkMark + lib + "\n")
+	}
 	b.WriteString(decls)
+	syms := make([]string, 0, len(c.ffiDecls))
+	for k := range c.ffiDecls {
+		syms = append(syms, k)
+	}
+	sort.Strings(syms)
+	for _, k := range syms {
+		b.WriteString("\n" + c.ffiDecls[k])
+	}
 	b.WriteString("\n" + source)
 	for _, g := range c.globals {
 		b.WriteString("\n" + g)

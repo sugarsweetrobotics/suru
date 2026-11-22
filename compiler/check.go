@@ -36,7 +36,7 @@ func pruneIsRecord(t Type) bool {
 		return false
 	}
 	switch c.Name {
-	case "数", "文字列", "真偽", "リスト", "動作":
+	case "数", "文字列", "真偽", "リスト", "動作", "番地":
 		return false
 	}
 	return true
@@ -1053,6 +1053,9 @@ func (c *Checker) typeOf(te Node, tvars *tvarMap, line Pos) Type {
 	var args []Type
 	for _, a := range tn.Args {
 		args = append(args, c.typeOf(a, tvars, line))
+	}
+	if numAliases[tn.Name] {
+		return NUM
 	}
 	if basicTypes[tn.Name] {
 		return &TCon{Name: tn.Name}

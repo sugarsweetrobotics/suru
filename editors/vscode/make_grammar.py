@@ -55,7 +55,7 @@ def build() -> dict:
     particles = list(suru.PARTICLES) + [suru.KW_TO, suru.KW_NO, suru.KW_GA]
     hira_props = [p for p in suru.PROPERTIES if all("ぁ" <= c <= "ゟ" for c in p)]
     kanji_props = [p for p in suru.PROPERTIES if p not in hira_props]
-    imports = [suru.KW_IMPORT, suru.KW_IMPORT_POLITE, suru.KW_IMPORT_TE, suru.KW_USE, suru.KW_USE_POLITE]
+    imports = [suru.KW_IMPORT, suru.KW_IMPORT_POLITE, suru.KW_IMPORT_TE, suru.KW_USE, suru.KW_USE_POLITE, suru.KW_EXTERN]
 
     def word(words):
         return f"{not_before}{alt(words)}{not_after}"

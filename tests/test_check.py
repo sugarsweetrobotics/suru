@@ -332,7 +332,7 @@ def test_宣言のまちがい():
     assert "一番外にその定義がありません" in str(_err("数 を 階乗する は 数"))
     assert "助詞(に)が定義の助詞(を)と違います" in str(_err("数 に 階乗する は 数\n" + FACT))
     assert "2回宣言されています" in str(_err("数 を 階乗する は 数\n数 を 階乗する は 数\n" + FACT))
-    assert "「整数」という型はありません" in str(_err("数 を 階乗する は 整数\n" + FACT))
+    assert "「実数」という型はありません" in str(_err("数 を 階乗する は 実数\n" + FACT))
 
 
 def test_宣言は実行では使わない():

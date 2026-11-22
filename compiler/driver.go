@@ -3,6 +3,30 @@
 
 package compiler
 
+import (
+	"path/filepath"
+	"strings"
+)
+
+// LinkFlags は IR の始めの「; suru-link: 」の行から、外部のライブラリをリンクする clang の引数を作る
+func LinkFlags(ir string) []string {
+	var flags []string
+	for _, line := range strings.Split(ir, "\n") {
+		if !strings.HasPrefix(line, ";") {
+			break
+		}
+		if strings.HasPrefix(line, LinkMark) {
+			lib := strings.TrimPrefix(line, LinkMark)
+			if filepath.IsAbs(lib) {
+				flags = append(flags, lib, "-Wl,-rpath,"+filepath.Dir(lib))
+			} else if lib != "c" {
+				flags = append(flags, "-l"+lib)
+			}
+		}
+	}
+	return flags
+}
+
 // CompileSource は する のプログラムを LLVM IR の文字列にする。間違いがあれば *SuruError
 func CompileSource(source, baseDir, path string, check bool) (ir string, err *SuruError) {
 	err = try(func() {

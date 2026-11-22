@@ -257,6 +257,23 @@ type Import struct {
 	Open   bool
 }
 
+// ExternLib は「外部の「m」 を 読み込む」
+type ExternLib struct {
+	Name string // 書いたとおり
+	Path string // 短い名前か、ファイルなら絶対パス
+	Line Pos
+}
+
+// Extern は「x を 余弦にする とは 外部の「cos」」の本体
+type Extern struct {
+	Symbol string
+	Line   Pos
+	Libs   []string
+	Params []string // 定義の引数の順に C の型(i64 f64 i32 bool str ptr)
+	Result string
+	Action bool
+}
+
 func nn(xs ...Node) []Node {
 	out := make([]Node, 0, len(xs))
 	for _, x := range xs {
@@ -359,6 +376,8 @@ func (n *TypeFun) Children() []Node     { return append(typeParamNodes(n.Params)
 func (n *TypeVarName) Children() []Node { return nil }
 func (n *Module) Children() []Node      { return n.Program }
 func (n *Import) Children() []Node      { return nn(n.Module) }
+func (n *ExternLib) Children() []Node   { return nil }
+func (n *Extern) Children() []Node      { return nil }
 
 func (n *Num) GetLine() Pos            { return n.Line }
 func (n *Str) GetLine() Pos            { return n.Line }
@@ -388,6 +407,8 @@ func (n *TraitDecl) GetLine() Pos      { return n.Line }
 func (n *TraitImpl) GetLine() Pos      { return n.Line }
 func (n *TypeSig) GetLine() Pos        { return n.Line }
 func (n *Import) GetLine() Pos         { return n.Line }
+func (n *ExternLib) GetLine() Pos      { return n.Line }
+func (n *Extern) GetLine() Pos         { return n.Line }
 
 // lineOf は Python の getattr(node, "line", 0)
 func lineOf(n Node) Pos {
@@ -415,7 +436,7 @@ func firstLine(n Node) Pos {
 
 func isTopLevelOnly(n Node) bool {
 	switch n.(type) {
-	case *TypeDef, *TraitDecl, *TraitImpl, *TypeSig, *Import:
+	case *TypeDef, *TraitDecl, *TraitImpl, *TypeSig, *Import, *ExternLib:
 		return true
 	}
 	return false

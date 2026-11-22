@@ -30,13 +30,14 @@
 
 typedef int64_t V;
 
-enum { T_INT = 0, T_FLT = 1, T_BOOL, T_STR, T_LIST, T_REC, T_FN, T_ACT, T_PURE, T_LAZY };
+enum { T_INT = 0, T_FLT = 1, T_BOOL, T_STR, T_LIST, T_REC, T_FN, T_ACT, T_PURE, T_LAZY, T_ADDR };
 
 typedef struct { int32_t tag; } Hdr;
 typedef struct { int32_t tag; double d; } Flt;
 typedef struct { int32_t tag; int32_t b; } Bool;
 typedef struct { int32_t tag; int64_t n; int64_t ncp; char s[]; } Str;
 typedef struct { int32_t tag; int64_t n; V it[]; } List;
+typedef struct { int32_t tag; void *p; } Addr; /* 番地: 外部の関数とやりとりする C のポインタ */
 typedef struct Ctor {
     const char *name, *type;
     int32_t n;
@@ -61,7 +62,7 @@ typedef struct Fn {
     struct Trait *trait;    /* FK_TRAIT */
     int32_t wo, wo_list;
 } Fn;
-enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY };
+enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
@@ -478,6 +479,7 @@ static const char *type_name_of(V v) {
     case T_INT: case T_FLT: return "数";
     case T_STR: return "文字列";
     case T_LIST: return "リスト";
+    case T_ADDR: return "番地";
     default: return "関数";
     }
 }
@@ -548,6 +550,7 @@ static void fmt_value(Buf *b, V v, int nested, int use_traits) {
     }
     case T_ACT: buf_printf(b, "<動作 %s>", AS(Act, v)->name); return;
     case T_PURE: buf_cat(b, "<動作 結果にする>"); return;
+    case T_ADDR: buf_printf(b, "番地(0x%llx)", (unsigned long long)(uintptr_t)AS(Addr, v)->p); return;
     default: buf_cat(b, "?"); return;
     }
 }
@@ -641,6 +644,7 @@ int32_t rt_eq(V a, V b) {
         return 1;
     }
     case T_PURE: return rt_eq(AS(Pure, a)->v, AS(Pure, b)->v);
+    case T_ADDR: return AS(Addr, a)->p == AS(Addr, b)->p;
     default: return 0;
     }
 }
@@ -1046,6 +1050,7 @@ static V act_run(Act *a) {
         for (int64_t i = 0; i < l->n; i++) out->it[i] = perform(l->it[i]);
         return (V)(intptr_t)out;
     }
+    case A_CALL: return apply1(a->a, V_EMPTY, a->pos); /* 外部の関数を呼ぶ動作 */
     case A_CHAIN: return apply1(a->b, perform(a->a), 0); /* 続きの動作は perform のループで行う */
     case A_FMAP: return apply1(a->b, perform(a->a), 0);
     }
@@ -1795,6 +1800,77 @@ static const BuiltinDef STD_PRIMITIVES[] = {
 static V def_builtin(const BuiltinDef *d) { return mk_builtin(d->name, d->n, d->parts, d->req, d->code, NULL); }
 
 /* 標準ライブラリの組み込み(「標準」の中で使う) */
+/* ------------------------------------------------------------------ */
+/* 外部の関数(FFI): する の値と C の値の変換                           */
+/* ------------------------------------------------------------------ */
+
+__attribute__((noreturn)) static void ffi_bad(V v, const char *fname, int32_t part, const char *want, int32_t pos) {
+    fail(pos, "外部の関数「%s」の「%s」には%sが必要です(「%s」が渡されました)", fname, PART_NAMES[part], want, plain(v).s);
+}
+
+static int64_t ffi_int(V v, const char *fname, int32_t part, int32_t pos, const char *want) {
+    if (IS_INT(v)) return INT_VAL(v);
+    if (TAG(v) == T_FLT) {
+        double d = AS(Flt, v)->d;
+        if (d == floor(d) && d >= -9223372036854775808.0 && d < 9223372036854775808.0) return (int64_t)d;
+    }
+    ffi_bad(v, fname, part, want, pos);
+}
+
+int64_t rt_ffi_i64(V v, const char *fname, int32_t part, int32_t pos) { return ffi_int(v, fname, part, pos, "整数"); }
+
+int32_t rt_ffi_i32(V v, const char *fname, int32_t part, int32_t pos) {
+    int64_t n = ffi_int(v, fname, part, pos, "整数");
+    if (n < INT32_MIN || n > INT32_MAX) ffi_bad(v, fname, part, "-2147483648 から 2147483647 までの整数", pos);
+    return (int32_t)n;
+}
+
+double rt_ffi_f64(V v, const char *fname, int32_t part, int32_t pos) {
+    if (!is_num(v)) ffi_bad(v, fname, part, "数", pos);
+    return num_d(v);
+}
+
+int32_t rt_ffi_bool(V v, const char *fname, int32_t part, int32_t pos) {
+    if (TAG(v) != T_BOOL) ffi_bad(v, fname, part, "真偽", pos);
+    return AS(Bool, v)->b ? 1 : 0;
+}
+
+const char *rt_ffi_str(V v, const char *fname, int32_t part, int32_t pos) {
+    if (TAG(v) != T_STR) ffi_bad(v, fname, part, "文字列", pos);
+    Str *s = AS(Str, v);
+    if ((int64_t)strlen(s->s) != s->n) ffi_bad(v, fname, part, "途中に文字コード 0 を含まない文字列", pos);
+    return s->s; /* 呼んでいる間だけ使える(C 側で持ち続けない) */
+}
+
+void *rt_ffi_ptr(V v, const char *fname, int32_t part, int32_t pos) {
+    if (TAG(v) != T_ADDR) ffi_bad(v, fname, part, "番地", pos);
+    return AS(Addr, v)->p;
+}
+
+V rt_ffi_from_i64(int64_t n, const char *fname, int32_t pos) {
+    if (n > INT_MAX62 || n < INT_MIN62)
+        fail(pos, "外部の関数「%s」の値 %lld が大きすぎます(整数は ±%lld までです)", fname, (long long)n, (long long)INT_MAX62);
+    return mk_int(n, pos);
+}
+
+V rt_ffi_from_i32(int32_t n) { return mk_int(n, 0); }
+V rt_ffi_from_bool(int32_t b) { return rt_bool(b != 0); }
+V rt_ffi_from_str(const char *s) { return s ? cstr(s) : cstr(""); }
+
+V rt_ffi_from_ptr(void *p) {
+    Addr *a = rt_alloc(sizeof(Addr));
+    a->tag = T_ADDR;
+    a->p = p;
+    return (V)(intptr_t)a;
+}
+
+/* 値が動作の外部の関数: 行ったときに k(引数を捕まえた関数)を呼ぶ */
+V rt_ffi_action(V k, const char *fname, int32_t pos) {
+    Act *x = AS(Act, mk_act(A_CALL, fname, k, 0));
+    x->pos = pos;
+    return (V)(intptr_t)x;
+}
+
 V rt_std(const char *name) {
     for (size_t i = 0; i < sizeof STD_PRIMITIVES / sizeof STD_PRIMITIVES[0]; i++)
         if (strcmp(STD_PRIMITIVES[i].name, name) == 0) return def_builtin(&STD_PRIMITIVES[i]);
