@@ -106,12 +106,17 @@ typedef struct GcBlk {
     size_t osz;          /* 1つの大きさ(大きいオブジェクトなら全体) */
     size_t nobj;
     int large, atomic;
-    uint8_t *mark;       /* オブジェクトごとの印 */
+    uint8_t *mark;       /* オブジェクトごとの状態(GC_FREE / GC_USED / GC_MARKED) */
+    void *free;          /* このブロックの空いているもののつながり */
+    struct GcBlk *next;  /* 空きのあるブロックのつながり */
 } GcBlk;
+
+/* 空いているものは調べない(空きのつながりをたどって空きを生きているとみなさないため) */
+enum { GC_FREE = 0, GC_USED = 1, GC_MARKED = 2 };
 
 static GcBlk **gc_regs;          /* start の順に並べたすべての領域 */
 static size_t gc_nregs, gc_capregs;
-static void *gc_free[2][GC_NCLASS]; /* [atomic][大きさ] 空いているオブジェクトのつながり */
+static GcBlk *gc_avail[2][GC_NCLASS]; /* [atomic][大きさ] 空きのあるブロック */
 static uint8_t gc_class_of[GC_SMALL_MAX / 16 + 1];
 static size_t gc_since;            /* 前の GC からの確保量 */
 static size_t gc_min = (size_t)8 << 20; /* これだけ確保するまでは GC しない(SURU_GC_MIN で KB 単位に変えられる) */
@@ -168,11 +173,14 @@ static void gc_new_block(int atomic, int k) {
     b->mark = calloc(b->nobj, 1);
     if (!b->mark) gc_oom();
     gc_add_region(b);
+    b->free = NULL;
     for (size_t i = b->nobj; i-- > 0;) {
         void **o = (void **)(mem + i * b->osz);
-        *o = gc_free[atomic][k];
-        gc_free[atomic][k] = o;
+        *o = b->free;
+        b->free = o;
     }
+    b->next = gc_avail[atomic][k];
+    gc_avail[atomic][k] = b;
 }
 
 /* --- 印を付ける --- */
@@ -184,8 +192,8 @@ static void gc_mark(uintptr_t p) {
     GcBlk *b = gc_find(p);
     if (!b) return;
     size_t i = (p - (uintptr_t)b->start) / b->osz;
-    if (b->mark[i]) return;
-    b->mark[i] = 1;
+    if (b->mark[i] != GC_USED) return;
+    b->mark[i] = GC_MARKED;
     if (b->atomic) return;
     if (gc_nstack == gc_capstack) {
         gc_capstack = gc_capstack ? gc_capstack * 2 : 4096;
@@ -220,7 +228,6 @@ __attribute__((noinline)) static void gc_mark_stack(void) {
 
 static void gc_collect(void) {
     gc_count++;
-    for (GcBlk **r = gc_regs; r < gc_regs + gc_nregs; r++) memset((*r)->mark, 0, (*r)->nobj);
     /* 根 */
     for (int64_t i = 0; i < suru_nroots; i++) gc_mark((uintptr_t)*suru_roots[i]);
     gc_mark_tables();
@@ -228,26 +235,33 @@ static void gc_collect(void) {
     gc_mark_stack();
     gc_drain();
     /* 片付け: 印のないものを空きに戻す */
-    memset(gc_free, 0, sizeof gc_free);
+    memset(gc_avail, 0, sizeof gc_avail);
     gc_live = 0;
     size_t keep = 0;
     for (size_t r = 0; r < gc_nregs; r++) {
         GcBlk *b = gc_regs[r];
         if (b->large) {
-            if (!b->mark[0]) {
+            if (b->mark[0] != GC_MARKED) {
                 free(b->start);
                 free(b->mark);
                 free(b);
                 continue;
             }
+            b->mark[0] = GC_USED;
             gc_live += b->osz;
         } else {
             int k = gc_class_of[b->osz / 16];
+            b->free = NULL;
             for (size_t i = b->nobj; i-- > 0;) {
-                if (b->mark[i]) { gc_live += b->osz; continue; }
+                if (b->mark[i] == GC_MARKED) { b->mark[i] = GC_USED; gc_live += b->osz; continue; }
+                b->mark[i] = GC_FREE;
                 void **o = (void **)(b->start + i * b->osz);
-                *o = gc_free[b->atomic][k];
-                gc_free[b->atomic][k] = o;
+                *o = b->free;
+                b->free = o;
+            }
+            if (b->free) {
+                b->next = gc_avail[b->atomic][k];
+                gc_avail[b->atomic][k] = b;
             }
         }
         gc_regs[keep++] = b;
@@ -275,6 +289,7 @@ static void *gc_alloc(int64_t size, int atomic) {
         b->atomic = atomic;
         b->mark = calloc(1, 1);
         if (!b->mark) gc_oom();
+        b->mark[0] = GC_USED;
         gc_add_region(b);
         gc_since += (size_t)size;
         return mem;
@@ -288,10 +303,13 @@ static void *gc_alloc(int64_t size, int atomic) {
         }
     }
     int k = gc_class_of[(size + 15) / 16];
-    if (!gc_free[atomic][k]) gc_new_block(atomic, k);
-    void **o = gc_free[atomic][k];
-    gc_free[atomic][k] = *o;
+    while (gc_avail[atomic][k] && !gc_avail[atomic][k]->free) gc_avail[atomic][k] = gc_avail[atomic][k]->next;
+    if (!gc_avail[atomic][k]) gc_new_block(atomic, k);
+    GcBlk *b = gc_avail[atomic][k];
+    void **o = b->free;
+    b->free = *o;
     memset(o, 0, GC_SIZES[k]);
+    b->mark[((char *)o - b->start) / b->osz] = GC_USED;
     gc_since += GC_SIZES[k];
     return o;
 }
