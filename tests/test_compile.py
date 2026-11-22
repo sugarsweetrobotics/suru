@@ -147,6 +147,12 @@ def test_深い再帰も動く(tmp_path):
     assert compiled(DEEP, tmp_path).stdout == "100000\n"
 
 
+def test_手順の最後で自分を呼ぶ繰り返し(tmp_path):
+    src = "n を 数え上げする とは 手順\n  n を 表示する\n  もし n < 30000 ならば n + 1 を 数え上げする そうでなければ 「終わり」 を 表示する\n1 を 数え上げする\n"
+    out = same(src, tmp_path)
+    assert out.endswith("30000\n終わり\n")
+
+
 def test_実行時のエラーはインタプリタと同じ文(tmp_path):
     src = "x とは 1 と 2\nx の 先頭\n空 の 先頭\n"
     r = compiled(src, tmp_path)
