@@ -244,3 +244,37 @@ def test_HTTPのサーバーをコンパイルして答えてもらう(which, tm
         p.kill()
     if which == "HTTP_ACTION_SERVER":
         assert "POST /post\n" in p.communicate()[0]
+
+
+def test_試行するはインタプリタと同じ(tmp_path):
+    src = "「標準」 を 読み込んで 使う\n" \
+        "x を 壊すする とは 手順\n  「前」 を 表示する\n  空 の 先頭 を 表示する\n" \
+        "（1 を 壊すする） を （「代わり」 を 表示する） で 試行してから 表示する\n" \
+        "（1 を 壊すする） を （「pure」 を 結果にする） で 試行してから 表示する\n"
+    assert same(src, tmp_path) == "前\n代わり\n代わり\n前\npure\n"
+    assert compiled(src, tmp_path).stderr.count("空のリストに「先頭」はありません") == 2
+
+
+def test_HTTPのサーバーは失敗しても何も送らない相手がいても止まらない(tmp_path):
+    import socket
+    import time
+
+    import net_helper as N
+
+    port = N.free_port()
+    ir = suru_compile.compile_source(N.HTTP_SERVER.replace("PORT", str(port)), ".")
+    (tmp_path / "srv.ll").write_text(ir, encoding="utf-8")
+    suru_compile.build(str(tmp_path / "srv.ll"), str(tmp_path / "srv"))
+    p = subprocess.Popen([str(tmp_path / "srv")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        N.wait_http(port)
+        N.abuse(port)
+        idle = socket.create_connection(("127.0.0.1", port))  # つないだまま何も送らない
+        t = time.time()
+        assert N.http(port)[::2] == (200, "こんにちは")  # 5秒で見切って次に答える
+        assert 4 < time.time() - t < 15
+        idle.close()
+        assert p.poll() is None
+    finally:
+        p.kill()
+    assert "通信に失敗しました" in p.communicate()[1]

@@ -3072,7 +3072,26 @@ STD_PRIMITIVES = [
     Builtin("バイト数にする", [(WO, True)], lambda it, a, line: len(_str(a[WO], "「バイト数にする」の「を」", line).encode("utf-8"))),
     Builtin("文字にする", [(WO, True)], lambda it, a, line: _chr(a[WO], line)),
     Builtin("文字コードにする", [(WO, True)], lambda it, a, line: _ord(a[WO], line)),
+    Builtin("試行する", [(WO, True), ("で", True)], lambda it, a, line: _try(a[WO], a["で"], line)),
 ]
+
+
+def _try(m: Any, alt: Any, line: int) -> Any:
+    """「m を 代わり で 試行する」: m を行い、実行時エラーになったら、エラーの文を標準エラーに書いて 代わり を行う"""
+    for v, p in ((m, "を"), (alt, "で")):
+        if not isinstance(v, ACTION_TYPES):
+            raise SuruError(f"「試行する」の「{p}」は動作でなければなりません(「{format_value(v)}」が渡されました)", line)
+
+    def perform(it: "Interpreter") -> Any:
+        try:
+            return it.perform(m)
+        except SuruError as e:
+            print(f"エラー: {e}", file=sys.stderr, flush=True)
+        except RecursionError:
+            print("エラー: 再帰が深すぎます", file=sys.stderr, flush=True)
+        return it.perform(alt)
+
+    return Action("試行する", perform)
 
 
 def _chr(v: Any, line: int) -> str:
@@ -3090,6 +3109,9 @@ def _ord(v: Any, line: int) -> int:
 
 
 # --- 通信(「通信」を読み込んだときだけ使える)。待受口と接続は番号で表す -----------
+
+NET_TIMEOUT = 5  # 接続の受信・送信を待つ秒数(超えると「通信に失敗しました」)
+
 
 class _Net:
     """インタプリタごとの、開いている待受口と接続(番号 → ソケット)"""
@@ -3150,6 +3172,7 @@ def _listen(net: _Net, a: dict, line: int) -> int:
 
 def _accept(net: _Net, a: dict, line: int) -> int:
     conn, _ = net.get(a["から"], "待受口", line).accept()
+    conn.settimeout(NET_TIMEOUT)  # 何も送ってこない相手で止まらないように
     return net.add(conn)
 
 

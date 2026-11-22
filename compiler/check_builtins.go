@@ -202,6 +202,15 @@ func init() {
 	simple("バイト数にする", []TParam{{WO, STR}}, NUM)
 	simple("文字にする", []TParam{{WO, NUM}}, STR)
 	simple("文字コードにする", []TParam{{WO, STR}}, NUM)
+	prim("試行する", []partReq{req(WO), req("で")}, func() Type {
+		x := newTVar()
+		return &TFun{[]TParam{{WO, act(x)}, {"で", act(x)}}, act(x)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		x := newTVar()
+		need(c, a, WO, act(x), line, "試行する")
+		need(c, a, "で", act(x), line, "試行する")
+		return act(x)
+	})
 	// 通信(「通信」の組み込み)。待受口と接続は番号
 	simple("待受開始する", []TParam{{WO, NUM}}, act(NUM))
 	simple("接続受付する", []TParam{{"から", NUM}}, act(NUM))

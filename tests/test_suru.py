@@ -1260,3 +1260,29 @@ def test_HTTPのサーバーは動作でも答える():
     wait_http(port)
     assert http(port, "/post", "本文です", {"X-Name": "taro"})[::2] == (200, "本文です/taro")
     assert out[-1] == "POST /post"
+
+
+def test_試行するは失敗したら代わりを行う(capsys):
+    # 失敗は動作を行っている途中(手順の中)で起きる。試行する の引数を作るときのエラーは止まる
+    src = "「標準」 を 読み込んで 使う\n" \
+        "x を 壊すする とは 手順\n  「前」 を 表示する\n  空 の 先頭 を 表示する\n" \
+        "（1 を 壊すする） を （「代わり」 を 表示する） で 試行してから 表示する\n" \
+        "（「ok」 を 表示する） を （「x」 を 表示する） で 試行する\n" \
+        "（1 を 壊すする） を （「pure」 を 結果にする） で 試行してから 表示する\n"
+    assert _io(src)[0] == ["前", "代わり", "代わり", "ok", "前", "pure"]
+    assert capsys.readouterr().err.count("空のリストに「先頭」はありません") == 2
+
+
+def test_試行するには動作を渡す():
+    with pytest.raises(SuruError, match="試行する"):
+        run("「標準」 を 読み込んで 使う\n（「a」 を 表示する） を 1 で 試行する\n")
+
+
+def test_HTTPのサーバーは失敗しても止まらない():
+    from net_helper import HTTP_SERVER, abuse, free_port, http, wait_http
+
+    port = free_port()
+    _serve_in_thread(HTTP_SERVER.replace("PORT", str(port)), [])
+    wait_http(port)
+    abuse(port)
+    assert http(port)[::2] == (200, "こんにちは")
