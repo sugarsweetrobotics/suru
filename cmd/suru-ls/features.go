@@ -107,6 +107,9 @@ func (s *server) complete(p textDocumentPosition) any {
 		if c.Detail != "" {
 			item["detail"] = c.Detail
 		}
+		if u, ok := d.analysis.Usages[c.Label]; ok {
+			item["documentation"] = map[string]any{"kind": "markdown", "value": "使い方: `" + u + "`"}
+		}
 		items = append(items, item)
 	}
 	return map[string]any{"isIncomplete": false, "items": items}
@@ -170,35 +173,100 @@ func trimForm(name string) (stem, form string) {
 	return name, ""
 }
 
-// renameTarget はカーソルの名前と、このファイルで定義されているか
-func (s *server) renameTarget(p textDocumentPosition) (*document, compiler.TypeInfo, string) {
-	d := s.docs[p.TextDocument.URI]
+// renameTarget はカーソルの名前と、変えられるか。param は引数(定義のない名前)のとき
+func (s *server) renameTarget(p textDocumentPosition) (d *document, t compiler.TypeInfo, param bool, msg string) {
+	d = s.docs[p.TextDocument.URI]
 	if d == nil {
-		return nil, compiler.TypeInfo{}, "ファイルが開かれていません"
+		return nil, t, false, "ファイルが開かれていません"
 	}
 	line, col := fromUTF16(d.lines, p.Position)
 	t, ok := d.analysis.TypeAt(line, col)
 	if !ok {
-		return nil, t, "ここには変えられる名前がありません"
+		// 引数を受け取るところ(「n を 三倍する」の n)は型を覚えていないので、単語から探す
+		np, found := nameUnder(d, line, col)
+		if !found {
+			return nil, t, false, "ここには変えられる名前がありません"
+		}
+		t = compiler.TypeInfo{Pos: np.Pos, Name: np.Name}
+	}
+	if strings.Contains(t.Name, compiler.ModuleSep) {
+		return nil, t, false, "読み込んだファイルの名前は変えられません"
+	}
+	for _, c := range d.analysis.Completions {
+		if c.Label == t.Name && c.Kind != "function" && c.Kind != "value" && c.Kind != "variable" {
+			return nil, t, false, "「" + t.Name + "」(型・形・フィールド・キーワードなど)はまだ変えられません"
+		}
+	}
+	if from, _ := statementRange(d.analysis, t.Pos.Line); headParams(d, from)[t.Name] {
+		return d, t, true, ""
 	}
 	local := 0
 	for _, def := range d.analysis.DefinitionsOf(t.Name) {
 		if def.File != "" {
-			return nil, t, "「" + t.Name + "」は読み込んだファイルで定義されているので、ここでは変えられません"
+			return nil, t, false, "「" + t.Name + "」は読み込んだファイルで定義されているので、ここでは変えられません"
 		}
 		local++
 	}
-	if local == 0 {
-		return nil, t, "「" + t.Name + "」はこのファイルで定義した名前ではないので変えられません(引数の名前は、まだ変えられません)"
+	if local > 0 {
+		return d, t, false, ""
 	}
-	if strings.Contains(t.Name, compiler.ModuleSep) {
-		return nil, t, "読み込んだファイルの名前は変えられません"
+	if _, form := trimForm(t.Name); form != "" {
+		return nil, t, false, "「" + t.Name + "」はこのファイルで定義した関数ではないので変えられません"
 	}
-	return d, t, ""
+	return d, t, true, ""
+}
+
+// headParams は line 行目から始まる定義の、関数名より前に書いた引数の名前
+func headParams(d *document, line int) map[string]bool {
+	defCol := 0
+	for _, t := range d.analysis.Types {
+		if t.Def && t.Pos.Line == line {
+			defCol = t.Pos.Col
+			break
+		}
+	}
+	out := map[string]bool{}
+	if defCol == 0 {
+		return out
+	}
+	for _, np := range d.analysis.Names {
+		if np.Pos.Line == line && np.Pos.Col < defCol {
+			out[np.Name] = true
+		}
+	}
+	return out
+}
+
+// nameUnder は line 行目 col 文字目にある名前の単語
+func nameUnder(d *document, line, col int) (compiler.NamePos, bool) {
+	for _, np := range d.analysis.Names {
+		if np.Pos.Line != line {
+			continue
+		}
+		start, end, ok := stemSpan(d.lines, np.Pos, np.Name)
+		if ok && start-1 <= col && col <= end {
+			return np, true
+		}
+	}
+	return compiler.NamePos{}, false
+}
+
+// statementRange は line 行目を含む一番外の文の行の範囲 [start, end)
+func statementRange(a *compiler.Analysis, line int) (int, int) {
+	start, end := 1, 1<<30
+	for _, l := range a.Statements {
+		if l <= line {
+			start = l
+		} else {
+			end = l
+			break
+		}
+	}
+	return start, end
 }
 
 func (s *server) prepareRename(p textDocumentPosition) (any, string) {
-	d, t, err := s.renameTarget(p)
+	d, t, _, err := s.renameTarget(p)
 	if err != "" {
 		return nil, err
 	}
@@ -229,7 +297,7 @@ func quotedAt(lines []string, line, start, end int) bool {
 }
 
 func (s *server) rename(p textDocumentPosition, newName string) (any, string) {
-	d, t, err := s.renameTarget(p)
+	d, t, param, err := s.renameTarget(p)
 	if err != "" {
 		return nil, err
 	}
@@ -248,30 +316,59 @@ func (s *server) rename(p textDocumentPosition, newName string) (any, string) {
 			return nil, "値の名前を「" + newForm + "」で終わる名前には変えられません"
 		}
 		return nil, "「" + oldForm + "」で終わる名前に変えてください"
-	case !strings.ContainsFunc(newStem, func(r rune) bool { return !isHira(r) }):
-		return nil, "ひらがなだけの名前は使えません"
+	case newForm != "" && !strings.ContainsFunc(newStem, func(r rune) bool { return !isHira(r) }):
+		return nil, "ひらがなだけの関数名は使えません"
 	case strings.ContainsAny(newStem, " 　、。「」『』（）()・#＃※"):
 		return nil, "名前に使えない文字が入っています"
 	}
+	edit := func(pos compiler.Pos) map[string]any {
+		start, end, ok := stemSpan(d.lines, pos, oldStem)
+		if !ok {
+			return nil
+		}
+		text := newStem
+		if hasHiragana(newStem) && !quotedAt(d.lines, pos.Line, start, end) {
+			text = "『" + newStem + "』"
+		}
+		return map[string]any{
+			"range":   rng{toUTF16(d.lines, pos.Line, start), toUTF16(d.lines, pos.Line, end)},
+			"newText": text,
+		}
+	}
 	var edits []map[string]any
+	if param {
+		// 引数: その一番外の文(定義)の中の、同じ名前の単語を全部変える
+		from, to := statementRange(d.analysis, t.Pos.Line)
+		for _, np := range d.analysis.Names {
+			if np.Pos.Line >= from && np.Pos.Line < to && np.Name == newName {
+				return nil, "「" + newName + "」はこの定義の中ですでに使われています"
+			}
+		}
+		if len(d.analysis.DefinitionsOf(newName)) > 0 {
+			return nil, "「" + newName + "」はすでに定義されています"
+		}
+		for _, np := range d.analysis.Names {
+			if np.Pos.Line >= from && np.Pos.Line < to && np.Name == t.Name {
+				if e := edit(np.Pos); e != nil {
+					edits = append(edits, e)
+				}
+			}
+		}
+		return map[string]any{"changes": map[string]any{d.uri: edits}}, ""
+	}
 	seen := map[compiler.Pos]bool{}
 	for _, u := range d.analysis.Types {
 		if u.Name != t.Name || seen[u.Pos] {
 			continue
 		}
 		seen[u.Pos] = true
-		start, end, ok := stemSpan(d.lines, u.Pos, oldStem)
-		if !ok {
+		// 引数として同じ名前を受け取る定義の中は、その引数のこと
+		if from, _ := statementRange(d.analysis, u.Pos.Line); !u.Def && headParams(d, from)[t.Name] {
 			continue
 		}
-		text := newStem
-		if hasHiragana(newStem) && !quotedAt(d.lines, u.Pos.Line, start, end) {
-			text = "『" + newStem + "』"
+		if e := edit(u.Pos); e != nil {
+			edits = append(edits, e)
 		}
-		edits = append(edits, map[string]any{
-			"range":   rng{toUTF16(d.lines, u.Pos.Line, start), toUTF16(d.lines, u.Pos.Line, end)},
-			"newText": text,
-		})
 	}
 	return map[string]any{"changes": map[string]any{d.uri: edits}}, ""
 }

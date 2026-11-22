@@ -270,6 +270,9 @@ func (s *server) hover(p textDocumentPosition) any {
 	if t.Def {
 		label = "定義の型"
 	}
+	if u, ok := d.analysis.Usages[t.Name]; ok {
+		label += "\n\n使い方: `" + u + "`"
+	}
 	return map[string]any{
 		"contents": map[string]any{
 			"kind":  "markdown",
