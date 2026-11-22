@@ -16,9 +16,15 @@ import (
 // talk はメッセージを順に渡し、サーバーが送ったものを返す
 func talk(t *testing.T, msgs ...map[string]any) []message {
 	t.Helper()
+	return talkWith(t, "", msgs...)
+}
+
+// talkWith は点検のバイナリ lintExe を使うサーバーと話す
+func talkWith(t *testing.T, lintExe string, msgs ...map[string]any) []message {
+	t.Helper()
 	var buf bytes.Buffer
 	w := bufio.NewWriter(&buf)
-	s := &server{out: w, docs: map[string]*document{}}
+	s := &server{out: w, docs: map[string]*document{}, lintExe: lintExe}
 	for _, m := range msgs {
 		m["jsonrpc"] = "2.0"
 		b, _ := json.Marshal(m)

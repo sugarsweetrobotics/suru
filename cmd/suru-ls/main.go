@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode/utf16"
 
 	suru "github.com/sugarsweetrobotics/suru"
@@ -76,6 +77,8 @@ type server struct {
 	out      io.Writer
 	docs     map[string]*document
 	shutdown bool
+	mu       sync.Mutex // 点検のバイナリを作り終えたとき(別の goroutine)と、要求の処理が重ならないように
+	lintExe  string     // 点検のバイナリ(まだなければ "")
 }
 
 type document struct {
@@ -84,6 +87,7 @@ type document struct {
 	lines       []string
 	analysis    *compiler.Analysis
 	completions []compiler.Completion
+	lint        []lintNote // 点検の知らせ(開いたときと保存したときに調べ直す)
 }
 
 func (s *server) send(m message) {
@@ -203,7 +207,8 @@ func pathToURI(path string) string {
 
 // --- 解析と間違いの表示 ---
 
-func (s *server) update(uri, text string) {
+// update は uri の中身を調べて間違いを出す。relint なら点検もやり直す(でなければ前の知らせを使う)
+func (s *server) update(uri, text string, relint bool) {
 	d := &document{uri: uri, text: text, lines: compiler.SplitLines(text)}
 	base := "."
 	if p := uriToPath(uri); p != "" {
@@ -212,8 +217,18 @@ func (s *server) update(uri, text string) {
 	d.analysis = analyze(text, base)
 	// 書いている途中で構文が崩れているときは、前に分かった名前で補完する
 	d.completions = d.analysis.Completions
-	if old := s.docs[uri]; old != nil && len(d.analysis.Defs) == 0 && d.analysis.Error != nil {
+	old := s.docs[uri]
+	if old != nil && len(d.analysis.Defs) == 0 && d.analysis.Error != nil {
 		d.completions = old.completions
+	}
+	if p := uriToPath(uri); relint && s.lintExe != "" && p != "" {
+		if notes, err := runLint(s.lintExe, p, text); err == nil {
+			d.lint = notes
+		} else {
+			fmt.Fprintln(os.Stderr, "suru-ls: 点検:", err)
+		}
+	} else if old != nil {
+		d.lint = old.lint
 	}
 	s.docs[uri] = d
 	diags := []map[string]any{}
@@ -234,7 +249,26 @@ func (s *server) update(uri, text string) {
 		}
 		diags = append(diags, map[string]any{"range": r, "severity": 1, "source": "する", "message": e.Message})
 	}
+	diags = append(diags, lintDiagnostics(d)...)
 	s.notify("textDocument/publishDiagnostics", map[string]any{"uri": uri, "diagnostics": diags})
+}
+
+// prepareLint は点検のバイナリを作り(時間がかかるので別の goroutine で)、できたら開いているファイルを点検する
+func (s *server) prepareLint() {
+	exe, err := lintBinary()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "suru-ls:", err)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lintExe = exe
+	for uri, d := range s.docs {
+		s.update(uri, d.text, true)
+	}
+	if w, ok := s.out.(*bufio.Writer); ok {
+		w.Flush()
+	}
 }
 
 // analyze はコンパイラの中で思わぬ panic が起きても、サーバーを止めない
@@ -356,6 +390,7 @@ func (s *server) handle(m message) {
 				"documentSymbolProvider": true,
 				"completionProvider":     map[string]any{"triggerCharacters": []string{"の"}},
 				"renameProvider":         map[string]any{"prepareProvider": true},
+				"codeActionProvider":     map[string]any{"codeActionKinds": []string{"quickfix"}},
 				"semanticTokensProvider": map[string]any{
 					"legend": map[string]any{"tokenTypes": semanticTypes, "tokenModifiers": []string{}},
 					"full":   true,
@@ -380,7 +415,7 @@ func (s *server) handle(m message) {
 			} `json:"textDocument"`
 		}
 		if json.Unmarshal(m.Params, &p) == nil {
-			s.update(p.TextDocument.URI, p.TextDocument.Text)
+			s.update(p.TextDocument.URI, p.TextDocument.Text, true)
 		}
 	case "textDocument/didChange":
 		var p struct {
@@ -392,12 +427,12 @@ func (s *server) handle(m message) {
 			} `json:"contentChanges"`
 		}
 		if json.Unmarshal(m.Params, &p) == nil && len(p.ContentChanges) > 0 {
-			s.update(p.TextDocument.URI, p.ContentChanges[len(p.ContentChanges)-1].Text)
+			s.update(p.TextDocument.URI, p.ContentChanges[len(p.ContentChanges)-1].Text, false)
 		}
 	case "textDocument/didSave":
 		// 読み込んでいるファイルが変わったかもしれないので、開いているものを全部調べ直す
 		for uri, d := range s.docs {
-			s.update(uri, d.text)
+			s.update(uri, d.text, true)
 		}
 	case "textDocument/didClose":
 		var p struct {
@@ -453,6 +488,40 @@ func (s *server) handle(m message) {
 			return
 		}
 		s.reply(m.ID, r)
+	case "textDocument/codeAction":
+		var p struct {
+			TextDocument struct {
+				URI string `json:"uri"`
+			} `json:"textDocument"`
+			Context struct {
+				Diagnostics []struct {
+					Range  rng    `json:"range"`
+					Source string `json:"source"`
+					Code   any    `json:"code"`
+				} `json:"diagnostics"`
+			} `json:"context"`
+		}
+		_ = json.Unmarshal(m.Params, &p)
+		actions := []any{}
+		if d := s.docs[p.TextDocument.URI]; d != nil {
+			for _, g := range p.Context.Diagnostics {
+				rule, _ := g.Code.(string)
+				if g.Source != "点検" || rule == "" {
+					continue
+				}
+				r, text, ok := silenceEdit(d.lines, g.Range.Start.Line+1, rule)
+				if !ok {
+					continue
+				}
+				actions = append(actions, map[string]any{
+					"title": "この行の「" + rule + "」を黙らせる(# 点検しない)",
+					"kind":  "quickfix",
+					"edit": map[string]any{"changes": map[string]any{
+						p.TextDocument.URI: []any{map[string]any{"range": r, "newText": text}}}},
+				})
+			}
+		}
+		s.reply(m.ID, actions)
 	case "textDocument/documentSymbol":
 		var p struct {
 			TextDocument struct {
@@ -475,6 +544,7 @@ func main() {
 	}
 	setupLib()
 	s := &server{out: bufio.NewWriter(os.Stdout), docs: map[string]*document{}}
+	go s.prepareLint()
 	r := bufio.NewReader(os.Stdin)
 	for {
 		body, err := readMessage(r)
@@ -490,8 +560,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, "suru-ls: 読めないメッセージ:", err)
 			continue
 		}
+		s.mu.Lock()
 		s.handle(m)
 		s.out.(*bufio.Writer).Flush()
+		s.mu.Unlock()
 	}
 }
 

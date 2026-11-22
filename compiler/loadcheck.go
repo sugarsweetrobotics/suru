@@ -3,7 +3,11 @@
 
 package compiler
 
-import "sort"
+import (
+	"path/filepath"
+	"sort"
+	"strings"
+)
 
 // --- 定義の登録で見つかる間違い(suru.py の Interpreter.load_program と同じ順で調べる) ---
 
@@ -37,14 +41,26 @@ var netPrimitives = []builtinInfo{
 }
 
 // libPrimitives は lib/ のファイルごとの組み込み(suru.py の LIB_PRIMITIVES)
+// (同梱のものでも、LibDir(SURU_LIB)のフォルダから読んだものでも)
 func libPrimitives(path string) []builtinInfo {
-	switch path {
-	case StdPath:
+	switch {
+	case isLibFile(path, StdPath):
 		return stdPrimitives
-	case NetPath:
+	case isLibFile(path, NetPath):
 		return netPrimitives
 	}
 	return nil
+}
+
+// isLibFile は path が同梱の lib/ のファイル embedded(StdPath など)か、LibDir の同じ名前のファイルか
+func isLibFile(path, embedded string) bool {
+	if path == embedded {
+		return true
+	}
+	if LibDir == "" || strings.HasPrefix(path, embeddedLibPrefix) {
+		return false
+	}
+	return absPath(path) == absPath(filepath.Join(LibDir, strings.TrimPrefix(embedded, embeddedLibPrefix)))
 }
 
 const (
