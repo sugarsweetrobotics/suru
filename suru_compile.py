@@ -1,3 +1,9 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 sugarsweetrobotics
+#
+# 追加の許可(GPL 第7条): このコンパイラが出力する LLVM IR・オブジェクト・実行ファイルは、
+# 出力の中にこのコンパイラ由来の部分が含まれていても、GPL の対象にはなりません。
+# 出力は、元にした する のプログラムの作者が好きなライセンスで配れます。
 """「する」のコンパイラ: する のプログラムを LLVM IR にして、clang でバイナリにする。
 
     python3 suru_compile.py prog.suru            # → prog(実行ファイル)

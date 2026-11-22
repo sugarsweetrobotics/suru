@@ -328,6 +328,15 @@ n が 偶数である とは n % 2 が 0
 
 84. **pip で入れられる。** `pip install .`(または GitHub の URL)で `suru` コマンドが入ります。中身は `suru.py`・`suru_check.py`・`suru_compile.py` の3つのモジュールと、`suru_data/` に入れた `lib/` と `runtime/` です。リポジトリのまま `python3 suru.py` で動かす使い方も変わりません(`data_path` が、隣の `lib/` か `suru_data/lib/` を探します)。版は `suru.py` の `__version__` に書きます。パッケージ作りは hatchling(`python -m build` で wheel と sdist)。
 
+85. **ライセンスは2つに分ける。** インタプリタ・型検査・コンパイラ(`suru.py`・`suru_check.py`・`suru_compile.py`)は GPL-3.0-or-later(`LICENSE`)です。実行時ライブラリ(`runtime/`)と標準ライブラリ(`lib/`)は MIT(`runtime/LICENSE`・`lib/LICENSE`)です。この2つはコンパイルしたプログラムや する のプログラムに一緒に入るので、MIT にして、作ったプログラムに GPL が及ばないようにしています。
+
+## ライセンス
+
+- 本体(`suru.py`・`suru_check.py`・`suru_compile.py`): [GPL-3.0-or-later](LICENSE)
+- 実行時ライブラリ(`runtime/`)と標準ライブラリ(`lib/`): [MIT](runtime/LICENSE)
+
+自分で書いた する のプログラムと、`suru --翻訳` で作った LLVM IR・実行ファイルは、あなたのものです。好きなライセンスで配れます。コンパイラが出力に書き込む部分も GPL の対象にしない、という追加の許可を `suru_compile.py` の先頭に書いています(中に入る実行時ライブラリと標準ライブラリは MIT なので、その著作権表示を残すだけで足ります)。
+
 ## 今後の候補
 
 - 標準ライブラリの続き: 乱数、ファイルの読み書き、日付と時刻、並べる基準を渡す整列、「ないかもしれない値」の型
