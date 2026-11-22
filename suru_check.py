@@ -26,7 +26,7 @@ from suru import (
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
     PValue, Ref, RESULT, Run, Sequel, Str, SuruError, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
     HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, Import, Module, MODULE_SEP, SOURCE_SUFFIX, _where, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
-    parse_program, collect_runs, _run_key,
+    parse_program, collect_runs, _run_key, STD_PATH, GA,
 )
 
 # ---------------------------------------------------------------------------
@@ -343,6 +343,15 @@ class TEnv:
         return out
 
 
+class PrimRef:
+    """標準ライブラリの組み込み(「標準内の逆順にする」)。呼んだところで PRIM_CALLS の型の規則で調べる"""
+
+    __slots__ = ("name",)
+
+    def __init__(self, name: str):
+        self.name = name
+
+
 # ---------------------------------------------------------------------------
 # 依存関係(相互再帰する定義をまとめて推論するため)
 # ---------------------------------------------------------------------------
@@ -629,15 +638,18 @@ class Checker:
             self.solve(env)
         self.solve(env)
 
-    def check_unit(self, program: list) -> TEnv:
-        """1つのファイルの定義を推論して、その型の環境を返す"""
+    def check_unit(self, program: list, prims: dict | None = None) -> TEnv:
+        """1つのファイルの定義を推論して、その型の環境を返す。prims は標準ライブラリの組み込み"""
         local = TEnv(self.base)
+        local.vars.update(prims or {})
         for s in program:
             if isinstance(s, Import):
                 scope = self.check_module(s.module, s.line)
                 for name, v in scope.vars.items():
                     if not name.startswith("\0") and MODULE_SEP not in name:
                         local.vars[s.module.name + MODULE_SEP + name] = v
+                        if s.open:
+                            local.vars[name] = v
         defs = [s for s in program if isinstance(s, Define)]
         for s in program:
             if isinstance(s, TraitDecl):
@@ -670,7 +682,10 @@ class Checker:
         scope = self.checked.get(module.path)
         if scope is None:
             try:
-                scope = self.checked[module.path] = self.check_unit(module.program)
+                prims = {n: PrimRef(n) for n in PRIM_CALLS} if module.path == STD_PATH else None
+                scope = self.checked[module.path] = self.check_unit(module.program, prims)
+                for n, v in (prims or {}).items():
+                    scope.vars.setdefault(n, v)
                 self.solve(scope)
             except SuruError as e:
                 raise SuruError(f"「{module.name}{SOURCE_SUFFIX}」の{_where(e.line) if e.line else ''}: {e.message}",
@@ -982,6 +997,8 @@ class Checker:
 
     def infer_Var(self, node: Var, env: TEnv) -> Any:
         v = env.lookup(node.name)
+        if isinstance(v, PrimRef):
+            return PRIM_FUNS[v.name]()
         if v is not None:
             return self.inst(v, node.line)
         info = self.ctx.ctors.get(node.name)
@@ -1123,6 +1140,9 @@ class Checker:
 
     def call_type(self, name: str, args: dict, line: Any, env: TEnv) -> Any:
         v = env.lookup(name)
+        if isinstance(v, PrimRef):
+            self.env = env
+            return PRIM_CALLS[v.name](self, args, line)
         if v is not None:
             t = prune(self.inst(v, line, name))
             if isinstance(t, TFun):
@@ -1158,6 +1178,8 @@ class Checker:
     def fun_value(self, name: str, env: TEnv, line: Any) -> Any:
         """「三倍すること」の型"""
         v = env.lookup(name)
+        if isinstance(v, PrimRef):
+            return PRIM_FUNS[v.name]()
         if v is not None:
             return self.inst(v, line, name)
         if name in self.method_trait:
@@ -1431,6 +1453,17 @@ class Checker:
             self.unify_or(TFun([(WO, elem)], k), params["で"], line,
                           lambda sa, sb: f"「{method}」({tname}の実装)の「で」には{sb}が必要ですが、{sa}が渡されています")
         self.unify_or(out, impl.result, line, lambda sa, sb: f"「{method}」({tname}の実装)の値の型が合いません({sa} と {sb})")
+
+    def on_item(self, t: Any, c: Constraint, env: TEnv) -> bool:
+        """文字列かリストの要素: 文字列なら文字列(1文字)、リストなら要素の型"""
+        (item,) = c.extra
+        if isinstance(t, TCon) and t.name == "文字列":
+            self.unify_or(item, STR, c.line, lambda sa, sb: f"{c.message}の要素には{sb}が必要ですが、{sa}になっています")
+        elif isinstance(t, TCon) and t.name == "リスト":
+            self.unify_or(item, t.args[0], c.line, lambda sa, sb: f"{c.message}の要素には{sb}が必要ですが、{sa}になっています")
+        else:
+            raise self.err(f"{c.message}の「{c.method}」は文字列かリストです({show(t)[0]}になっています)", c.line)
+        return True
 
     def on_flatten(self, k: Any, c: Constraint, env: TEnv) -> bool:
         """動作の続きが返した値: 動作ならそれも行い、その結果が全体の結果になる"""
@@ -1734,6 +1767,96 @@ def _cons_fun():
 
 BUILTIN_FUNS["追加する"] = _cons_fun
 BUILTIN_FUNS["挿入する"] = _cons_fun
+
+
+# ---------------------------------------------------------------------------
+# 標準ライブラリの組み込み(「標準」を読み込んだときだけ「標準内の…」で使える)
+# ---------------------------------------------------------------------------
+
+PRIM_CALLS: dict = {}
+PRIM_FUNS: dict = {}
+
+
+def prim(name: str, parts: dict, fun: Any):
+    def deco(fn):
+        def typer(c: Checker, args: dict, line: Any) -> Any:
+            _check_parts(name, args, parts, line, c)
+            return fn(c, args, line)
+
+        PRIM_CALLS[name] = typer
+        PRIM_FUNS[name] = fun
+        return fn
+
+    return deco
+
+
+def _simple(name: str, params: list, result: Any) -> None:
+    """引数と値の型が決まっている組み込み"""
+    def fn(c, a, line):
+        for p, t in params:
+            _need(c, a, p, t, line, name)
+        return result
+
+    prim(name, {p: True for p, _ in params}, lambda: TFun(list(params), result))(fn)
+
+
+_simple("切捨する", [(WO, NUM)], NUM)
+_simple("平方根にする", [(WO, NUM)], NUM)
+_simple("範囲にする", [("から", NUM), (WO, NUM)], lst(NUM))
+_simple("文字分解する", [(WO, STR)], lst(STR))
+_simple("分割する", [(WO, STR), ("で", STR)], lst(STR))
+_simple("結合する", [(WO, lst(STR)), ("で", STR)], STR)
+_simple("置換する", [(WO, STR), ("から", STR), ("へ", STR)], STR)
+for _n in ("大文字にする", "小文字にする", "空白除去する"):
+    _simple(_n, [(WO, STR)], STR)
+for _n in ("先頭一致である", "末尾一致である"):
+    _simple(_n, [(GA, STR), ("で", STR)], BOOL)
+
+
+def _seq_fun():
+    a = TVar()
+    return TFun([(WO, a)], a)
+
+
+@prim("逆順にする", {WO: True}, _seq_fun)
+def _t_reverse(c, a, line):
+    c.need_kind(a[WO], ("文字列", "リスト"), line, "「逆順にする」の「を」は文字列かリスト")
+    return a[WO]
+
+
+def _slice(name):
+    def fn(c, a, line):
+        c.need_kind(a["から"], ("文字列", "リスト"), line, f"「{name}」の「から」は文字列かリスト")
+        _need(c, a, WO, NUM, line, name)
+        return a["から"]
+
+    def fun():
+        s = TVar()
+        return TFun([("から", s), (WO, NUM)], s)
+
+    prim(name, {"から": True, WO: True}, fun)(fn)
+
+
+_slice("先頭取得する")
+_slice("先頭削除する")
+
+
+def _item(c, seq, item, line, name, part):
+    c.post(Constraint(seq, line, message=f"「{name}」", method=part, op="item", extra=(item,)), c.env)
+
+
+@prim("番目取得する", {"から": True, WO: True}, lambda: (lambda e: TFun([("から", lst(e)), (WO, NUM)], e))(TVar()))
+def _t_nth(c, a, line):
+    _need(c, a, WO, NUM, line, "番目取得する")
+    item = TVar()
+    _item(c, a["から"], item, line, "番目取得する", "から")
+    return item
+
+
+@prim("含有である", {GA: True, WO: True}, lambda: (lambda e: TFun([(GA, lst(e)), (WO, e)], BOOL))(TVar()))
+def _t_contains(c, a, line):
+    _item(c, a[GA], a[WO], line, "含有である", "が")
+    return BOOL
 
 
 # ---------------------------------------------------------------------------
