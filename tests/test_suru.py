@@ -1213,3 +1213,76 @@ def test_通信のサーバーに答えてもらう():
         assert ask(port, head, body) == expected(head, body)
     t.join(10)
     assert not t.is_alive() and not errors
+
+
+# --- HTTP ---------------------------------------------------------------------
+
+HTTP_PURE = "「HTTP」 を 読み込む\n"
+
+
+def test_HTTPの応答文():
+    src = HTTP_PURE + "「あ」 を HTTP内の本文応答して HTTP内の応答文にする\n"
+    assert run(src) == ["HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 3\r\n"
+                        "Connection: close\r\n\r\nあ"]
+
+
+def test_HTTPの状態と見出し():
+    src = HTTP_PURE + "404 で 「無い」 を HTTP内の状態応答して HTTP内の応答文にする\n" \
+        "（「<p>」 を HTTP内のHTML応答する） に 「X-A」 と 「1」 を HTTP内の見出し追加して HTTP内の応答文にする\n"
+    out = run(src)
+    assert out[0].startswith("HTTP/1.1 404 Not Found\r\n")
+    assert "Content-Type: text/html; charset=utf-8\r\nX-A: 1\r\nContent-Length: 3\r\n" in out[1]
+
+
+def _serve_in_thread(src: str, out: list) -> None:
+    import threading
+
+    threading.Thread(target=lambda: Interpreter(out=out.append).run(src), daemon=True).start()
+
+
+def test_HTTPのサーバー():
+    from net_helper import HTTP_SERVER, free_port, http, wait_http
+
+    port = free_port()
+    _serve_in_thread(HTTP_SERVER.replace("PORT", str(port)), [])
+    wait_http(port)
+    status, headers, body = http(port)
+    assert (status, body, headers["Content-Type"]) == (200, "こんにちは", "text/plain; charset=utf-8")
+    assert http(port, "/zz?q=1")[::2] == (404, "見つかりません: /zz?q=1")
+
+
+def test_HTTPのサーバーは動作でも答える():
+    from net_helper import HTTP_ACTION_SERVER, free_port, http, wait_http
+
+    port = free_port()
+    out: list = []
+    _serve_in_thread(HTTP_ACTION_SERVER.replace("PORT", str(port)), out)
+    wait_http(port)
+    assert http(port, "/post", "本文です", {"X-Name": "taro"})[::2] == (200, "本文です/taro")
+    assert out[-1] == "POST /post"
+
+
+def test_試行するは失敗したら代わりを行う(capsys):
+    # 失敗は動作を行っている途中(手順の中)で起きる。試行する の引数を作るときのエラーは止まる
+    src = "「標準」 を 読み込んで 使う\n" \
+        "x を 壊すする とは 手順\n  「前」 を 表示する\n  空 の 先頭 を 表示する\n" \
+        "（1 を 壊すする） を （「代わり」 を 表示する） で 試行してから 表示する\n" \
+        "（「ok」 を 表示する） を （「x」 を 表示する） で 試行する\n" \
+        "（1 を 壊すする） を （「pure」 を 結果にする） で 試行してから 表示する\n"
+    assert _io(src)[0] == ["前", "代わり", "代わり", "ok", "前", "pure"]
+    assert capsys.readouterr().err.count("空のリストに「先頭」はありません") == 2
+
+
+def test_試行するには動作を渡す():
+    with pytest.raises(SuruError, match="試行する"):
+        run("「標準」 を 読み込んで 使う\n（「a」 を 表示する） を 1 で 試行する\n")
+
+
+def test_HTTPのサーバーは失敗しても止まらない():
+    from net_helper import HTTP_SERVER, abuse, free_port, http, wait_http
+
+    port = free_port()
+    _serve_in_thread(HTTP_SERVER.replace("PORT", str(port)), [])
+    wait_http(port)
+    abuse(port)
+    assert http(port)[::2] == (200, "こんにちは")

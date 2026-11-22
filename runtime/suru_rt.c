@@ -15,6 +15,7 @@
 #include <errno.h>
 #include <math.h>
 #include <pthread.h>
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -24,6 +25,7 @@
 #include <netinet/in.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 typedef int64_t V;
@@ -59,7 +61,7 @@ typedef struct Fn {
     struct Trait *trait;    /* FK_TRAIT */
     int32_t wo, wo_list;
 } Fn;
-enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE };
+enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
@@ -152,6 +154,10 @@ static int display_width(const char *s, size_t n) {
     return w;
 }
 
+/* 「試行する」の中なら、実行時エラーで止まらずに代わりの動作へ戻る */
+typedef struct TryFrame { jmp_buf jb; struct TryFrame *prev; } TryFrame;
+static TryFrame *try_top;
+
 __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
     fflush(stdout);
     int line = pos & 0xfffff, col = (pos >> 20) & 0x7ff;
@@ -162,6 +168,15 @@ __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
         else buf_printf(&b, "%d行目: ", line);
     }
     buf_cat(&b, msg);
+    if (try_top) {
+        /* 試行する の中: エラーの文だけを書いて、代わりの動作へ */
+        fprintf(stderr, "%s\n", b.s);
+        fflush(stderr);
+        free(b.s);
+        TryFrame *f = try_top;
+        try_top = f->prev;
+        longjmp(f->jb, 1);
+    }
     /* 該当する行と位置の印 */
     if (line) {
         const char *p = source_text;
@@ -1013,6 +1028,17 @@ static V act_run(Act *a) {
     }
     case A_LISTEN: case A_ACCEPT: case A_RECVLINE: case A_RECV: case A_SEND: case A_CLOSE:
         return net_run(a);
+    case A_TRY: {
+        TryFrame f;
+        f.prev = try_top;
+        try_top = &f;
+        if (setjmp(f.jb) == 0) {
+            V r = perform(a->a);
+            try_top = f.prev;
+            return r;
+        }
+        return perform(a->b); /* fail_msg が try_top を戻している */
+    }
     case A_RUNALL: {
         List *l = AS(List, a->a);
         if (l->n == 0) return V_EMPTY;
@@ -1627,6 +1653,9 @@ static V net_run(Act *a) {
         int fd;
         do fd = accept(s->fd, NULL, NULL); while (fd < 0 && errno == EINTR);
         if (fd < 0) net_fail(a);
+        struct timeval tv = {5, 0}; /* 何も送ってこない相手で止まらないように(インタプリタの NET_TIMEOUT と同じ) */
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
         return mk_int(sock_add(fd), pos);
     }
     case A_RECVLINE: case A_RECV: {
@@ -1693,6 +1722,14 @@ static V mk_net(int kind, const char *name, V x, V y, int32_t pos) {
     AS(Act, v)->pos = pos;
     return v;
 }
+BI(s_try) { /* を, で */
+    const char *parts[2] = {"を", "で"};
+    for (int i = 0; i < 2; i++) {
+        int t = TAG(a[i]);
+        if (t != T_ACT && t != T_PURE) fail(pos, "「試行する」の「%s」は動作でなければなりません(「%s」が渡されました)", parts[i], plain(a[i]).s);
+    }
+    return mk_act(A_TRY, "試行する", a[0], a[1]);
+}
 BI(n_listen) { return mk_net(A_LISTEN, "待受開始する", a[0], 0, pos); }
 BI(n_accept) { return mk_net(A_ACCEPT, "接続受付する", a[0], 0, pos); }
 BI(n_recvline) { return mk_net(A_RECVLINE, "行受信する", a[0], 0, pos); }
@@ -1745,6 +1782,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"バイト数にする", 1, P1_WO, NULL, s_bytes},
     {"文字にする", 1, P1_WO, NULL, s_chr},
     {"文字コードにする", 1, P1_WO, NULL, s_ord},
+    {"試行する", 2, P2_WO_DE, NULL, s_try},
     /* 「通信」の組み込み */
     {"待受開始する", 1, P1_WO, NULL, n_listen},
     {"接続受付する", 1, P1_KARA, NULL, n_accept},

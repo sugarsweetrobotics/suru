@@ -1817,6 +1817,14 @@ for _n in ("先頭一致である", "末尾一致である"):
 _simple("バイト数にする", [(WO, STR)], NUM)
 _simple("文字にする", [(WO, NUM)], STR)
 _simple("文字コードにする", [(WO, STR)], NUM)
+
+
+@prim("試行する", {WO: True, "で": True}, lambda: (lambda x: TFun([(WO, act(x)), ("で", act(x))], act(x)))(TVar()))
+def _t_try(c, a, line):
+    x = TVar()
+    _need(c, a, WO, act(x), line, "試行する")
+    _need(c, a, "で", act(x), line, "試行する")
+    return act(x)
 # 通信(「通信」の組み込み)。待受口と接続は番号
 _simple("待受開始する", [(WO, NUM)], act(NUM))
 _simple("接続受付する", [("から", NUM)], act(NUM))
