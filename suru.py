@@ -2871,6 +2871,9 @@ def apply_op(op: str, a: Any, b: Any, line: int) -> Any:
         return a != b
     if op == "+" and isinstance(a, tuple) and isinstance(b, tuple):
         return a + b
+    if op in ("<", ">", "<=", ">=") and isinstance(a, str) and isinstance(b, str):
+        # 文字列どうしは文字の番号の順(辞書順)で比べる
+        return {"<": a < b, ">": a > b, "<=": a <= b, ">=": a >= b}[op]
     if op == "+" and (isinstance(a, str) or isinstance(b, str)):
         return format_value(a) + format_value(b)
     a, b = _num(a, line), _num(b, line)

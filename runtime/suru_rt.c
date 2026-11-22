@@ -998,6 +998,19 @@ V rt_binop(int32_t op, V a, V b, int32_t pos) {
         free(y.s);
         return buf_str(&x);
     }
+    if (op >= OP_LT && op <= OP_GE && TAG(a) == T_STR && TAG(b) == T_STR) {
+        /* 文字列どうしは文字の番号の順(辞書順)。UTF-8 のバイトの順は文字の番号の順と同じ */
+        Str *x = AS(Str, a), *y = AS(Str, b);
+        int64_t m = x->n < y->n ? x->n : y->n;
+        int c = memcmp(x->s, y->s, (size_t)m);
+        if (c == 0) c = (x->n > y->n) - (x->n < y->n);
+        switch (op) {
+        case OP_LT: return rt_bool(c < 0);
+        case OP_GT: return rt_bool(c > 0);
+        case OP_LE: return rt_bool(c <= 0);
+        default: return rt_bool(c >= 0);
+        }
+    }
     need_num(a, pos);
     need_num(b, pos);
     if (IS_INT(a) && IS_INT(b)) {
