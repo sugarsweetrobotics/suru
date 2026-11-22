@@ -1062,8 +1062,8 @@ class Checker:
             self.unify_or(a, b, node.line, lambda sa, sb: f"{sa} と {sb} は比べられません(同じ型どうしで比べてください)")
             return BOOL
         if op in ("<", ">", "<=", ">="):
-            self.expect(a, NUM, node.line, f"「{op}」の左")
-            self.expect(b, NUM, node.line, f"「{op}」の右")
+            self.unify_or(a, b, node.line, lambda sa, sb: f"「{op}」の両側の型が違います({sa} と {sb})。同じ型どうしで比べてください")
+            self.need_kind(a, ("数", "文字列"), node.line, f"「{op}」で比べられるのは数・文字列")
             return BOOL
         if op == "+":
             self.unify_or(

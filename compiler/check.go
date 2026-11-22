@@ -1370,8 +1370,10 @@ func (c *Checker) inferBinOp(n *BinOp, env *TEnv) Type {
 		})
 		return BOOL
 	case "<", ">", "<=", ">=":
-		c.expect(a, NUM, n.Line, "「"+op+"」の左")
-		c.expect(b, NUM, n.Line, "「"+op+"」の右")
+		c.unifyOr(a, b, n.Line, func(sa, sb string) string {
+			return "「" + op + "」の両側の型が違います(" + sa + " と " + sb + ")。同じ型どうしで比べてください"
+		})
+		c.needKind(a, []string{"数", "文字列"}, n.Line, "「"+op+"」で比べられるのは数・文字列")
 		return BOOL
 	case "+":
 		c.unifyOr(a, b, n.Line, func(sa, sb string) string {
