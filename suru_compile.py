@@ -46,6 +46,7 @@ declare double @rt_ffi_f64(i64, ptr, i32, i32)
 declare i32 @rt_ffi_bool(i64, ptr, i32, i32)
 declare ptr @rt_ffi_str(i64, ptr, i32, i32)
 declare ptr @rt_ffi_ptr(i64, ptr, i32, i32)
+declare ptr @rt_ffi_fnptr(i64, ptr, i32, i32)
 declare ptr @rt_ffi_bytes(i64, ptr, i32, i32)
 declare void @rt_ffi_pre()
 declare void @rt_ffi_post()
@@ -608,19 +609,24 @@ class Compiler:
             if lib not in self.link_libs:
                 self.link_libs.append(lib)
         ret = FFI_IR[ext.result]
-        decl = f"declare {ret} @{ext.symbol}({', '.join(FFI_IR[t] for t in ext.params)})"
-        if self.ffi_decls.setdefault(ext.symbol, decl) != decl:
-            raise S.SuruError(f"外部の関数「{ext.symbol}」が違う型で2回宣言されています", ext.line)
+        if not ext.pointer:
+            decl = f"declare {ret} @{ext.symbol}({', '.join(FFI_IR[t] for t in ext.params)})"
+            if self.ffi_decls.setdefault(ext.symbol, decl) != decl:
+                raise S.SuruError(f"外部の関数「{ext.symbol}」が違う型で2回宣言されています", ext.line)
         fname = self.cstr(name)
 
         def call(sc: Scope, fg: FnGen) -> str:
             args = []
+            fn = f"@{ext.symbol}"
             for (p, x), t in zip(params, ext.params):
                 v = self.var_value(x, sc, fg, ext.line)
+                if x == ext.pointer:
+                    fn = fg.call("ptr", "@rt_ffi_fnptr", f"i64 {v}, ptr {fname}, i32 {PART_IDS[p]}, i32 %pos")
+                    continue
                 c = fg.call(FFI_IR[t], f"@rt_ffi_{t}", f"i64 {v}, ptr {fname}, i32 {PART_IDS[p]}, i32 %pos")
                 args.append(f"{FFI_IR[t]} {c}")
             fg.call("void", "@rt_ffi_pre", "")
-            r = fg.call(ret, f"@{ext.symbol}", ", ".join(args))
+            r = fg.call(ret, fn, ", ".join(args))
             fg.call("void", "@rt_ffi_post", "")
             if ext.result == "void":
                 return "1"  # 数の 0

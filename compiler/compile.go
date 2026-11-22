@@ -38,6 +38,7 @@ declare double @rt_ffi_f64(i64, ptr, i32, i32)
 declare i32 @rt_ffi_bool(i64, ptr, i32, i32)
 declare ptr @rt_ffi_str(i64, ptr, i32, i32)
 declare ptr @rt_ffi_ptr(i64, ptr, i32, i32)
+declare ptr @rt_ffi_fnptr(i64, ptr, i32, i32)
 declare ptr @rt_ffi_bytes(i64, ptr, i32, i32)
 declare void @rt_ffi_pre()
 declare void @rt_ffi_post()
@@ -827,22 +828,29 @@ func (c *Compiler) externBody(name string, params []Param, ext *Extern) genBody 
 	for i, t := range ext.Params {
 		ps[i] = ffiIR[t]
 	}
-	decl := "declare " + ret + " @" + ext.Symbol + "(" + strings.Join(ps, ", ") + ")"
-	if prev, ok := c.ffiDecls[ext.Symbol]; ok && prev != decl {
-		raise(ext.Line, "外部の関数「"+ext.Symbol+"」が違う型で2回宣言されています")
+	if ext.Pointer == "" {
+		decl := "declare " + ret + " @" + ext.Symbol + "(" + strings.Join(ps, ", ") + ")"
+		if prev, ok := c.ffiDecls[ext.Symbol]; ok && prev != decl {
+			raise(ext.Line, "外部の関数「"+ext.Symbol+"」が違う型で2回宣言されています")
+		}
+		c.ffiDecls[ext.Symbol] = decl
 	}
-	c.ffiDecls[ext.Symbol] = decl
 	fname := c.cstr(name)
 	call := func(sc *scope, fg *fnGen) string {
-		args := make([]string, len(params))
+		var args []string
+		fn := "@" + ext.Symbol
 		for i, p := range params {
 			t := ext.Params[i]
 			v := c.varValue(p.Name, sc, fg, ext.Line)
+			if p.Name == ext.Pointer {
+				fn = fg.call("ptr", "@rt_ffi_fnptr", fmt.Sprintf("i64 %s, ptr %s, i32 %d, i32 %%pos", v, fname, partIDs[p.Part]))
+				continue
+			}
 			cv := fg.call(ffiIR[t], "@rt_ffi_"+t, fmt.Sprintf("i64 %s, ptr %s, i32 %d, i32 %%pos", v, fname, partIDs[p.Part]))
-			args[i] = ffiIR[t] + " " + cv
+			args = append(args, ffiIR[t]+" "+cv)
 		}
 		fg.call("void", "@rt_ffi_pre", "")
-		r := fg.call(ret, "@"+ext.Symbol, strings.Join(args, ", "))
+		r := fg.call(ret, fn, strings.Join(args, ", "))
 		fg.call("void", "@rt_ffi_post", "")
 		switch ext.Result {
 		case "void":

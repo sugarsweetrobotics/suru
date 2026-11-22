@@ -2363,6 +2363,12 @@ void *rt_ffi_ptr(V v, const char *fname, int32_t part, int32_t pos) {
     return AS(Addr, v)->p;
 }
 
+/* 「外部の（f）」: 引数 f の番地にある関数を呼ぶ(NULL なら実行時エラー) */
+void *rt_ffi_fnptr(V v, const char *fname, int32_t part, int32_t pos) {
+    if (TAG(v) != T_ADDR || AS(Addr, v)->p == NULL) ffi_bad(v, fname, part, "関数の番地", pos);
+    return AS(Addr, v)->p;
+}
+
 V rt_ffi_from_i64(int64_t n, const char *fname, int32_t pos) {
     if (n > INT_MAX62 || n < INT_MIN62)
         fail(pos, "外部の関数「%s」の値 %lld が大きすぎます(整数は ±%lld までです)", fname, (long long)n, (long long)INT_MAX62);
