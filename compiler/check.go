@@ -36,7 +36,7 @@ func pruneIsRecord(t Type) bool {
 		return false
 	}
 	switch c.Name {
-	case "数", "文字列", "真偽", "リスト", "動作", "番地":
+	case "数", "文字列", "真偽", "リスト", "動作", "番地", "バイト列":
 		return false
 	}
 	return true

@@ -112,14 +112,16 @@ func (t *TypeMap) Update(o *TypeMap) {
 }
 
 // 小数・整数は数の別名(外部の関数の宣言で C の double・int を表す)。番地は C のポインタ
-var builtinTypes = []string{"数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地"}
+// 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
+var builtinTypes = []string{"数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無"}
 
 // KwExtern は外部の関数・ライブラリの印
 const KwExtern = "外部の"
 
 // ffiTypeNames は外部の関数に渡せる型(書く順)と C の型
-var ffiTypeNames = []string{"数", "小数", "整数", "真偽", "文字列", "番地"}
-var ffiTypes = map[string]string{"数": "i64", "小数": "f64", "整数": "i32", "真偽": "bool", "文字列": "str", "番地": "ptr"}
+var ffiTypeNames = []string{"数", "小数", "整数", "真偽", "文字列", "番地", "バイト列", "無"}
+var ffiTypes = map[string]string{"数": "i64", "小数": "f64", "整数": "i32", "真偽": "bool", "文字列": "str", "番地": "ptr",
+	"バイト列": "bytes", "無": "void"}
 var builtinTypeSet = setOf(builtinTypes...)
 
 const typeVarNames = "甲乙丙丁戊己庚辛壬癸"
@@ -1820,7 +1822,7 @@ func typeWord(t *Token, args []Node) Node {
 		}
 		return &TypeVarName{name}
 	}
-	if (name == "数" || name == "文字列" || name == "真偽" || name == "小数" || name == "整数" || name == "番地") && len(args) > 0 {
+	if (name == "数" || name == "文字列" || name == "真偽" || name == "小数" || name == "整数" || name == "番地" || name == "バイト列" || name == "無") && len(args) > 0 {
 		raise(t.Line, "「"+name+"」は型の引数をとりません")
 	}
 	if (name == "リスト" || name == "動作") && len(args) != 1 {
@@ -2180,12 +2182,22 @@ func externLibTarget(node *LNode, ctx *ParseContext) *ExternLib {
 }
 
 func ffiType(te Node, sig *TypeSig, what string) string {
+	skip := "void"
+	if what == "値" {
+		skip = "bytes"
+	}
+	var names []string
+	for _, n := range ffiTypeNames {
+		if ffiTypes[n] != skip {
+			names = append(names, n)
+		}
+	}
 	if tn, ok := te.(*TypeName); ok && len(tn.Args) == 0 {
-		if t, ok := ffiTypes[tn.Name]; ok {
+		if t, ok := ffiTypes[tn.Name]; ok && t != skip {
 			return t
 		}
 	}
-	raise(sig.Line, "外部の関数「"+sig.Name+"」の"+what+"には "+strings.Join(ffiTypeNames, "・")+" のどれかの型を書いてください")
+	raise(sig.Line, "外部の関数「"+sig.Name+"」の"+what+"には "+strings.Join(names, "・")+" のどれかの型を書いてください")
 	return ""
 }
 

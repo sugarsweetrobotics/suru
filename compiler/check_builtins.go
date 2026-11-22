@@ -202,6 +202,24 @@ func init() {
 	simple("バイト数にする", []TParam{{WO, STR}}, NUM)
 	simple("文字にする", []TParam{{WO, NUM}}, STR)
 	simple("文字コードにする", []TParam{{WO, STR}}, NUM)
+	// バイト列と、外部の関数とのやりとり
+	addr, bytesT := &TCon{Name: "番地"}, &TCon{Name: "バイト列"}
+	simple("バイト列にする", []TParam{{WO, STR}}, bytesT)
+	simple("バイト列組立する", []TParam{{WO, lst(NUM)}}, bytesT)
+	simple("数列にする", []TParam{{WO, bytesT}}, lst(NUM))
+	simple("文字列にする", []TParam{{WO, bytesT}}, STR)
+	simple("バイト長にする", []TParam{{WO, bytesT}}, NUM)
+	simple("番地にする", []TParam{{WO, NUM}}, addr)
+	simple("番地数値にする", []TParam{{WO, addr}}, NUM)
+	simple("バイト列取得する", []TParam{{"から", addr}, {WO, NUM}}, act(bytesT))
+	simple("書込する", []TParam{{WO, bytesT}, {"へ", addr}}, act(NUM))
+	simple("エラー番号取得する", nil, act(NUM))
+	prim("失敗する", []partReq{req(WO)}, func() Type {
+		return &TFun{[]TParam{{WO, STR}}, act(newTVar())}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		need(c, a, WO, STR, line, "失敗する")
+		return act(newTVar())
+	})
 	prim("試行する", []partReq{req(WO), req("で")}, func() Type {
 		x := newTVar()
 		return &TFun{[]TParam{{WO, act(x)}, {"で", act(x)}}, act(x)}
