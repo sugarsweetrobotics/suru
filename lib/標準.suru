@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
 # 「する」の標準ライブラリ
 # 使うファイルに 「標準」 を 読み込む と書き、標準内の逆順にする のように「標準内の」を付けて使います。
 #

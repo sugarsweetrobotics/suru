@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 sugarsweetrobotics
+
 // Package suru は、Go 版コンパイラ(cmd/suruc)に同梱する標準ライブラリと実行時ライブラリを持つ。
 package suru
 

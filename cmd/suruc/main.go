@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 sugarsweetrobotics
+
 // suruc は「する」のコンパイラ(Go 版)。する のプログラムを LLVM IR にして、clang でバイナリにする。
 //
 //	suruc prog.suru            # → prog(実行ファイル)

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 sugarsweetrobotics
+
 package compiler
 
 // --- 構文木(suru.py の「構文木」と同じ) ---

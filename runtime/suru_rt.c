@@ -1,3 +1,7 @@
+/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 sugarsweetrobotics
+ * (コンパイルしたプログラムに一緒に入るので、本体の GPL ではなく MIT です。runtime/LICENSE)
+ */
 /*
  * 「する」のコンパイラが出す LLVM IR と一緒にリンクする実行時ライブラリ。
  * インタプリタ(suru.py)の Interpreter と同じ動きをするように書いている。

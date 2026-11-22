@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 sugarsweetrobotics
+
 package compiler
 
 // CompileSource は する のプログラムを LLVM IR の文字列にする。間違いがあれば *SuruError

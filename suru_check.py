@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 sugarsweetrobotics
 """「する」の静的な型検査
 
 型を書かなくても、実行する前に型の間違いを見つける。Hindley–Milner の型推論を、

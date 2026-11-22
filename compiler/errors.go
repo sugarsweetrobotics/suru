@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 sugarsweetrobotics
+
 // Package compiler は「する」のコンパイラ(字句解析・構文解析・型検査・LLVM IR の生成)。
 // Python 版(suru.py / suru_check.py / suru_compile.py)と同じ結果になるように書いている。
 package compiler

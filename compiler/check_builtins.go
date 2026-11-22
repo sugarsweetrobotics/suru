@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (c) 2026 sugarsweetrobotics
+
 package compiler
 
 // --- 組み込み関数の型(suru_check.py と同じ) ---
