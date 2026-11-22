@@ -30,7 +30,8 @@ import suru as S
 RUNTIME = S.data_path("runtime", "suru_rt.c")
 
 # 外部の関数の C の型 → LLVM IR の型
-FFI_IR = {"i64": "i64", "f64": "double", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr"}
+FFI_IR = {"i64": "i64", "f64": "double", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr", "bytes": "ptr",
+          "void": "void"}
 LINK_MARK = "; suru-link: "  # IR の中の、リンクするライブラリの印(build が読む)
 PART_IDS = {"を": 0, "に": 1, "で": 2, "から": 3, "へ": 4, "より": 5, "が": 6}
 OPS = {"+": 0, "-": 1, "*": 2, "/": 3, "%": 4, "^": 5, "<": 6, ">": 7, "<=": 8, ">=": 9, "==": 10, "!=": 11}
@@ -45,6 +46,9 @@ declare double @rt_ffi_f64(i64, ptr, i32, i32)
 declare i32 @rt_ffi_bool(i64, ptr, i32, i32)
 declare ptr @rt_ffi_str(i64, ptr, i32, i32)
 declare ptr @rt_ffi_ptr(i64, ptr, i32, i32)
+declare ptr @rt_ffi_bytes(i64, ptr, i32, i32)
+declare void @rt_ffi_pre()
+declare void @rt_ffi_post()
 declare i64 @rt_ffi_from_i64(i64, ptr, i32)
 declare i64 @rt_ffi_from_i32(i32)
 declare i64 @rt_ffi_from_bool(i32)
@@ -613,7 +617,11 @@ class Compiler:
                 v = self.var_value(x, sc, fg, ext.line)
                 c = fg.call(FFI_IR[t], f"@rt_ffi_{t}", f"i64 {v}, ptr {fname}, i32 {PART_IDS[p]}, i32 %pos")
                 args.append(f"{FFI_IR[t]} {c}")
+            fg.call("void", "@rt_ffi_pre", "")
             r = fg.call(ret, f"@{ext.symbol}", ", ".join(args))
+            fg.call("void", "@rt_ffi_post", "")
+            if ext.result == "void":
+                return "1"  # 数の 0
             if ext.result == "i64":
                 return fg.call("i64", "@rt_ffi_from_i64", f"i64 {r}, ptr {fname}, i32 %pos")
             if ext.result == "f64":

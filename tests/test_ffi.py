@@ -194,3 +194,99 @@ def test_作っただけの動作では呼ばない(libdir):
     suru._FFI_LIBS.clear()
     src = DECLS + "未実行 とは 7 を 加算記録する\n（未実行） と 1\n3 を 加算記録してから 表示する\n"
     assert interpreted(src, str(libdir)).endswith("3\n")
+
+
+# --- バイト列・番地とのやりとり・失敗(段階2) ---
+
+MEMORY = """外部の「c」 を 読み込む
+「標準」 を 読み込んで 使う
+数 を 確保する は 番地 の 動作
+n を 確保する とは 外部の「malloc」
+番地 を 解放する は 無 の 動作
+p を 解放する とは 外部の「free」
+バイト列 を 数 で 合計計算する は 数
+b を n で 合計計算する とは 外部の「cs_sum」
+
+b とは 「あい」 を バイト列にする
+b
+b を 数列にする
+b を バイト長にする
+b を 文字列にする
+（65 と 66 と 0 と 255） を バイト列組立する
+（「あい」 を バイト列にする） = b
+（「」 を バイト列にする） を バイト長にする
+16 を 番地にする
+（16 を 番地にする） を 番地数値にする
+試す とは 手順
+  p とは 16 を 確保した 結果
+  n とは b を p へ 書込した 結果
+  c とは p から n を バイト列取得した 結果
+  c を 文字列にして 表示する
+  p を 解放した 結果 を 表示する
+試す
+"""
+
+MEMORY_EXPECTED = ("バイト列（e3 81 82 e3 81 84）\n（227 と 129 と 130 と 227 と 129 と 132）\n6\nあい\n"
+                   "バイト列（41 42 00 ff）\n真\n0\n番地(0x10)\n16\nあい\n0\n")
+
+SUM_C = r"""
+#include <stdint.h>
+int64_t cs_sum(const uint8_t *b, int64_t n) { int64_t s = 0; for (int64_t i = 0; i < n; i++) s += b[i]; return s; }
+"""
+
+FAILS = [
+    "「標準」 を 読み込んで 使う\n（1 と 256） を バイト列組立する\n",
+    "「標準」 を 読み込んで 使う\n（「ff」 を バイト列にする） を 文字列にする\n（（255 と 254） を バイト列組立する） を 文字列にする\n",
+    "「標準」 を 読み込んで 使う\n-1 を 番地にする\n",
+    "「標準」 を 読み込んで 使う\n（0 を 番地にする） から 4 を バイト列取得する\n",
+    "「標準」 を 読み込んで 使う\n（「a」 を バイト列にする） を （0 を 番地にする） へ 書込する\n",
+    "「標準」 を 読み込んで 使う\n「だめです」 を 失敗する\n",
+    "外部の「c」 を 読み込む\n「標準」 を 読み込んで 使う\n文字列 を 整数 で 開封する は 整数 の 動作\n"
+    "道 を 方法 で 開封する とは 外部の「open」\n（「/no/such/file」 を 0 で 開封する） を 「開くの」 で 失敗確認する\n",
+]
+
+
+def test_バイト列と番地():
+    assert interpreted(MEMORY.replace("バイト列 を 数 で 合計計算する は 数\nb を n で 合計計算する とは 外部の「cs_sum」\n", ""),
+                       str(ROOT)) == MEMORY_EXPECTED
+
+
+@needs_cc
+@pytest.mark.skipif(suru_compile.find_cc() is None, reason="clang がありません")
+def test_バイト列と番地をバイナリでも(tmp_path):
+    src = MEMORY.replace("バイト列 を 数 で 合計計算する は 数\nb を n で 合計計算する とは 外部の「cs_sum」\n", "")
+    r = compiled(src, str(tmp_path))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == MEMORY_EXPECTED
+
+
+@needs_cc
+def test_バイト列をCに渡す(tmp_path):
+    cc = shutil.which("cc") or shutil.which("clang")
+    (tmp_path / "s.c").write_text(SUM_C, encoding="utf-8")
+    subprocess.run([cc, "-shared", "-fPIC", "-o", str(tmp_path / "libsum.so"), str(tmp_path / "s.c")], check=True)
+    src = ("外部の「./libsum.so」 を 読み込む\n「標準」 を 読み込んで 使う\nバイト列 を 数 で 合計計算する は 数\n"
+           "b を n で 合計計算する とは 外部の「cs_sum」\n（（1 と 2 と 250） を バイト列組立する） を 3 で 合計計算する\n")
+    assert interpreted(src, str(tmp_path)) == "253\n"
+    if suru_compile.find_cc() is not None:
+        r = compiled(src, str(tmp_path))
+        assert r.stdout == "253\n", r.stderr
+
+
+def test_失敗の文はインタプリタとバイナリで同じ(tmp_path):
+    for src in FAILS:
+        it = suru.Interpreter(out=lambda s: None)
+        it.ctx.base_dir = str(tmp_path)
+        with pytest.raises(SuruError) as info:
+            it.run(src)
+        want = info.value.message
+        if suru_compile.find_cc() is not None:
+            r = compiled(src, str(tmp_path), check=False)
+            assert r.returncode == 1
+            assert want in r.stderr, (src, want, r.stderr)
+    assert want == "開くのに失敗しました(No such file or directory)"
+
+
+def test_値と引数に使えない型():
+    assert "のどれかの型を書いてください" in err("バイト列 を 甲する は バイト列\nx を 甲する とは 外部の「abs」\n")
+    assert "のどれかの型を書いてください" in err("無 を 甲する は 数\nx を 甲する とは 外部の「abs」\n")

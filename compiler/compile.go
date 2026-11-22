@@ -18,7 +18,8 @@ import (
 // --- LLVM IR の生成(suru_compile.py と同じ IR を出す) ---
 
 // ffiIR は外部の関数の C の型 → LLVM IR の型
-var ffiIR = map[string]string{"i64": "i64", "f64": "double", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr"}
+var ffiIR = map[string]string{"i64": "i64", "f64": "double", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr", "bytes": "ptr",
+	"void": "void"}
 
 // LinkMark は IR の中の、リンクするライブラリの印(ビルドで読む)
 const LinkMark = "; suru-link: "
@@ -37,6 +38,9 @@ declare double @rt_ffi_f64(i64, ptr, i32, i32)
 declare i32 @rt_ffi_bool(i64, ptr, i32, i32)
 declare ptr @rt_ffi_str(i64, ptr, i32, i32)
 declare ptr @rt_ffi_ptr(i64, ptr, i32, i32)
+declare ptr @rt_ffi_bytes(i64, ptr, i32, i32)
+declare void @rt_ffi_pre()
+declare void @rt_ffi_post()
 declare i64 @rt_ffi_from_i64(i64, ptr, i32)
 declare i64 @rt_ffi_from_i32(i32)
 declare i64 @rt_ffi_from_bool(i32)
@@ -835,8 +839,12 @@ func (c *Compiler) externBody(name string, params []Param, ext *Extern) genBody 
 			cv := fg.call(ffiIR[t], "@rt_ffi_"+t, fmt.Sprintf("i64 %s, ptr %s, i32 %d, i32 %%pos", v, fname, partIDs[p.Part]))
 			args[i] = ffiIR[t] + " " + cv
 		}
+		fg.call("void", "@rt_ffi_pre", "")
 		r := fg.call(ret, "@"+ext.Symbol, strings.Join(args, ", "))
+		fg.call("void", "@rt_ffi_post", "")
 		switch ext.Result {
+		case "void":
+			return "1" // 数の 0
 		case "i64":
 			return fg.call("i64", "@rt_ffi_from_i64", fmt.Sprintf("i64 %s, ptr %s, i32 %%pos", r, fname))
 		case "f64":
