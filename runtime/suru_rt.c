@@ -36,7 +36,8 @@ typedef struct { int32_t tag; } Hdr;
 typedef struct { int32_t tag; double d; } Flt;
 typedef struct { int32_t tag; int32_t b; } Bool;
 typedef struct { int32_t tag; int64_t n; int64_t ncp; char s[]; } Str;
-typedef struct { int32_t tag; int64_t n; V it[]; } List;
+/* リストは変更しない。it は自分の data か、別のリストの data の途中(「残り」などの切り出し)を指す */
+typedef struct { int32_t tag; int64_t n; V *it; V data[]; } List;
 typedef struct { int32_t tag; void *p; } Addr; /* 番地: 外部の関数とやりとりする C のポインタ */
 typedef struct { int32_t tag; int64_t n; uint8_t d[]; } Bytes; /* バイト列(変更しない) */
 typedef struct Ctor {
@@ -522,7 +523,7 @@ __attribute__((noreturn)) void rt_fail(const char *msg, int32_t pos) { fail_msg(
 static Bool TRUE_OBJ = {T_BOOL, 1}, FALSE_OBJ = {T_BOOL, 0};
 #define V_TRUE ((V)(intptr_t)&TRUE_OBJ)
 #define V_FALSE ((V)(intptr_t)&FALSE_OBJ)
-static List EMPTY_OBJ = {T_LIST, 0};
+static List EMPTY_OBJ = {T_LIST, 0, NULL};
 #define V_EMPTY ((V)(intptr_t)&EMPTY_OBJ)
 
 V rt_bool(int32_t b) { return b ? V_TRUE : V_FALSE; }
@@ -570,7 +571,17 @@ static List *new_list(int64_t n) {
     List *l = rt_alloc(sizeof(List) + n * sizeof(V));
     l->tag = T_LIST;
     l->n = n;
+    l->it = l->data;
     return l;
+}
+/* l の lo から n 個。コピーせず元の配列を指す(GC は途中を指すポインタで元のリストを生かす) */
+static V list_slice(List *l, int64_t lo, int64_t n) {
+    if (n == 0) return V_EMPTY;
+    List *s = rt_alloc(sizeof(List));
+    s->tag = T_LIST;
+    s->n = n;
+    s->it = l->it + lo;
+    return (V)(intptr_t)s;
 }
 V rt_list(int64_t n, V *items) {
     if (n == 0) return V_EMPTY;
@@ -1129,7 +1140,7 @@ V rt_prop(V v, const char *name, int32_t pos) {
     List *l = AS(List, v);
     if (strcmp(name, "残り") == 0) {
         if (l->n == 0) fail(pos, "空のリストに「残り」はありません");
-        return rt_list(l->n - 1, l->it + 1);
+        return list_slice(l, 1, l->n - 1);
     }
     if (l->n == 0) fail(pos, "空のリストに「%s」はありません", name);
     return strcmp(name, "先頭") == 0 ? l->it[0] : l->it[l->n - 1];
@@ -1156,7 +1167,7 @@ V rt_named_get(V v, const char *fname) {
     if (TAG(v) == T_LIST && AS(List, v)->n > 0) {
         List *l = AS(List, v);
         if (strcmp(fname, "先頭") == 0) return l->it[0];
-        if (strcmp(fname, "残り") == 0) return rt_list(l->n - 1, l->it + 1);
+        if (strcmp(fname, "残り") == 0) return list_slice(l, 1, l->n - 1);
     }
     return 0;
 }
@@ -1749,7 +1760,7 @@ static V seq_slice(V v, int64_t lo, int64_t hi) {
         int64_t a = cp_offset(s, lo), b = cp_offset(s, hi);
         return mk_str(s->s + a, b - a);
     }
-    return rt_list(hi - lo, AS(List, v)->it + lo);
+    return list_slice(AS(List, v), lo, hi - lo);
 }
 
 BI(s_floor) {
