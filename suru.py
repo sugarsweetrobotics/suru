@@ -99,7 +99,9 @@ KW_SOREKARA = "それから"  # 前の文に続けて行う: 「やあ」を表�
 KW_KATSU = "かつ"      # 真偽の「かつ」、パターンの条件: 半径 の 円 かつ 半径 > 10 ならば …
 KW_MATAHA = "または"   # 真偽の「または」
 DESU = "です"       # 文末の飾り: 「p とは 3 と 4 の 点 です。」の「です」は読み捨てる
-MODULE_SEP = "・"  # 読み込んだファイルの名前と、その中の名前の区切り: 数学・円周率
+RESERVED_MARKS = {"・": "中黒「・」"}
+MODULE_MARK = "内"  # 読み込んだファイルの中の名前: 数学内の円周率
+MODULE_SEP = MODULE_MARK + "の"
 KW_IMPORT = "読み込む"  # 「数学」 を 読み込む
 KW_IMPORT_POLITE = "読み込みます"
 SOURCE_SUFFIX = ".suru"
@@ -285,35 +287,39 @@ def tokenize_line(text: str, line: int) -> list[Token]:
         elif c in CLOSE_PARENS:
             flush()
             tokens.append(Token("RP", ")", here))
-        elif c == MODULE_SEP:
-            flush()
-            tokens.append(Token("DOT", MODULE_SEP, here))
+        elif c in RESERVED_MARKS:
+            raise SuruError(f"{RESERVED_MARKS[c]}は将来の書き方のために予約されています(文字列の中では使えます)", here)
         else:
             buf += c
         i += 1
     flush()
-    return drop_desu(join_module_names(tokens))
+    return drop_desu(tokens)
 
 
-def join_module_names(tokens: list[Token]) -> list[Token]:
-    """「数学・円周率」「数学・二乗する」: ファイルの名前と、その中の名前を1つの名前にする"""
+def join_module_names(tokens: list[Token], modules: set) -> list[Token]:
+    """「数学内の円周率」「数学内の二乗する」: 読み込んだファイルの名前に「内の」が続けば、
+    その後の名前と合わせて1つの名前にする(「数学」を読み込んでいなければ、ふつうの「数学内」)"""
     out: list[Token] = []
     i = 0
     while i < len(tokens):
         t = tokens[i]
-        if t.kind != "DOT":
-            out.append(t)
-            i += 1
-            continue
-        prev = out[-1] if out else None
         nxt = tokens[i + 1] if i + 1 < len(tokens) else None
-        if (prev is None or prev.kind != "WORD" or nxt is None or nxt.kind not in ("WORD", "CALL")
-                or MODULE_SEP in nxt.value):
-            raise SuruError(
-                f"「{MODULE_SEP}」は、読み込んだファイルの名前とその中の名前の間に書きます(例: 数学{MODULE_SEP}円周率)", t.line
-            )
-        out[-1] = Token(nxt.kind, prev.value + MODULE_SEP + nxt.value, prev.line, nxt.form, nxt.quoted, nxt.negated)
-        i += 2
+        name = tokens[i + 2] if i + 2 < len(tokens) else None
+        if (t.kind == "WORD" and t.value.endswith(MODULE_MARK) and t.value[: -len(MODULE_MARK)] in modules
+                and nxt is not None and nxt.kind == "KW" and nxt.value == KW_NO):
+            if name is None or name.kind not in ("WORD", "CALL"):
+                raise SuruError(f"「{t.value}の」の後には、読み込んだファイルの中の名前を書いてください", t.line)
+            out.append(Token(name.kind, t.value + "の" + name.value, t.line, name.form, name.quoted, name.negated))
+            i += 3
+            continue
+        if (t.kind == "WORD" and t.value.endswith(MODULE_SEP) and t.value[: -len(MODULE_SEP)] in modules
+                and nxt is not None and nxt.kind in ("WORD", "CALL")):
+            # 空白の書き方の「数学内の 円周率」
+            out.append(Token(nxt.kind, t.value + nxt.value, t.line, nxt.form, nxt.quoted, nxt.negated))
+            i += 2
+            continue
+        out.append(t)
+        i += 1
     return out
 
 
@@ -589,14 +595,13 @@ def tokenize_punct_line(text: str, line: int) -> list[Token]:
         elif c == PERIOD:
             flush()
             tokens.append(Token("PERIOD", PERIOD, here))
-        elif c == MODULE_SEP:
-            flush()
-            tokens.append(Token("DOT", MODULE_SEP, here))
+        elif c in RESERVED_MARKS:
+            raise SuruError(f"{RESERVED_MARKS[c]}は将来の書き方のために予約されています(文字列の中では使えます)", here)
         else:
             buf += c
         i += 1
     flush()
-    return join_module_names(tokens)
+    return tokens
 
 
 def is_punct_line(text: str) -> bool:
@@ -2114,7 +2119,7 @@ def parse_statement(node: Node) -> Any:
         return parse_trait_decl(node, head[0], after)
     name, params, is_function = parse_definition_head(head, node.line.number)
     if MODULE_SEP in name:
-        raise SuruError(f"「{name}」: 「{MODULE_SEP}」のついた名前(読み込んだファイルの名前)は定義できません", head[0].line)
+        raise SuruError(f"「{name}」: 読み込んだファイルの中の名前は定義できません", head[0].line)
     after_t = nosep(after)
     if len(after_t) == 1 and after_t[0].kind == "WORD" and after_t[0].value == TEJUN and not after_t[0].quoted and node.children:
         # 「挨拶する とは 手順」+ 深い行: 深い行を順に行う
@@ -2274,7 +2279,7 @@ def _check_name(tok: Token) -> str:
     if not tok.quoted and _is_all_hiragana(tok.value):
         raise hiragana_name_error(tok.value, tok.line)
     if MODULE_SEP in tok.value:
-        raise SuruError(f"「{tok.value}」: 「{MODULE_SEP}」のついた名前は、読み込んだファイルの中の名前を使うときだけ書けます", tok.line)
+        raise SuruError(f"「{tok.value}」: 読み込んだファイルの中の名前は定義できません", tok.line)
     return tok.value
 
 
@@ -2449,6 +2454,8 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         name = import_target(n)
         if name is not None:
             imports[id(n)] = load_module(name, ctx, n.line.number)
+    if imports:
+        _join_in_nodes(nodes, {m.name for m in imports.values()})
     # 「3 と 4 の 点」を読むために、型の定義を先に集める(定義の順番は自由)
     for n in nodes:
         td = try_parse_typedef(n)
@@ -2460,6 +2467,12 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         return attach_provisos(statements)
     finally:
         _CTX = saved
+
+
+def _join_in_nodes(nodes: list, modules: set) -> None:
+    for n in nodes:
+        n.line.tokens = join_module_names(n.line.tokens, modules)
+        _join_in_nodes(n.children, modules)
 
 
 def import_target(node: Node) -> str | None:
@@ -2479,7 +2492,7 @@ def load_module(name: str, ctx: ParseContext, line: int) -> Module:
     """ファイル「name.suru」を読んで解析する。同じファイルは一度だけ読む"""
     path = os.path.abspath(os.path.join(ctx.base_dir, name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX))
     stem = os.path.splitext(os.path.basename(path))[0]
-    if not stem or _is_all_hiragana(stem) or MODULE_SEP in stem or any(c in stem for c in " 　「」『』（）()、。"):
+    if not stem or _is_all_hiragana(stem) or any(_is_hiragana(c) for c in stem) or any(c in stem for c in " 　「」『』（）()、。"):
         raise SuruError(f"「{stem}」はファイルの名前に使えません(名前と同じく漢字・カタカナ・英字で書いてください)", line)
     if path in ctx.modules:
         if ctx.modules[path] is None:

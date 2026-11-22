@@ -253,8 +253,8 @@ def test_空のリストの先頭はエラー():
         run("空 の 先頭")
 
 
-def test_中黒は読み込んだファイルの名前の区切り():
-    with pytest.raises(SuruError, match="読み込んだファイルの名前とその中の名前の間に書きます"):
+def test_中黒は予約():
+    with pytest.raises(SuruError, match="予約"):
         run("1・2")
 
 
@@ -778,7 +778,7 @@ def test_エラーの行と印を表示する():
     src = "x とは 1・2"
     text = format_error(_error(src), src)
     assert text.splitlines() == [
-        "エラー: 1行目 7文字目: 「・」は、読み込んだファイルの名前とその中の名前の間に書きます(例: 数学・円周率)",
+        "エラー: 1行目 7文字目: 中黒「・」は将来の書き方のために予約されています(文字列の中では使えます)",
         "  x とは 1・2",
         "          ^",
     ]
@@ -1025,8 +1025,8 @@ def _run_in(tmp_path, src):
 
 def test_ファイルを読み込む(tmp_path):
     _files(tmp_path, 数学=MATH)
-    assert _run_in(tmp_path, "「数学」 を 読み込む\n数学・円周率\n2 を 数学・円の面積にする") == ["3", "12"]
-    assert _run_in(tmp_path, "「数学」を読み込む。（1と2と3）を数学・二乗することで写像する。") == ["（1 と 4 と 9）"]
+    assert _run_in(tmp_path, "「数学」 を 読み込む\n数学内の円周率\n2 を 数学内の円の面積にする") == ["3", "12"]
+    assert _run_in(tmp_path, "「数学」を読み込む。（1と2と3）を数学内の二乗することで写像する。") == ["（1 と 4 と 9）"]
     # 型と形は「・」なしで使える
     assert _run_in(tmp_path, "「数学」 を 読み込む\n（2 の 円） の 半径") == ["2"]
 
@@ -1035,24 +1035,25 @@ def test_読み込んだ名前は区切って使う(tmp_path):
     _files(tmp_path, 数学=MATH)
     with pytest.raises(SuruError, match="「円周率」は定義されていません"):
         _run_in(tmp_path, "「数学」 を 読み込む\n円周率")
-    # 同じ名前を自分で定義してもぶつからない
-    assert _run_in(tmp_path, "「数学」 を 読み込む\n円周率 とは 4\n円周率 + 数学・円周率") == ["7"]
+    # 「数学」を読み込んでいなければ「数学内」はふつうの名前。同じ名前を自分で定義してもぶつからない
+    assert _run_in(tmp_path, "数学内 とは 5\n数学内") == ["5"]
+    assert _run_in(tmp_path, "「数学」 を 読み込む\n円周率 とは 4\n円周率 + 数学内の円周率") == ["7"]
     with pytest.raises(SuruError, match="定義できません"):
-        _run_in(tmp_path, "数学・円周率 とは 4")
+        _run_in(tmp_path, "数学内の円周率 とは 4")
 
 
 def test_読み込みのまちがい(tmp_path):
-    _files(tmp_path, 式あり="x とは 1\nx を 表示する\n", 甲="「乙」 を 読み込む\n", 乙="「甲」 を 読み込む\n")
-    with pytest.raises(SuruError, match="ファイル「無い.suru」が見つかりません"):
-        _run_in(tmp_path, "「無い」 を 読み込む")
-    with pytest.raises(SuruError, match="「式あり.suru」の2行目.*定義だけを書いてください"):
-        _run_in(tmp_path, "「式あり」 を 読み込む")
+    _files(tmp_path, 式付="x とは 1\nx を 表示する\n", 甲="「乙」 を 読み込む\n", 乙="「甲」 を 読み込む\n")
+    with pytest.raises(SuruError, match="ファイル「不在.suru」が見つかりません"):
+        _run_in(tmp_path, "「不在」 を 読み込む")
+    with pytest.raises(SuruError, match="「式付.suru」の2行目.*定義だけを書いてください"):
+        _run_in(tmp_path, "「式付」 を 読み込む")
     with pytest.raises(SuruError, match="自分自身を読み込む"):
         _run_in(tmp_path, "「甲」 を 読み込む")
 
 
 def test_読み込んだファイルの中の読み込み(tmp_path):
-    _files(tmp_path, 基本="n を 倍にする とは n * 2\n", 応用="「基本」 を 読み込む\nn を 四倍にする とは n を 基本・倍にして 基本・倍にする\n")
-    assert _run_in(tmp_path, "「応用」 を 読み込む\n3 を 応用・四倍にする") == ["12"]
+    _files(tmp_path, 基本="n を 倍にする とは n * 2\n", 応用="「基本」 を 読み込む\nn を 四倍にする とは n を 基本内の倍にして 基本内の倍にする\n")
+    assert _run_in(tmp_path, "「応用」 を 読み込む\n3 を 応用内の四倍にする") == ["12"]
     with pytest.raises(SuruError, match="定義されていません"):
-        _run_in(tmp_path, "「応用」 を 読み込む\n3 を 応用・基本・倍にする")
+        _run_in(tmp_path, "「応用」 を 読み込む\n3 を 応用内の基本内の倍にする")
