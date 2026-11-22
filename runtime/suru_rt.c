@@ -1011,7 +1011,7 @@ static V act_run(Act *a) {
         for (int64_t i = 0; i < l->n; i++) out->it[i] = perform(l->it[i]);
         return (V)(intptr_t)out;
     }
-    case A_CHAIN: return perform(apply1(a->b, perform(a->a), 0));
+    case A_CHAIN: return apply1(a->b, perform(a->a), 0); /* 続きの動作は perform のループで行う */
     case A_FMAP: return apply1(a->b, perform(a->a), 0);
     }
     return 0;

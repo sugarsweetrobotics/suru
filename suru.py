@@ -3258,7 +3258,8 @@ class Interpreter:
         if isinstance(m, Pure):
             return f(m.value)
         if isinstance(m, Action):
-            return Action(m.name, lambda it: it.perform(f(it.perform(m))))
+            # 続きが返した動作は perform のループが続けて行う(入れ子にしないので、終わらない手順でもスタックが伸びない)
+            return Action(m.name, lambda it: f(it.perform(m)))
         if isinstance(m, tuple):
             out: tuple = ()
             for x in m:
