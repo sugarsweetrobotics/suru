@@ -107,7 +107,7 @@ typedef struct GcBlk {
     size_t nobj;
     int large, atomic;
     uint8_t *mark;       /* オブジェクトごとの状態(GC_FREE / GC_USED / GC_MARKED) */
-    void *free;          /* このブロックの空いているもののつながり */
+    size_t cursor;       /* ここから先で空いているもの(GC_FREE)を探す */
     struct GcBlk *next;  /* 空きのあるブロックのつながり */
 } GcBlk;
 
@@ -173,12 +173,7 @@ static void gc_new_block(int atomic, int k) {
     b->mark = calloc(b->nobj, 1);
     if (!b->mark) gc_oom();
     gc_add_region(b);
-    b->free = NULL;
-    for (size_t i = b->nobj; i-- > 0;) {
-        void **o = (void **)(mem + i * b->osz);
-        *o = b->free;
-        b->free = o;
-    }
+    b->cursor = 0;
     b->next = gc_avail[atomic][k];
     gc_avail[atomic][k] = b;
 }
@@ -250,16 +245,17 @@ static void gc_collect(void) {
             b->mark[0] = GC_USED;
             gc_live += b->osz;
         } else {
+            /* 印のあるもの(2)は使用中(1)に、印のないもの(1・0)は空き(0)に。空きは確保するときに探す */
             int k = gc_class_of[b->osz / 16];
-            b->free = NULL;
-            for (size_t i = b->nobj; i-- > 0;) {
-                if (b->mark[i] == GC_MARKED) { b->mark[i] = GC_USED; gc_live += b->osz; continue; }
-                b->mark[i] = GC_FREE;
-                void **o = (void **)(b->start + i * b->osz);
-                *o = b->free;
-                b->free = o;
+            uint8_t *m = b->mark;
+            size_t used = 0;
+            for (size_t i = 0; i < b->nobj; i++) {
+                m[i] >>= 1;
+                used += m[i];
             }
-            if (b->free) {
+            gc_live += used * b->osz;
+            b->cursor = 0;
+            if (used < b->nobj) {
                 b->next = gc_avail[b->atomic][k];
                 gc_avail[b->atomic][k] = b;
             }
@@ -268,10 +264,18 @@ static void gc_collect(void) {
     }
     gc_nregs = keep;
     gc_since = 0;
-    gc_next = gc_live > gc_min ? gc_live : gc_min;
+    /* 次は生きている量の2倍を確保したとき(マークの合計が確保量に比例するように) */
+    gc_next = 2 * gc_live > gc_min ? 2 * gc_live : gc_min;
     if (gc_log)
         fprintf(stderr, "GC %lld: 生きている %zu KB、領域 %zu、スタック %zu KB\n", (long long)gc_count, gc_live >> 10, gc_nregs,
                 (size_t)(gc_stack_top - (char *)__builtin_frame_address(0)) >> 10);
+}
+
+static void gc_init(void) {
+    for (int s = 0, k = 0; s <= GC_SMALL_MAX / 16; s++) {
+        while (GC_SIZES[k] < (uint32_t)s * 16) k++;
+        gc_class_of[s] = (uint8_t)k;
+    }
 }
 
 static void *gc_alloc(int64_t size, int atomic) {
@@ -294,22 +298,21 @@ static void *gc_alloc(int64_t size, int atomic) {
         gc_since += (size_t)size;
         return mem;
     }
-    static int ready;
-    if (!ready) {
-        ready = 1;
-        for (int s = 0, k = 0; s <= GC_SMALL_MAX / 16; s++) {
-            while (GC_SIZES[k] < (uint32_t)s * 16) k++;
-            gc_class_of[s] = (uint8_t)k;
-        }
-    }
     int k = gc_class_of[(size + 15) / 16];
-    while (gc_avail[atomic][k] && !gc_avail[atomic][k]->free) gc_avail[atomic][k] = gc_avail[atomic][k]->next;
-    if (!gc_avail[atomic][k]) gc_new_block(atomic, k);
-    GcBlk *b = gc_avail[atomic][k];
-    void **o = b->free;
-    b->free = *o;
+    GcBlk *b;
+    uint8_t *f;
+    for (;;) {
+        b = gc_avail[atomic][k];
+        if (!b) { gc_new_block(atomic, k); continue; }
+        f = memchr(b->mark + b->cursor, GC_FREE, b->nobj - b->cursor);
+        if (f) break;
+        gc_avail[atomic][k] = b->next; /* このブロックはもう空きがない */
+    }
+    size_t i = (size_t)(f - b->mark);
+    b->cursor = i + 1;
+    *f = GC_USED;
+    void *o = b->start + i * b->osz;
     memset(o, 0, GC_SIZES[k]);
-    b->mark[((char *)o - b->start) / b->osz] = GC_USED;
     gc_since += GC_SIZES[k];
     return o;
 }
@@ -915,6 +918,17 @@ V rt_binop(int32_t op, V a, V b, int32_t pos) {
     if (op == OP_EQ) return rt_bool(rt_eq(a, b));
     if (op == OP_NE) return rt_bool(!rt_eq(a, b));
     if (op == OP_ADD && TAG(a) == T_LIST && TAG(b) == T_LIST) return concat_lists(AS(List, a), AS(List, b));
+    if (op == OP_ADD && TAG(a) == T_STR && TAG(b) == T_STR) { /* 文字列どうしはそのままつなぐ */
+        Str *x = AS(Str, a), *y = AS(Str, b);
+        Str *o = rt_alloc_atomic(sizeof(Str) + x->n + y->n + 1);
+        o->tag = T_STR;
+        o->n = x->n + y->n;
+        o->ncp = x->ncp + y->ncp;
+        memcpy(o->s, x->s, x->n);
+        memcpy(o->s + x->n, y->s, y->n);
+        o->s[o->n] = 0;
+        return (V)(intptr_t)o;
+    }
     if (op == OP_ADD && (TAG(a) == T_STR || TAG(b) == T_STR)) {
         Buf x = plain(a), y = plain(b);
         buf_add(&x, y.s, y.n);
@@ -1044,9 +1058,12 @@ V rt_prop(V v, const char *name, int32_t pos) {
         if (TAG(v) == T_STR) return mk_int(AS(Str, v)->ncp, pos);
         return mk_int(need_list(v, "「の 長さ」の前", pos)->n, pos);
     }
-    char what[256];
-    snprintf(what, sizeof what, "「の %s」の前", name);
-    List *l = need_list(v, what, pos);
+    if (TAG(v) != T_LIST) { /* エラー文は失敗したときだけ作る */
+        char what[256];
+        snprintf(what, sizeof what, "「の %s」の前", name);
+        need_list(v, what, pos);
+    }
+    List *l = AS(List, v);
     if (strcmp(name, "残り") == 0) {
         if (l->n == 0) fail(pos, "空のリストに「残り」はありません");
         return rt_list(l->n - 1, l->it + 1);
@@ -2351,6 +2368,7 @@ static void *run_main(void *arg) {
 }
 
 int main(int argc, char **argv) {
+    gc_init();
     prog_argc = argc;
     prog_argv = argv;
     source_text = suru_source;
