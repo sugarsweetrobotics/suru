@@ -2453,6 +2453,13 @@ int main(int argc, char **argv) {
     pthread_attr_setstacksize(&attr, (size_t)1 << 30);
     pthread_t th;
     if (pthread_create(&th, &attr, run_main, NULL) != 0) run_main(NULL);
-    else pthread_join(th, NULL);
+    else {
+        /* 待っているだけのこのスレッドではシグナルを受けない。プロセスに送られたシグナルは
+           プログラムを動かすスレッドに届くので、そこでの受付(sigprocmask)がそのまま効く */
+        sigset_t all;
+        sigfillset(&all);
+        pthread_sigmask(SIG_BLOCK, &all, NULL);
+        pthread_join(th, NULL);
+    }
     return 0;
 }
