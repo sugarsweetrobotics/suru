@@ -129,7 +129,8 @@ def occurs(v: TVar, t: Any) -> bool:
     return v in ftv(t)
 
 
-BASIC = ("数", "文字列", "真偽")
+BASIC = ("数", "文字列", "真偽", "番地")
+NUM_ALIASES = ("小数", "整数")  # 外部の関数の宣言で使う数の別名
 MONADS = ("動作", "リスト")  # 組み込みの連鎖可能な型
 
 # 自分の型のフィールドごとの、いつも使う型(型名 → 引数ごとの型か None)。エラーの表示で、
@@ -905,6 +906,8 @@ class Checker:
         if isinstance(te, TypeFun):
             return TFun([(p, self.type_of(t, tvars, line)) for p, t in te.params], self.type_of(te.result, tvars, line))
         args = [self.type_of(a, tvars, line) for a in te.args]
+        if te.name in NUM_ALIASES:
+            return NUM
         if te.name in BASIC:
             return TCon(te.name)
         if te.name in MONADS:
@@ -1580,7 +1583,7 @@ def _is_action(t: Any) -> bool:
 
 def prune_is_record(t: Any) -> bool:
     r = prune(t)
-    return isinstance(r, TCon) and r.name not in ("数", "文字列", "真偽", "リスト", "動作")
+    return isinstance(r, TCon) and r.name not in ("数", "文字列", "真偽", "リスト", "動作", "番地")
 
 
 # ---------------------------------------------------------------------------
