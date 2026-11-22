@@ -97,9 +97,10 @@ KW_SEISHITSU = "性質"
 KW_SOREKARA = "それから"  # 前の文に続けて行う: 「やあ」を表示する。それから、「またね」を表示する。
 KW_KATSU = "かつ"      # 真偽の「かつ」、パターンの条件: 半径 の 円 かつ 半径 > 10 ならば …
 KW_MATAHA = "または"   # 真偽の「または」
+DESU = "です"       # 文末の飾り: 「p とは 3 と 4 の 点 です。」の「です」は読み捨てる
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
-    KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA,
+    KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA, DESU,
 }
 KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU}
 CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}  # 行頭に来たら前の文の続きとみなす
@@ -125,6 +126,8 @@ DEARU = "である"    # 述語(真偽を返す関数): n が 偶数である
 DENAI = "でない"    # 述語の否定: n が 偶数でない
 DEARUKOTO = "であること"  # 述語そのもの(値): 偶数であること
 GA = "が"           # 述語の主語の助詞
+# 丁寧語: 「三倍します」は「三倍する」、「三倍しまして」は「三倍して」と同じに読む
+POLITE_FORMS = {"します": SURU, "しまして": SHITE, "しましてから": SHITEKARA}
 
 # 予約語ではなく、決まった位置でだけ特別な意味になる言葉
 RESULT = "結果"     # 「入力 の 結果 を 数値にする」「入力した 結果」
@@ -177,7 +180,7 @@ def call_token(stem: str, form: str, line: int) -> Token:
         return Token("CALL", stem + DEARU, line, SURU, negated=form == DENAI)
     if form == DEARUKOTO:
         return Token("CALL", stem + DEARU, line, KOTO)
-    return Token("CALL", stem + SURU, line, form)
+    return Token("CALL", stem + SURU, line, POLITE_FORMS.get(form, form))
 
 
 def is_predicate(name: str) -> bool:
@@ -185,7 +188,8 @@ def is_predicate(name: str) -> bool:
 
 
 def _classify_call(word: str, line: int) -> Token | None:
-    for form in (DEARUKOTO, DEARU, DENAI, KOTO, SURU, SHITEKARA, SHITE, SHITA):
+    # 「しまして」は「して」で終わるので、丁寧語の形を先に照合する
+    for form in (DEARUKOTO, DEARU, DENAI, KOTO, SURU, "しましてから", SHITEKARA, "しまして", SHITE, "します", SHITA):
         if word.endswith(form) and len(word) > len(form):
             stem = word[: -len(form)]
             if _is_all_hiragana(stem):
@@ -211,6 +215,9 @@ def _classify(word: str, line: int, quoted: bool = False) -> list[Token]:
         return [Token("PART", word, line)]
     if word in KEYWORDS:
         return [Token("KW", word, line)]
+    if word.endswith(DESU) and len(word) > len(DESU):
+        # 「点です」「5です」: 後ろの「です」を分ける
+        return _classify(word[: -len(DESU)], line) + [Token("KW", DESU, line)]
     if word in ("真", "偽"):
         return [Token("NUM", word == "真", line)]
     if word == KW_EMPTY:
@@ -278,7 +285,20 @@ def tokenize_line(text: str, line: int) -> list[Token]:
             buf += c
         i += 1
     flush()
-    return tokens
+    return drop_desu(tokens)
+
+
+def drop_desu(tokens: list[Token]) -> list[Token]:
+    """文末の飾りの「です」を取り除く。「。」「、」「）」「そうでなければ」の前か、行の終わりにだけ書ける"""
+    out = []
+    for i, t in enumerate(tokens):
+        if t.kind == "KW" and t.value == DESU:
+            nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+            if nxt is None or nxt.kind in ("PERIOD", "SEP", "RP") or is_kw(nxt, KW_ELSE):
+                continue
+            raise SuruError("「です」は文の終わり(「。」の前)にだけ書けます", t.line)
+        out.append(t)
+    return out
 
 
 def _find_name_close(text: str, i: int, line: int) -> int:
@@ -307,11 +327,12 @@ MIXED_NAMES = ("畳み込み",)
 HIRAGANA_WORDS = sorted(
     set(PARTICLES)
     | {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, KW_KA, KW_WA, KW_TOIU, KW_SOREKARA, KW_KATSU, KW_MATAHA}
-    | {"それぞれ", KOTO, SURU, SHITEKARA, SHITE, SHITA, DEARUKOTO, DEARU, DENAI},
+    | {"それぞれ", KOTO, SURU, SHITEKARA, SHITE, SHITA, DEARUKOTO, DEARU, DENAI, DESU}
+    | set(POLITE_FORMS),
     key=len,
     reverse=True,
 )
-CALL_FORMS = (KOTO, SURU, SHITEKARA, SHITE, SHITA, DEARUKOTO, DEARU, DENAI)
+CALL_FORMS = (KOTO, SURU, SHITEKARA, SHITE, SHITA, DEARUKOTO, DEARU, DENAI, *POLITE_FORMS)
 
 
 def _nfkc(c: str) -> str:
@@ -356,15 +377,15 @@ def _split_operators(text: str, line: int) -> list[Token]:
 
 
 def _decompose(text: str) -> list[str] | None:
-    words = []
-    i = 0
-    while i < len(text):
-        w = next((w for w in HIRAGANA_WORDS if text.startswith(w, i)), None)
-        if w is None:
-            return None
-        words.append(w)
-        i += len(w)
-    return words
+    """ひらがなの並びを辞書の言葉に分ける。長い言葉から試し、読めなければ短い言葉でやり直す"""
+    if not text:
+        return []
+    for w in HIRAGANA_WORDS:
+        if text.startswith(w):
+            rest = _decompose(text[len(w):])
+            if rest is not None:
+                return [w] + rest
+    return None
 
 
 def _split_hiragana(text: str, line: int, after_name: bool, after_value: bool) -> list[str]:
@@ -651,7 +672,7 @@ def split_lines(source: str) -> list[Line]:
                 first = tokens[(ends[-1] + 1) if ends else 0]
                 raise SuruError("文の終わりに「。」が必要です(句読点の書き方では文を「。」で終えます)", first.line)
             tokens += tokenize_punct_line(raws[k], k + 1)
-        for sentence in split_sentences(tokens):
+        for sentence in split_sentences(drop_desu(tokens)):
             sentence = strip_seps(sentence)
             if sentence:
                 lines.append(Line(indent, sentence, sentence[0].line, closed=True))
