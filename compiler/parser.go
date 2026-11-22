@@ -1648,6 +1648,9 @@ func parseStatement(node *LNode) Node {
 		}
 		return &Proviso{d, tokens[0].Line, nil}
 	}
+	if vis := tryParseVisibility(nosep(flatten(node))); vis != nil {
+		return vis
+	}
 	if td := tryParseTypedef(node); td != nil {
 		return td
 	}
@@ -2300,7 +2303,7 @@ func isCSymbol(sym string) bool {
 func moduleNames(m *Module) map[string]bool {
 	names := map[string]bool{}
 	for _, s := range m.Program {
-		if d, ok := s.(*Define); ok {
+		if d, ok := s.(*Define); ok && !m.Private[d.Name] {
 			names[d.Name] = true
 		}
 	}
@@ -2518,7 +2521,7 @@ func loadModule(name string, ctx *ParseContext, line Pos) *Module {
 	}
 	ctx.Ctors.Update(sub.Ctors)
 	ctx.Types.Update(sub.Types)
-	m := &Module{stem, path, program}
+	m := &Module{stem, path, program, privateNames(program)}
 	delete(ctx.Loading, path)
 	ctx.Modules[path] = m
 	return m
@@ -2585,4 +2588,85 @@ func firstLineOf(n Node) Pos {
 		}
 	}
 	return Pos{}
+}
+
+const (
+	VisPublic  = "公開とする"
+	VisPrivate = "非公開とする"
+)
+
+// tryParseVisibility は「a と b は 非公開とする」「a は 公開とする」なら Visibility
+func tryParseVisibility(tokens []*Token) *Visibility {
+	if len(tokens) > 0 && tokens[len(tokens)-1].Kind == "PERIOD" {
+		tokens = tokens[:len(tokens)-1]
+	}
+	n := len(tokens)
+	if n < 3 || tokens[n-1].Kind != "CALL" || (tokens[n-1].S != VisPublic && tokens[n-1].S != VisPrivate) || !isKw(tokens[n-2], KwWa) {
+		return nil
+	}
+	word := tokens[n-1].S
+	var names []string
+	for i, t := range tokens[:n-2] {
+		if i%2 == 1 {
+			if !isKw(t, KwTo) {
+				raise(t.Line, "「"+word+"」の前には、名前を「と」で並べてください(「確保する と 解放する は "+word+"」)")
+			}
+		} else if t.Kind == "WORD" || t.Kind == "CALL" {
+			names = append(names, t.S)
+		} else {
+			raise(t.Line, "「"+word+"」の前には、このファイルで定義した名前を書いてください")
+		}
+	}
+	if (n-2)%2 == 0 {
+		raise(tokens[n-2].Line, "「"+word+"」の前には、名前を「と」で並べてください(「確保する と 解放する は "+word+"」)")
+	}
+	return &Visibility{names, word == VisPublic, tokens[0].Line}
+}
+
+// privateNames は一番外の「… は 非公開とする」「… は 公開とする」から、外から見えない名前を決める
+func privateNames(statements []Node) map[string]bool {
+	var vis []*Visibility
+	defined := map[string]bool{}
+	for _, s := range statements {
+		switch x := s.(type) {
+		case *Visibility:
+			vis = append(vis, x)
+		case *Define:
+			defined[x.Name] = true
+		}
+	}
+	out := map[string]bool{}
+	if len(vis) == 0 {
+		return out
+	}
+	public := map[string]bool{}
+	private := map[string]bool{}
+	for _, v := range vis {
+		for _, n := range v.Names {
+			if !defined[n] {
+				w := VisPrivate
+				if v.Public {
+					w = VisPublic
+				}
+				raise(v.Line, "「"+n+"」はこのファイルで定義していないので、"+w+"にできません")
+			}
+			if v.Public {
+				public[n] = true
+			} else {
+				private[n] = true
+			}
+			if public[n] && private[n] {
+				raise(v.Line, "「"+n+"」が「"+VisPublic+"」と「"+VisPrivate+"」の両方に書かれています")
+			}
+		}
+	}
+	if len(public) > 0 {
+		for n := range defined {
+			if !public[n] {
+				out[n] = true
+			}
+		}
+		return out
+	}
+	return private
 }

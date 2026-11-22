@@ -503,7 +503,7 @@ func (c *Checker) checkUnit(program []Node, prims map[string]any) *TEnv {
 		if imp, ok := s.(*Import); ok {
 			sc := c.checkModule(imp.Module, imp.Line)
 			for name, v := range sc.vars {
-				if !strings.HasPrefix(name, "\x00") && !strings.Contains(name, ModuleSep) {
+				if !strings.HasPrefix(name, "\x00") && !strings.Contains(name, ModuleSep) && !imp.Module.Private[name] {
 					local.set(imp.Module.Name+ModuleSep+name, v)
 					if imp.Open {
 						local.set(name, v)

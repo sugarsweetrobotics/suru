@@ -649,7 +649,7 @@ class Checker:
             if isinstance(s, Import):
                 scope = self.check_module(s.module, s.line)
                 for name, v in scope.vars.items():
-                    if not name.startswith("\0") and MODULE_SEP not in name:
+                    if not name.startswith("\0") and MODULE_SEP not in name and name not in s.module.private:
                         local.vars[s.module.name + MODULE_SEP + name] = v
                         if s.open:
                             local.vars[name] = v

@@ -887,7 +887,7 @@ class Compiler:
             if isinstance(stmt, S.Import):
                 sub = self.module(stmt.module.program, stmt.module.path, None)
                 for name, b in list(sub.vars.items()):
-                    if S.MODULE_SEP not in name:
+                    if S.MODULE_SEP not in name and name not in stmt.module.private:
                         sc.vars[stmt.module.name + S.MODULE_SEP + name] = b
                         if stmt.open:
                             sc.vars[name] = b
