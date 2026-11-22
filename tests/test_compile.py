@@ -301,3 +301,54 @@ def test_HTTPのサーバーは1万件続けて答える(tmp_path):
         assert p.poll() is None
     finally:
         p.kill()
+
+
+# --- GC(runtime/suru_rt.c の「メモリ」の節) ---
+
+def gc_run(source: str, tmp_path: pathlib.Path, env: dict, base_dir: str = ".") -> subprocess.CompletedProcess:
+    import os
+
+    compiled(source, tmp_path, base_dir)  # tmp_path/prog を作る
+    return subprocess.run([str(tmp_path / "prog")], input=INPUT, capture_output=True, text=True, timeout=120,
+                          env={**os.environ, **env})
+
+
+@pytest.mark.parametrize("path", EXAMPLES, ids=[p.stem for p in EXAMPLES])
+def test_確保のたびにGCしても結果が同じ(path, tmp_path):
+    source = path.read_text(encoding="utf-8")
+    r = gc_run(source, tmp_path, {"SURU_GC_MIN": "0"}, str(path.parent))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == interpreted(source, str(path.parent))
+
+
+@pytest.mark.parametrize("name", list(PROGRAMS) + ["深い再帰"])
+def test_確保のたびにGCしても結果が同じ_いろいろ(name, tmp_path):
+    source = DEEP if name == "深い再帰" else PROGRAMS[name]
+    r = gc_run(source, tmp_path, {"SURU_GC_MIN": "1"})  # 1KB ごと(深い再帰で毎回スタック全体を調べると遅いので)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == ("100000\n" if name == "深い再帰" else interpreted(source))
+
+
+GARBAGE = """
+n を 数列にする とは もし n == 0 ならば 空 そうでなければ 0 を （n - 1 を 数列にする） に 追加する
+xs を 合計する とは もし xs が 空 ならば 0 そうでなければ xs の 残り を 合計して xs の 先頭 を 加算する
+s を 文字列反復する とは もし s の 長さ > 200 ならば s の 長さ そうでなければ s + 「あ」 を 文字列反復する
+k を 反復する とは もし k == 0 ならば 0 そうでなければ （200 を 数列にして 合計する） + （「」 を 文字列反復する） + （k - 1 を 反復する）
+3000 を 反復する
+"""
+
+
+def test_使い終わったメモリはGCで回収される(tmp_path):
+    import os
+
+    compiled(GARBAGE, tmp_path)
+    p = subprocess.Popen([str(tmp_path / "prog")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         env={**os.environ, "SURU_GC_LOG": "1"})
+    out, err = p.communicate(timeout=120)
+    assert p.returncode == 0, err
+    assert out == "603000\n"
+    logs = [line for line in err.splitlines() if line.startswith("GC ")]
+    # GC がなければ 1GB 以上使うプログラム。何度も GC が動き、領域(1つ 256KB)は増え続けない
+    assert len(logs) > 10
+    regions = [int(line.split("領域 ")[1].split("、")[0]) for line in logs]
+    assert max(regions) < 100

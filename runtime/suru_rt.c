@@ -10,7 +10,7 @@
  *   下の 1 ビットが 1 … 整数(残りの 63 ビット)
  *   0               … 値なし(省略できる引数を渡さなかったとき)
  *   それ以外         … ヒープ上のオブジェクトへのポインタ(先頭が tag)
- * メモリは解放しない(プログラムが終わるまで持っておく)。
+ * メモリは GC(保守的なマーク&スイープ)で片付ける(「メモリ」の節)。
  */
 #include <errno.h>
 #include <math.h>
@@ -80,25 +80,242 @@ static const char *PART_NAMES[] = {"を", "に", "で", "から", "へ", "より
 enum { P_WO = 0, P_NI, P_DE, P_KARA, P_HE, P_YORI, P_GA };
 
 /* ------------------------------------------------------------------ */
-/* メモリ                                                              */
+/* メモリ(保守的なマーク&スイープの GC)                              */
 /* ------------------------------------------------------------------ */
+/*
+ * 値の多くは C のスタックやレジスタにあって正確な場所が分からないので、
+ * スタックの中の「オブジェクトを指していそうな語」はすべて生きているとみなす(保守的)。
+ * オブジェクトは動かさないので、ポインタはそのまま使える。
+ * オブジェクトの中身も、先頭の tag によらず語ごとに調べる(フレームや引数の配列には tag がない)。
+ * 文字列と小数は中にポインタがないので調べない(atomic)。
+ * オブジェクトの途中を指すポインタも、そのオブジェクトを指しているとみなす。
+ * 根: スタックとレジスタ、IR の大域変数(suru_roots)、この実行時ライブラリの表。
+ */
 
-static char *arena_ptr;
-static size_t arena_left;
+extern V *const suru_roots[];
+extern const int64_t suru_nroots;
 
-void *rt_alloc(int64_t size) {
-    size = (size + 15) & ~(int64_t)15;
-    if ((size_t)size > arena_left) {
-        size_t chunk = size > (1 << 24) ? (size_t)size : (1 << 24);
-        arena_ptr = malloc(chunk);
-        if (!arena_ptr) { fputs("エラー: メモリが足りません\n", stderr); exit(1); }
-        arena_left = chunk;
-    }
-    void *p = arena_ptr;
-    arena_ptr += size;
-    arena_left -= size;
-    return p;
+#define GC_BLOCK ((size_t)1 << 18)   /* 小さいオブジェクトのブロック(同じ大きさのものを並べる) */
+#define GC_SMALL_MAX 2048            /* これより大きいものは1つずつ malloc する */
+static const uint32_t GC_SIZES[] = {16,  32,  48,  64,  80,  96,  112, 128,  160,  192,  224,  256,
+                                    320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048};
+#define GC_NCLASS ((int)(sizeof GC_SIZES / sizeof GC_SIZES[0]))
+
+typedef struct GcBlk {
+    char *start, *end;   /* オブジェクトの領域 [start, end) */
+    size_t osz;          /* 1つの大きさ(大きいオブジェクトなら全体) */
+    size_t nobj;
+    int large, atomic;
+    uint8_t *mark;       /* オブジェクトごとの状態(GC_FREE / GC_USED / GC_MARKED) */
+    void *free;          /* このブロックの空いているもののつながり */
+    struct GcBlk *next;  /* 空きのあるブロックのつながり */
+} GcBlk;
+
+/* 空いているものは調べない(空きのつながりをたどって空きを生きているとみなさないため) */
+enum { GC_FREE = 0, GC_USED = 1, GC_MARKED = 2 };
+
+static GcBlk **gc_regs;          /* start の順に並べたすべての領域 */
+static size_t gc_nregs, gc_capregs;
+static GcBlk *gc_avail[2][GC_NCLASS]; /* [atomic][大きさ] 空きのあるブロック */
+static uint8_t gc_class_of[GC_SMALL_MAX / 16 + 1];
+static size_t gc_since;            /* 前の GC からの確保量 */
+static size_t gc_min = (size_t)8 << 20; /* これだけ確保するまでは GC しない(SURU_GC_MIN で KB 単位に変えられる) */
+static size_t gc_next = (size_t)8 << 20;
+static int gc_log;
+static size_t gc_live;
+static char *gc_stack_top;         /* スタックの底(GC はここまで調べる)。NULL なら GC しない */
+static int64_t gc_count;
+
+static void gc_oom(void) {
+    fputs("エラー: メモリが足りません\n", stderr);
+    exit(1);
 }
+
+static void gc_add_region(GcBlk *b) {
+    if (gc_nregs == gc_capregs) {
+        gc_capregs = gc_capregs ? gc_capregs * 2 : 64;
+        gc_regs = realloc(gc_regs, gc_capregs * sizeof(GcBlk *));
+        if (!gc_regs) gc_oom();
+    }
+    size_t lo = 0, hi = gc_nregs;
+    while (lo < hi) {
+        size_t m = (lo + hi) / 2;
+        if (gc_regs[m]->start < b->start) lo = m + 1;
+        else hi = m;
+    }
+    memmove(gc_regs + lo + 1, gc_regs + lo, (gc_nregs - lo) * sizeof(GcBlk *));
+    gc_regs[lo] = b;
+    gc_nregs++;
+}
+
+static GcBlk *gc_find(uintptr_t p) {
+    size_t lo = 0, hi = gc_nregs;
+    while (lo < hi) {
+        size_t m = (lo + hi) / 2;
+        if ((uintptr_t)gc_regs[m]->start <= p) lo = m + 1;
+        else hi = m;
+    }
+    if (lo == 0) return NULL;
+    GcBlk *b = gc_regs[lo - 1];
+    return p < (uintptr_t)b->end ? b : NULL;
+}
+
+static void gc_new_block(int atomic, int k) {
+    GcBlk *b = malloc(sizeof(GcBlk));
+    char *mem = malloc(GC_BLOCK);
+    if (!b || !mem) gc_oom();
+    b->osz = GC_SIZES[k];
+    b->nobj = GC_BLOCK / b->osz;
+    b->start = mem;
+    b->end = mem + b->nobj * b->osz;
+    b->large = 0;
+    b->atomic = atomic;
+    b->mark = calloc(b->nobj, 1);
+    if (!b->mark) gc_oom();
+    gc_add_region(b);
+    b->free = NULL;
+    for (size_t i = b->nobj; i-- > 0;) {
+        void **o = (void **)(mem + i * b->osz);
+        *o = b->free;
+        b->free = o;
+    }
+    b->next = gc_avail[atomic][k];
+    gc_avail[atomic][k] = b;
+}
+
+/* --- 印を付ける --- */
+
+static uintptr_t *gc_stack;
+static size_t gc_nstack, gc_capstack;
+
+static void gc_mark(uintptr_t p) {
+    GcBlk *b = gc_find(p);
+    if (!b) return;
+    size_t i = (p - (uintptr_t)b->start) / b->osz;
+    if (b->mark[i] != GC_USED) return;
+    b->mark[i] = GC_MARKED;
+    if (b->atomic) return;
+    if (gc_nstack == gc_capstack) {
+        gc_capstack = gc_capstack ? gc_capstack * 2 : 4096;
+        gc_stack = realloc(gc_stack, gc_capstack * sizeof(uintptr_t));
+        if (!gc_stack) gc_oom();
+    }
+    gc_stack[gc_nstack++] = (uintptr_t)b->start + i * b->osz;
+}
+
+static void gc_mark_range(const void *lo, const void *hi) {
+    const char *p = (const char *)(((uintptr_t)lo + 7) & ~(uintptr_t)7);
+    for (; p + sizeof(uintptr_t) <= (const char *)hi; p += sizeof(uintptr_t)) gc_mark(*(const uintptr_t *)p);
+}
+
+static void gc_drain(void) {
+    while (gc_nstack) {
+        uintptr_t o = gc_stack[--gc_nstack];
+        GcBlk *b = gc_find(o);
+        gc_mark_range((const void *)o, (const char *)o + b->osz);
+    }
+}
+
+static void gc_mark_tables(void); /* 実行時ライブラリの表(下で定義) */
+
+__attribute__((noinline)) static void gc_mark_stack(void) {
+    jmp_buf regs; /* レジスタにだけある値もスタックに書き出す */
+    setjmp(regs);
+    volatile char here = 0;
+    gc_mark_range((const void *)&regs, (const void *)(&regs + 1));
+    gc_mark_range((const void *)&here, gc_stack_top);
+}
+
+static void gc_collect(void) {
+    gc_count++;
+    /* 根 */
+    for (int64_t i = 0; i < suru_nroots; i++) gc_mark((uintptr_t)*suru_roots[i]);
+    gc_mark_tables();
+    gc_drain();
+    gc_mark_stack();
+    gc_drain();
+    /* 片付け: 印のないものを空きに戻す */
+    memset(gc_avail, 0, sizeof gc_avail);
+    gc_live = 0;
+    size_t keep = 0;
+    for (size_t r = 0; r < gc_nregs; r++) {
+        GcBlk *b = gc_regs[r];
+        if (b->large) {
+            if (b->mark[0] != GC_MARKED) {
+                free(b->start);
+                free(b->mark);
+                free(b);
+                continue;
+            }
+            b->mark[0] = GC_USED;
+            gc_live += b->osz;
+        } else {
+            int k = gc_class_of[b->osz / 16];
+            b->free = NULL;
+            for (size_t i = b->nobj; i-- > 0;) {
+                if (b->mark[i] == GC_MARKED) { b->mark[i] = GC_USED; gc_live += b->osz; continue; }
+                b->mark[i] = GC_FREE;
+                void **o = (void **)(b->start + i * b->osz);
+                *o = b->free;
+                b->free = o;
+            }
+            if (b->free) {
+                b->next = gc_avail[b->atomic][k];
+                gc_avail[b->atomic][k] = b;
+            }
+        }
+        gc_regs[keep++] = b;
+    }
+    gc_nregs = keep;
+    gc_since = 0;
+    gc_next = gc_live > gc_min ? gc_live : gc_min;
+    if (gc_log)
+        fprintf(stderr, "GC %lld: 生きている %zu KB、領域 %zu、スタック %zu KB\n", (long long)gc_count, gc_live >> 10, gc_nregs,
+                (size_t)(gc_stack_top - (char *)__builtin_frame_address(0)) >> 10);
+}
+
+static void *gc_alloc(int64_t size, int atomic) {
+    if (size < 16) size = 16;
+    if (gc_stack_top && gc_since >= gc_next) gc_collect();
+    if (size > GC_SMALL_MAX) {
+        GcBlk *b = malloc(sizeof(GcBlk));
+        char *mem = calloc(1, (size_t)size);
+        if (!b || !mem) gc_oom();
+        b->start = mem;
+        b->end = mem + size;
+        b->osz = (size_t)size;
+        b->nobj = 1;
+        b->large = 1;
+        b->atomic = atomic;
+        b->mark = calloc(1, 1);
+        if (!b->mark) gc_oom();
+        b->mark[0] = GC_USED;
+        gc_add_region(b);
+        gc_since += (size_t)size;
+        return mem;
+    }
+    static int ready;
+    if (!ready) {
+        ready = 1;
+        for (int s = 0, k = 0; s <= GC_SMALL_MAX / 16; s++) {
+            while (GC_SIZES[k] < (uint32_t)s * 16) k++;
+            gc_class_of[s] = (uint8_t)k;
+        }
+    }
+    int k = gc_class_of[(size + 15) / 16];
+    while (gc_avail[atomic][k] && !gc_avail[atomic][k]->free) gc_avail[atomic][k] = gc_avail[atomic][k]->next;
+    if (!gc_avail[atomic][k]) gc_new_block(atomic, k);
+    GcBlk *b = gc_avail[atomic][k];
+    void **o = b->free;
+    b->free = *o;
+    memset(o, 0, GC_SIZES[k]);
+    b->mark[((char *)o - b->start) / b->osz] = GC_USED;
+    gc_since += GC_SIZES[k];
+    return o;
+}
+
+void *rt_alloc(int64_t size) { return gc_alloc(size, 0); }
+static void *rt_alloc_atomic(int64_t size) { return gc_alloc(size, 1); }
 
 /* ------------------------------------------------------------------ */
 /* 文字列バッファ                                                      */
@@ -251,7 +468,7 @@ static V mk_int(int64_t n, int32_t pos) {
 }
 
 V rt_float(double d) {
-    Flt *f = rt_alloc(sizeof(Flt));
+    Flt *f = rt_alloc_atomic(sizeof(Flt));
     f->tag = T_FLT;
     f->d = d;
     return (V)(intptr_t)f;
@@ -265,7 +482,7 @@ static int64_t count_cp(const char *s, int64_t n) {
 }
 
 static V mk_str(const char *s, int64_t n) {
-    Str *o = rt_alloc(sizeof(Str) + n + 1);
+    Str *o = rt_alloc_atomic(sizeof(Str) + n + 1);
     o->tag = T_STR;
     o->n = n;
     memcpy(o->s, s, n);
@@ -275,6 +492,13 @@ static V mk_str(const char *s, int64_t n) {
 }
 V rt_str(const char *s, int64_t n) { return mk_str(s, n); }
 static V cstr(const char *s) { return mk_str(s, strlen(s)); }
+/* Buf の中身を文字列の値にして、Buf は解放する */
+static V buf_str(Buf *b) {
+    V r = mk_str(b->s ? b->s : "", (int64_t)b->n);
+    free(b->s);
+    b->s = NULL;
+    return r;
+}
 
 static List *new_list(int64_t n) {
     List *l = rt_alloc(sizeof(List) + n * sizeof(V));
@@ -469,6 +693,15 @@ static V impl_fn(Impl *im, const char *name) {
     return 0;
 }
 
+static void gc_mark_tables(void) {
+    for (int i = 0; i < nshared; i++) gc_mark((uintptr_t)shared[i].v);
+    for (int i = 0; i < nctors; i++) gc_mark((uintptr_t)ctors[i]->nullary);
+    for (int i = 0; i < ntraits; i++)
+        for (int j = 0; j < traits[i]->nm; j++) gc_mark((uintptr_t)traits[i]->m[j].deflt);
+    for (int i = 0; i < nimpls; i++)
+        for (int j = 0; j < impls[i].n; j++) gc_mark((uintptr_t)impls[i].fns[j]);
+}
+
 static const char *SHOWABLE = "表示可能", *TO_STRING = "文字列化する", *MAPPABLE = "写像可能",
                   *MONAD = "連鎖可能", *MAP = "写像する", *BIND = "連鎖する", *UNIT = "結果にする";
 
@@ -584,7 +817,7 @@ static void fmt_into(Buf *b, V v, int nested, int use_traits) {
 static V format_v(V v) {
     Buf b = {0};
     fmt_into(&b, v, 0, 1);
-    return mk_str(b.s ? b.s : "", b.n);
+    return buf_str(&b);
 }
 
 /* 性質を使わない表示(文字列の + で使う) */
@@ -598,7 +831,8 @@ static Buf plain(V v) {
 static const char *show(V v) {
     Buf b = {0};
     fmt_into(&b, v, 0, 1);
-    return b.s ? b.s : "";
+    if (!b.s) buf_add(&b, "", 0);
+    return b.s; /* malloc したもの */
 }
 
 static const char *action_hint(V v) {
@@ -684,7 +918,8 @@ V rt_binop(int32_t op, V a, V b, int32_t pos) {
     if (op == OP_ADD && (TAG(a) == T_STR || TAG(b) == T_STR)) {
         Buf x = plain(a), y = plain(b);
         buf_add(&x, y.s, y.n);
-        return mk_str(x.s, x.n);
+        free(y.s);
+        return buf_str(&x);
     }
     need_num(a, pos);
     need_num(b, pos);
@@ -1025,9 +1260,10 @@ static V mem_run(Act *a);
 static V act_run(Act *a) {
     switch (a->kind) {
     case A_SHOW: {
-        const char *s = show(a->a);
+        char *s = (char *)show(a->a);
         fputs(s, stdout);
         fputc('\n', stdout);
+        free(s);
         return a->a;
     }
     case A_INPUT: {
@@ -1315,13 +1551,18 @@ BI(b_to_number) {
             if (*p == '+' || *p == '-') p++;
             int digits = *p != 0;
             for (const char *q = p; *q; q++) if ((*q < '0' || *q > '9') && *q != '_') digits = 0;
+            V r = 0;
             if (digits) {
                 long long x = strtoll(t, &e, 10);
-                if (*e == 0) return mk_int(x, pos);
+                if (*e == 0) r = mk_int(x, pos);
             }
-            double d = strtod(t, &e);
-            if (*e == 0) return rt_float(d);
+            if (!r) {
+                double d = strtod(t, &e);
+                if (*e == 0) r = rt_float(d);
+            }
+            if (r) { free(b.s); return r; }
         }
+        free(b.s);
     }
     fail(pos, "「%s」は数値にできません%s", plain(v).s, action_hint(v));
 }
@@ -1541,7 +1782,7 @@ BI(s_join) { /* を, で */
         if (i) buf_add(&b, sep->s, sep->n);
         buf_add(&b, x->s, x->n);
     }
-    return mk_str(b.s, b.n);
+    return buf_str(&b);
 }
 BI(s_replace) { /* を, から, へ */
     Str *s = need_str(a[0], "「置換する」の「を」", pos);
@@ -1558,7 +1799,7 @@ BI(s_replace) { /* を, から, へ */
         buf_add(&b, nw->s, nw->n);
         p = q + old->n;
     }
-    return mk_str(b.s, b.n);
+    return buf_str(&b);
 }
 static V map_case(V v, const char *what, int upper, int32_t pos) {
     Str *s = need_str(v, what, pos);
@@ -1575,7 +1816,7 @@ static V map_case(V v, const char *what, int upper, int32_t pos) {
         else { enc[0] = (char)(0xe0 | (cp >> 12)); enc[1] = (char)(0x80 | ((cp >> 6) & 0x3f)); enc[2] = (char)(0x80 | (cp & 0x3f)); buf_add(&b, enc, 3); }
         i += len;
     }
-    return mk_str(b.s, b.n);
+    return buf_str(&b);
 }
 BI(s_upper) { return map_case(a[0], "「大文字にする」の「を」", 1, pos); }
 BI(s_lower) { return map_case(a[0], "「小文字にする」の「を」", 0, pos); }
@@ -1624,9 +1865,10 @@ BI(s_ord) {
 
 /* --- 通信(「通信」の組み込み)。待受口と接続は1からの番号で表す(インタプリタと同じ) --- */
 
-typedef struct { int fd; FILE *in; } Sock;
+/* 開いているものだけを持つ(番号は増える一方で、閉じたものは表から除く) */
+typedef struct { int64_t num; int fd; FILE *in; } Sock;
 static Sock *socks;
-static int64_t nsocks, capsocks;
+static int64_t nsocks, capsocks, lastsock;
 
 static int64_t sock_add(int fd) {
     if (nsocks == capsocks) {
@@ -1634,14 +1876,18 @@ static int64_t sock_add(int fd) {
         socks = realloc(socks, capsocks * sizeof(Sock));
         if (!socks) fail(0, "メモリが足りません");
     }
+    socks[nsocks].num = ++lastsock;
     socks[nsocks].fd = fd;
     socks[nsocks].in = NULL;
-    return ++nsocks;
+    nsocks++;
+    return lastsock;
 }
 static Sock *sock_get(V v, const char *what, int32_t pos) {
     int64_t i = IS_INT(v) ? INT_VAL(v) : 0;
-    if (TAG(v) == T_BOOL || i < 1 || i > nsocks || socks[i - 1].fd < 0) fail(pos, "「%s」は開いている%sではありません", plain(v).s, what);
-    return &socks[i - 1];
+    if (TAG(v) != T_BOOL)
+        for (int64_t k = nsocks; k-- > 0;)
+            if (socks[k].num == i) return &socks[k];
+    fail(pos, "「%s」は開いている%sではありません", plain(v).s, what);
 }
 __attribute__((noreturn)) static void net_fail(Act *a) { fail(a->pos, "「%s」で通信に失敗しました(%s)", a->name, strerror(errno)); }
 
@@ -1706,9 +1952,7 @@ static V net_run(Act *a) {
             }
         }
         if (ferror(s->in)) { free(b.s); net_fail(a); }
-        V r = mk_str(b.s ? b.s : "", (int64_t)b.n);
-        free(b.s);
-        return r;
+        return buf_str(&b);
     }
     case A_SEND: {
         Str *str = need_str(a->a, "「送信する」の「を」", pos);
@@ -1726,8 +1970,7 @@ static V net_run(Act *a) {
         Sock *s = sock_get(a->a, "待受口か接続", pos);
         if (s->in) fclose(s->in);
         close(s->fd);
-        s->fd = -1;
-        s->in = NULL;
+        *s = socks[--nsocks];
         return a->a;
     }
     }
@@ -1786,7 +2029,7 @@ V rt_ffi_from_ptr(void *p);
 static int ffi_errno;
 
 static V mk_bytes(const void *p, int64_t n) {
-    Bytes *b = rt_alloc(sizeof(Bytes) + n + 1);
+    Bytes *b = rt_alloc_atomic(sizeof(Bytes) + n + 1); /* 中にポインタはない */
     b->tag = T_BYTES;
     b->n = n;
     if (n && p) memcpy(b->d, p, n);
@@ -2042,8 +2285,10 @@ V rt_global_cached(V *slot, const char *name, int32_t pos) {
 void rt_top(V v) {
     int t = TAG(v);
     if (t == T_ACT || t == T_PURE) { perform(v); return; }
-    fputs(show(v), stdout);
+    char *s = (char *)show(v);
+    fputs(s, stdout);
     fputc('\n', stdout);
+    free(s);
 }
 
 static void init_builtins(void) {
@@ -2076,6 +2321,10 @@ extern const char suru_source[];
 
 static void *run_main(void *arg) {
     (void)arg;
+    gc_stack_top = __builtin_frame_address(0); /* ここより上(呼び出した側)には値がない */
+    const char *e = getenv("SURU_GC_MIN");
+    if (e) gc_min = gc_next = (size_t)strtoull(e, NULL, 10) << 10;
+    gc_log = getenv("SURU_GC_LOG") != NULL;
     suru_main();
     fflush(stdout);
     return NULL;
