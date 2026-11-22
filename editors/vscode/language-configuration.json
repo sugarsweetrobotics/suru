@@ -1,0 +1,73 @@
+{
+  "comments": {
+    "lineComment": "#"
+  },
+  "brackets": [
+    [
+      "（",
+      "）"
+    ],
+    [
+      "(",
+      ")"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "（",
+      "close": "）"
+    },
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "「",
+      "close": "」",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    },
+    {
+      "open": "『",
+      "close": "』",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "（",
+      "）"
+    ],
+    [
+      "(",
+      ")"
+    ],
+    [
+      "「",
+      "」"
+    ],
+    [
+      "『",
+      "』"
+    ]
+  ],
+  "colorizedBracketPairs": [
+    [
+      "（",
+      "）"
+    ],
+    [
+      "(",
+      ")"
+    ]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^.*(とは、?|手順（?|もし.*が、?)\\s*([#＃※].*)?$",
+    "decreaseIndentPattern": "^(?!)"
+  }
+}
