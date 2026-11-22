@@ -1,8 +1,8 @@
 {
   "name": "suru",
   "displayName": "する",
-  "description": "日本語の関数型プログラミング言語「する」の色分け・型の検査・実行",
-  "version": "0.1.0",
+  "description": "日本語の関数型プログラミング言語「する」の色分け・書きながらの型の検査・型のホバー・定義へ移動・実行",
+  "version": "0.2.0",
   "publisher": "sugarsweetrobotics",
   "license": "GPL-3.0-or-later",
   "repository": {
@@ -11,7 +11,7 @@
     "directory": "editors/vscode"
   },
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.82.0"
   },
   "categories": [
     "Programming Languages"
@@ -57,6 +57,11 @@
         "title": "バイナリを作る",
         "category": "する",
         "icon": "$(package)"
+      },
+      {
+        "command": "suru.restartServer",
+        "title": "言語サーバーを再起動する",
+        "category": "する"
       }
     ],
     "menus": {
@@ -84,6 +89,10 @@
         {
           "command": "suru.compile",
           "when": "editorLangId == suru"
+        },
+        {
+          "command": "suru.restartServer",
+          "when": "editorLangId == suru"
         }
       ]
     },
@@ -110,9 +119,17 @@
         "suru.checkOnSave": {
           "type": "boolean",
           "default": true,
-          "description": "ファイルを開いたときと保存したときに型を検査して、間違いを「問題」に表示する"
+          "description": "言語サーバーが使えないとき、ファイルを開いたときと保存したときに suru --検査 で型を調べて、間違いを「問題」に表示する"
+        },
+        "suru.languageServer": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "言語サーバー `suru-ls` の場所。空のときは、拡張に同梱のもの、PATH の `suru-ls`、`~/go/bin/suru-ls` の順に探します。`off` にすると使いません(保存したときだけ `suru --検査` で調べます)。"
         }
       }
     }
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
   }
 }

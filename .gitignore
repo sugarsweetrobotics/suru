@@ -4,3 +4,6 @@ __pycache__/
 build/
 dist/
 *.egg-info/
+editors/vscode/node_modules/
+editors/vscode/server/
+*.vsix
