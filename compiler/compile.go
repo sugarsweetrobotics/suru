@@ -299,6 +299,7 @@ type Compiler struct {
 	ctx         *ParseContext
 	source      string
 	globals     []string
+	roots       []string // 値を入れる大域変数(GC の根)
 	functions   []string
 	consts      []string
 	cstrings    map[string]string
@@ -374,6 +375,7 @@ func (c *Compiler) ptrs(names []string) string {
 func (c *Compiler) newGlobal(prefix string) string {
 	name := fmt.Sprintf("@%s.%d", prefix, c.uid())
 	c.globals = append(c.globals, name+" = internal global i64 0")
+	c.roots = append(c.roots, name)
 	return name
 }
 
@@ -1294,5 +1296,19 @@ func (c *Compiler) compile(program []Node, path string) string {
 		b.WriteString("\n" + f)
 	}
 	b.WriteString("\n" + entry + "\n")
+	b.WriteString(c.rootsTable() + "\n")
 	return b.String()
+}
+
+// rootsTable は GC の根: 値を入れる大域変数の一覧(runtime/suru_rt.c の suru_roots)。
+func (c *Compiler) rootsTable() string {
+	table := "zeroinitializer"
+	if len(c.roots) > 0 {
+		items := make([]string, len(c.roots))
+		for i, g := range c.roots {
+			items[i] = "ptr " + g
+		}
+		table = "[" + strings.Join(items, ", ") + "]"
+	}
+	return fmt.Sprintf("@suru_roots = constant [%d x ptr] %s\n@suru_nroots = constant i64 %d", len(c.roots), table, len(c.roots))
 }

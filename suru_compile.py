@@ -269,6 +269,7 @@ class Compiler:
         self.str_values: dict[str, str] = {}
         self.float_values: dict[float, str] = {}
         self.global_cache: dict[str, str] = {}
+        self.roots: list[str] = []  # 値を入れる大域変数(GC の根)
         self.n = 0
         self.modules: dict[str, Scope] = {}
         self.init_fg: FnGen | None = None
@@ -315,6 +316,7 @@ class Compiler:
     def new_global(self, prefix: str) -> str:
         name = f"@{prefix}.{self.uid()}"
         self.globals.append(f"{name} = internal global i64 0")
+        self.roots.append(name)
         return name
 
     def str_value(self, s: str) -> str:
@@ -949,7 +951,14 @@ class Compiler:
         source = f'@suru_source = constant [{len(src) + 1} x i8] c"{ir_bytes(src)}\\00"'
         links = [LINK_MARK + lib for lib in self.link_libs]
         ffi = [self.ffi_decls[k] for k in sorted(self.ffi_decls)]
-        return "\n".join(["; 「する」のコンパイラが作った LLVM IR"] + links + [DECLS] + ffi + [source] + self.globals + self.functions + [entry]) + "\n"
+        return "\n".join(["; 「する」のコンパイラが作った LLVM IR"] + links + [DECLS] + ffi + [source] + self.globals + self.functions + [entry, self.roots_table()]) + "\n"
+
+    def roots_table(self) -> str:
+        """GC の根: 値を入れる大域変数の一覧(runtime/suru_rt.c の suru_roots)"""
+        items = ", ".join(f"ptr {g}" for g in self.roots)
+        table = f"[{items}]" if self.roots else "zeroinitializer"
+        return (f"@suru_roots = constant [{len(self.roots)} x ptr] {table}\n"
+                f"@suru_nroots = constant i64 {len(self.roots)}")
 
 
 def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check: bool = True) -> str:
