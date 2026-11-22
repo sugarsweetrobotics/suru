@@ -1,8 +1,8 @@
 {
   "name": "suru",
   "displayName": "する",
-  "description": "日本語の関数型プログラミング言語「する」の色分け・書きながらの型の検査・型のホバー・定義へ移動・実行",
-  "version": "0.2.0",
+  "description": "日本語の関数型プログラミング言語「する」の色分け・書きながらの型の検査・型のホバー・定義へ移動・補完・名前の変更・実行",
+  "version": "0.3.0",
   "publisher": "sugarsweetrobotics",
   "license": "GPL-3.0-or-later",
   "repository": {

@@ -168,3 +168,98 @@ func TestUTF16(t *testing.T) {
 		t.Fatalf("%d %d", l, c)
 	}
 }
+
+func items(t *testing.T, msgs []message, id int) []map[string]any {
+	t.Helper()
+	var r struct {
+		Items []map[string]any `json:"items"`
+	}
+	json.Unmarshal([]byte(result(t, msgs, id)), &r)
+	return r.Items
+}
+
+func find(items []map[string]any, label string) map[string]any {
+	for _, it := range items {
+		if it["label"] == label {
+			return it
+		}
+	}
+	return nil
+}
+
+func TestCompletion(t *testing.T) {
+	src := "nを三倍するとは、n*3。\n『おやつ』とは、1。\n5を三倍\n"
+	msgs := talk(t, open(uri, src), at(1, "textDocument/completion", uri, 2, 4))
+	its := items(t, msgs, 1)
+	it := find(its, "三倍する")
+	if it == nil {
+		t.Fatalf("三倍する がありません: %v", its)
+	}
+	b, _ := json.Marshal(it["textEdit"])
+	// 「5を」の後ろの「三倍」(2〜4)を置き換える
+	if string(b) != `{"newText":"三倍する","range":{"end":{"character":4,"line":2},"start":{"character":2,"line":2}}}` {
+		t.Fatalf("置き換える範囲: %s", b)
+	}
+	if find(its, "表示する") == nil || find(its, "もし") == nil {
+		t.Fatal("組み込みやキーワードがありません")
+	}
+	if o := find(its, "おやつ"); o == nil || o["textEdit"].(map[string]any)["newText"] != "『おやつ』" {
+		t.Fatalf("ひらがなの名前は『』で囲む: %v", o)
+	}
+}
+
+func TestCompletionKeepsNamesWhileBroken(t *testing.T) {
+	msgs := talk(t, open(uri, "nを三倍するとは、n*3。\n"),
+		map[string]any{"method": "textDocument/didChange", "params": map[string]any{
+			"textDocument":   map[string]any{"uri": uri, "version": 2},
+			"contentChanges": []map[string]any{{"text": "nを三倍するとは、n*3。\n（5を三\n"}}}},
+		at(1, "textDocument/completion", uri, 1, 4))
+	if find(items(t, msgs, 1), "三倍する") == nil {
+		t.Fatal("構文が崩れていると補完が消えます")
+	}
+}
+
+func TestSeveralErrors(t *testing.T) {
+	msgs := talk(t, open(uri, "nを三倍するとは、n*3。\n「a」を三倍する。\n1 + 「b」\n"))
+	if d := diagnostics(t, msgs); len(d) != 2 {
+		t.Fatalf("間違いが2つ出ていません: %v", d)
+	}
+}
+
+func TestSemanticTokens(t *testing.T) {
+	msgs := talk(t, open(uri, "点 とは 横 と 縦 の 組\n数 を 倍する は 数\nx を 倍する とは x * 2\nリスト とは 3 と 4 の 点\n"),
+		map[string]any{"id": 1, "method": "textDocument/semanticTokens/full", "params": map[string]any{"textDocument": map[string]any{"uri": uri}}})
+	// 点(形) 横・縦(フィールド) / 数 数(型) / 点(形)。変数の「リスト」は型にしない
+	if r := result(t, msgs, 1); r != `{"data":[0,0,1,1,0,0,5,1,3,0,0,4,1,3,0,1,0,1,0,0,0,10,1,0,0,2,15,1,1,0]}` {
+		t.Fatalf("%s", r)
+	}
+}
+
+func TestRename(t *testing.T) {
+	src := "数 を 三倍する は 数\nn を 三倍する とは n * 3\n5を三倍して、表示する。\n"
+	msgs := talk(t, open(uri, src),
+		map[string]any{"id": 1, "method": "textDocument/rename", "params": map[string]any{
+			"textDocument": map[string]any{"uri": uri}, "position": map[string]any{"line": 2, "character": 3}, "newName": "四倍する"}},
+		map[string]any{"id": 2, "method": "textDocument/rename", "params": map[string]any{
+			"textDocument": map[string]any{"uri": uri}, "position": map[string]any{"line": 2, "character": 3}, "newName": "よんばいする"}},
+		map[string]any{"id": 3, "method": "textDocument/prepareRename", "params": map[string]any{
+			"textDocument": map[string]any{"uri": uri}, "position": map[string]any{"line": 2, "character": 9}}})
+	r := result(t, msgs, 1)
+	for _, want := range []string{
+		`{"newText":"四倍","range":{"end":{"character":6,"line":0},"start":{"character":4,"line":0}}}`,
+		`{"newText":"四倍","range":{"end":{"character":6,"line":1},"start":{"character":4,"line":1}}}`,
+		`{"newText":"四倍","range":{"end":{"character":4,"line":2},"start":{"character":2,"line":2}}}`,
+	} {
+		if !strings.Contains(r, want) {
+			t.Fatalf("%s がありません: %s", want, r)
+		}
+	}
+	for _, m := range msgs {
+		if m.ID != nil && string(*m.ID) == "2" && (m.Error == nil || !strings.Contains(m.Error.Message, "ひらがなだけ")) {
+			t.Fatalf("ひらがなだけの名前を断っていません: %v", m.Error)
+		}
+		if m.ID != nil && string(*m.ID) == "3" && m.Error == nil {
+			t.Fatalf("組み込みの「表示する」は変えられないはず")
+		}
+	}
+}

@@ -114,8 +114,15 @@ typedef struct GcBlk {
 /* 空いているものは調べない(空きのつながりをたどって空きを生きているとみなさないため) */
 enum { GC_FREE = 0, GC_USED = 1, GC_MARKED = 2 };
 
-static GcBlk **gc_regs;          /* start の順に並べたすべての領域 */
+static GcBlk **gc_regs;          /* すべての領域(片付けで順に見る) */
 static size_t gc_nregs, gc_capregs;
+/* ポインタらしい語からブロックを引く表。小さいオブジェクトのブロックは GC_BLOCK にそろえて置くので、
+ * 語の下位を落とした番地で引ける(開番地法)。大きいオブジェクトは start の順の配列を二分探索する */
+static GcBlk **gc_tab;
+static size_t gc_tabcap, gc_ntab;
+static GcBlk **gc_large;
+static size_t gc_nlarge, gc_caplarge;
+static uintptr_t gc_lo = UINTPTR_MAX, gc_hi; /* すべての領域を含む範囲 */
 static GcBlk *gc_avail[2][GC_NCLASS]; /* [atomic][大きさ] 空きのあるブロック */
 static uint8_t gc_class_of[GC_SMALL_MAX / 16 + 1];
 static size_t gc_since;            /* 前の GC からの確保量 */
@@ -131,38 +138,76 @@ static void gc_oom(void) {
     exit(1);
 }
 
+static size_t gc_hash(uintptr_t base) { return (size_t)((base >> 18) * 0x9E3779B97F4A7C15ULL); }
+
+static void gc_tab_put(GcBlk *b) {
+    if (2 * (gc_ntab + 1) > gc_tabcap) { /* 半分を超えたら広げる */
+        size_t ncap = gc_tabcap ? gc_tabcap * 2 : 256;
+        GcBlk **nt = calloc(ncap, sizeof(GcBlk *));
+        if (!nt) gc_oom();
+        for (size_t i = 0; i < gc_tabcap; i++) {
+            if (!gc_tab[i]) continue;
+            size_t h = gc_hash((uintptr_t)gc_tab[i]->start) & (ncap - 1);
+            while (nt[h]) h = (h + 1) & (ncap - 1);
+            nt[h] = gc_tab[i];
+        }
+        free(gc_tab);
+        gc_tab = nt;
+        gc_tabcap = ncap;
+    }
+    size_t h = gc_hash((uintptr_t)b->start) & (gc_tabcap - 1);
+    while (gc_tab[h]) h = (h + 1) & (gc_tabcap - 1);
+    gc_tab[h] = b;
+    gc_ntab++;
+}
+
 static void gc_add_region(GcBlk *b) {
     if (gc_nregs == gc_capregs) {
         gc_capregs = gc_capregs ? gc_capregs * 2 : 64;
         gc_regs = realloc(gc_regs, gc_capregs * sizeof(GcBlk *));
         if (!gc_regs) gc_oom();
     }
-    size_t lo = 0, hi = gc_nregs;
+    gc_regs[gc_nregs++] = b;
+    if ((uintptr_t)b->start < gc_lo) gc_lo = (uintptr_t)b->start;
+    if ((uintptr_t)b->end > gc_hi) gc_hi = (uintptr_t)b->end;
+    if (!b->large) { gc_tab_put(b); return; }
+    if (gc_nlarge == gc_caplarge) {
+        gc_caplarge = gc_caplarge ? gc_caplarge * 2 : 64;
+        gc_large = realloc(gc_large, gc_caplarge * sizeof(GcBlk *));
+        if (!gc_large) gc_oom();
+    }
+    size_t lo = 0, hi = gc_nlarge;
     while (lo < hi) {
         size_t m = (lo + hi) / 2;
-        if (gc_regs[m]->start < b->start) lo = m + 1;
+        if (gc_large[m]->start < b->start) lo = m + 1;
         else hi = m;
     }
-    memmove(gc_regs + lo + 1, gc_regs + lo, (gc_nregs - lo) * sizeof(GcBlk *));
-    gc_regs[lo] = b;
-    gc_nregs++;
+    memmove(gc_large + lo + 1, gc_large + lo, (gc_nlarge - lo) * sizeof(GcBlk *));
+    gc_large[lo] = b;
+    gc_nlarge++;
 }
 
 static GcBlk *gc_find(uintptr_t p) {
-    size_t lo = 0, hi = gc_nregs;
+    if (p < gc_lo || p >= gc_hi) return NULL;
+    if (gc_tabcap) {
+        uintptr_t base = p & ~(uintptr_t)(GC_BLOCK - 1);
+        for (size_t h = gc_hash(base) & (gc_tabcap - 1); gc_tab[h]; h = (h + 1) & (gc_tabcap - 1))
+            if ((uintptr_t)gc_tab[h]->start == base) return p < (uintptr_t)gc_tab[h]->end ? gc_tab[h] : NULL;
+    }
+    size_t lo = 0, hi = gc_nlarge;
     while (lo < hi) {
         size_t m = (lo + hi) / 2;
-        if ((uintptr_t)gc_regs[m]->start <= p) lo = m + 1;
+        if ((uintptr_t)gc_large[m]->start <= p) lo = m + 1;
         else hi = m;
     }
     if (lo == 0) return NULL;
-    GcBlk *b = gc_regs[lo - 1];
+    GcBlk *b = gc_large[lo - 1];
     return p < (uintptr_t)b->end ? b : NULL;
 }
 
 static void gc_new_block(int atomic, int k) {
     GcBlk *b = malloc(sizeof(GcBlk));
-    char *mem = malloc(GC_BLOCK);
+    char *mem = aligned_alloc(GC_BLOCK, GC_BLOCK); /* 番地を GC_BLOCK にそろえる(gc_find が下位を落として引く) */
     if (!b || !mem) gc_oom();
     b->osz = GC_SIZES[k];
     b->nobj = GC_BLOCK / b->osz;
@@ -190,24 +235,37 @@ static void gc_mark(uintptr_t p) {
     if (b->mark[i] != GC_USED) return;
     b->mark[i] = GC_MARKED;
     if (b->atomic) return;
-    if (gc_nstack == gc_capstack) {
+    if (gc_nstack + 2 > gc_capstack) {
         gc_capstack = gc_capstack ? gc_capstack * 2 : 4096;
         gc_stack = realloc(gc_stack, gc_capstack * sizeof(uintptr_t));
         if (!gc_stack) gc_oom();
     }
     gc_stack[gc_nstack++] = (uintptr_t)b->start + i * b->osz;
+    gc_stack[gc_nstack++] = b->osz;
 }
 
+/* スタックやレジスタ: C の局所変数が文字列の途中(奇数の番地)を指すこともあるので、すべての語を調べる */
 static void gc_mark_range(const void *lo, const void *hi) {
     const char *p = (const char *)(((uintptr_t)lo + 7) & ~(uintptr_t)7);
-    for (; p + sizeof(uintptr_t) <= (const char *)hi; p += sizeof(uintptr_t)) gc_mark(*(const uintptr_t *)p);
+    for (; p + sizeof(uintptr_t) <= (const char *)hi; p += sizeof(uintptr_t)) {
+        uintptr_t w = *(const uintptr_t *)p;
+        if (w >= gc_lo && w < gc_hi) gc_mark(w);
+    }
+}
+
+/* オブジェクトの中: 奇数の語は整数の値なので調べない(中にあるポインタは値かフレーム・配列で、どれも偶数) */
+static void gc_mark_object(const uintptr_t *p, size_t size) {
+    for (const uintptr_t *e = p + size / sizeof(uintptr_t); p < e; p++) {
+        uintptr_t w = *p;
+        if (!(w & 1) && w >= gc_lo && w < gc_hi) gc_mark(w);
+    }
 }
 
 static void gc_drain(void) {
     while (gc_nstack) {
+        size_t size = gc_stack[--gc_nstack];
         uintptr_t o = gc_stack[--gc_nstack];
-        GcBlk *b = gc_find(o);
-        gc_mark_range((const void *)o, (const char *)o + b->osz);
+        gc_mark_object((const uintptr_t *)o, size);
     }
 }
 
@@ -238,8 +296,8 @@ static void gc_collect(void) {
         if (b->large) {
             if (b->mark[0] != GC_MARKED) {
                 free(b->start);
+                b->start = NULL; /* GcBlk そのものは gc_large から除くときに解放する */
                 free(b->mark);
-                free(b);
                 continue;
             }
             b->mark[0] = GC_USED;
@@ -263,6 +321,11 @@ static void gc_collect(void) {
         gc_regs[keep++] = b;
     }
     gc_nregs = keep;
+    size_t lk = 0;
+    for (size_t r = 0; r < gc_nlarge; r++)
+        if (gc_large[r]->start) gc_large[lk++] = gc_large[r];
+        else free(gc_large[r]);
+    gc_nlarge = lk;
     gc_since = 0;
     /* 次は生きている量の2倍を確保したとき(マークの合計が確保量に比例するように) */
     gc_next = 2 * gc_live > gc_min ? 2 * gc_live : gc_min;
