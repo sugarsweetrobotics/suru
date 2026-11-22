@@ -45,12 +45,15 @@ type Definition struct {
 
 // Analysis は Analyze の結果
 type Analysis struct {
-	Error       *SuruError   // 最初の間違い(なければ nil)
-	Errors      []*SuruError // 見つかった間違い全部(型の間違いは、一番外の文ごとに1つまで)
-	Types       []TypeInfo   // 位置の順
-	Defs        []Definition // 定義の順
-	Completions []Completion // 補完の候補
-	Words       []Word       // 型・形・性質・フィールドの名前が書かれたところ(色分け用)
+	Error       *SuruError        // 最初の間違い(なければ nil)
+	Errors      []*SuruError      // 見つかった間違い全部(型の間違いは、一番外の文ごとに1つまで)
+	Types       []TypeInfo        // 位置の順
+	Defs        []Definition      // 定義の順
+	Completions []Completion      // 補完の候補
+	Usages      map[string]string // 関数の名前 → 使い方(「n を 三倍する」)
+	Names       []NamePos         // 名前の単語が書かれたところ全部(引数の名前の変更に使う)
+	Statements  []int             // 一番外の文の始まりの行(昇順)
+	Words       []Word            // 型・形・性質・フィールドの名前が書かれたところ(色分け用)
 	// Starts は行ごとの単語の始まり(何文字目か、昇順)。ホバーの範囲を決めるのに使う
 	Starts map[int][]int
 }
@@ -58,12 +61,44 @@ type Analysis struct {
 // Analyze はプログラムを調べて、間違い・名前の型・定義の場所を返す。
 // 間違いがあっても、そこまでに分かったことは返す
 func Analyze(source, baseDir string) (a *Analysis) {
-	a = &Analysis{Starts: map[int][]int{}}
-	if lines, err := splitSourceLines(source); err == nil {
+	a = &Analysis{Starts: map[int][]int{}, Usages: map[string]string{}}
+	srcLines := SplitLines(source)
+	// 構文の間違いが見つかったら、その一番外の文の行を空にして読み直し、ほかの間違いも探す
+	// (行の数は変えないので、位置はそのまま使える)
+	var program []Node
+	var ctx *ParseContext
+	var syntaxErrors []*SuruError
+	text := source
+	for round := 0; round < 20; round++ {
+		c := NewParseContext(baseDir)
+		var prog []Node
+		err := try(func() { prog = ParseProgram(text, c) })
+		if err == nil {
+			program, ctx = prog, c
+			break
+		}
+		syntaxErrors = append(syntaxErrors, err)
+		next, ok := blankStatementAt(text, err.Line.Line)
+		if !ok {
+			break
+		}
+		text = next
+	}
+	tokenSource := source
+	if _, err := splitSourceLines(source); err != nil {
+		tokenSource = text
+	}
+	var words []*Token
+	if lines, err := splitSourceLines(tokenSource); err == nil {
 		for _, l := range lines {
 			for _, t := range l.Tokens {
-				if t.Line.Line != 0 && t.Line.Col != 0 {
-					a.Starts[t.Line.Line] = append(a.Starts[t.Line.Line], t.Line.Col)
+				if t.Line.Line == 0 || t.Line.Col == 0 {
+					continue
+				}
+				a.Starts[t.Line.Line] = append(a.Starts[t.Line.Line], t.Line.Col)
+				if t.Kind == "WORD" {
+					words = append(words, t)
+					a.Names = append(a.Names, NamePos{t.Line, t.S})
 				}
 			}
 		}
@@ -71,24 +106,20 @@ func Analyze(source, baseDir string) (a *Analysis) {
 			sort.Ints(a.Starts[k])
 		}
 	}
-	srcLines := SplitLines(source)
-	var words []*Token
-	if lines, err := splitSourceLines(source); err == nil {
-		for _, l := range lines {
-			for _, t := range l.Tokens {
-				if t.Kind == "WORD" && t.Line.Line != 0 && t.Line.Col != 0 {
-					words = append(words, t)
-				}
+	byPos := map[Pos]TypeInfo{}
+	var checker *Checker
+	a.Errors = append(a.Errors, syntaxErrors...)
+	a.Error = try(func() {
+		if program == nil {
+			return
+		}
+		a.Defs = collectDefinitions(program, srcLines)
+		a.collectUsages(program)
+		for _, s := range program {
+			if l := firstLine(s); l.Line != 0 {
+				a.Statements = append(a.Statements, l.Line)
 			}
 		}
-	}
-	byPos := map[Pos]TypeInfo{}
-	var ctx *ParseContext
-	var checker *Checker
-	a.Error = try(func() {
-		ctx = NewParseContext(baseDir)
-		program := ParseProgram(source, ctx)
-		a.Defs = collectDefinitions(program, srcLines)
 		remember := func(c *Checker) {
 			checker = c
 			for _, u := range c.uses {
@@ -117,7 +148,7 @@ func Analyze(source, baseDir string) (a *Analysis) {
 			}
 			rest = next
 		}
-		if len(a.Errors) == 0 {
+		if len(a.Errors) == 0 && len(syntaxErrors) == 0 {
 			checkDefinitions(program, ctx)
 		}
 		for _, s := range program {
@@ -128,8 +159,10 @@ func Analyze(source, baseDir string) (a *Analysis) {
 		}
 	})
 	if a.Error != nil {
-		a.Errors = append([]*SuruError{a.Error}, a.Errors...)
-	} else if len(a.Errors) > 0 {
+		a.Errors = append(a.Errors, a.Error)
+	}
+	sort.SliceStable(a.Errors, func(i, j int) bool { return a.Errors[i].Line.Line < a.Errors[j].Line.Line })
+	if len(a.Errors) > 0 {
 		a.Error = a.Errors[0]
 	}
 	for _, t := range byPos {
@@ -490,5 +523,113 @@ func (a *Analysis) collectNames(ctx *ParseContext, c *Checker, words []*Token, l
 			}
 		}
 		a.Words = append(a.Words, Word{pos, n, kind})
+	}
+}
+
+// NamePos は名前の単語が書かれたところ
+type NamePos struct {
+	Pos  Pos
+	Name string
+}
+
+// blankStatementAt は line 行目を含む一番外の文の行を空にした文章。できなければ false
+func blankStatementAt(text string, line int) (string, bool) {
+	lines := SplitLines(text)
+	if line < 1 || line > len(lines) {
+		return "", false
+	}
+	top := func(l string) bool {
+		t := strings.TrimLeft(l, " 　\t")
+		return t != "" && len(t) == len(l) && !strings.HasPrefix(t, "#") && !strings.HasPrefix(t, "＃") && !strings.HasPrefix(t, "※") &&
+			!strings.HasPrefix(t, KwThen) && !strings.HasPrefix(t, KwElse)
+	}
+	start := line
+	for start > 1 && !top(lines[start-1]) {
+		start--
+	}
+	end := line + 1
+	for end <= len(lines) && !top(lines[end-1]) {
+		end++
+	}
+	changed := false
+	for i := start; i < end; i++ {
+		if lines[i-1] != "" {
+			lines[i-1] = ""
+			changed = true
+		}
+	}
+	if !changed {
+		return "", false
+	}
+	return strings.Join(lines, "\n"), true
+}
+
+// usage は引数の並びから「n を 三倍する」のような使い方を作る
+func usage(name string, params []Param) string {
+	var b strings.Builder
+	for _, p := range params {
+		switch {
+		case p.Pat != nil:
+			b.WriteString("…")
+		case p.List:
+			b.WriteString(strings.Join(p.Names, " "+KwTo+" "))
+		case p.Name != "":
+			b.WriteString(p.Name)
+		default:
+			b.WriteString("…")
+		}
+		b.WriteString(" " + p.Part + " ")
+	}
+	return b.String() + name
+}
+
+func (a *Analysis) collectUsages(program []Node) {
+	for name, parts := range builtinParts {
+		var b strings.Builder
+		for _, p := range parts {
+			if p.required {
+				b.WriteString("… " + p.part + " ")
+			} else {
+				b.WriteString("（… " + p.part + "） ")
+			}
+		}
+		a.Usages[name] = b.String() + name
+	}
+	var walk func(n Node, prefix string)
+	walk = func(n Node, prefix string) {
+		switch x := n.(type) {
+		case nil:
+			return
+		case *Define:
+			if x.IsFunction && !strings.HasPrefix(x.Name, "\x00") {
+				key := prefix + x.Name
+				// 場合ごとの定義は、パターンのない定義を優先する
+				simple := true
+				for _, p := range x.Params {
+					if p.Pat != nil {
+						simple = false
+					}
+				}
+				if _, ok := a.Usages[key]; !ok || simple {
+					a.Usages[key] = usage(key, x.Params)
+				}
+			}
+		case *Import:
+			if x.Module != nil {
+				for _, s := range x.Module.Program {
+					walk(s, x.Module.Name+ModuleSep)
+					if x.Open {
+						walk(s, "")
+					}
+				}
+			}
+			return
+		}
+		for _, c := range n.Children() {
+			walk(c, prefix)
+		}
+	}
+	for _, s := range program {
+		walk(s, "")
 	}
 }
