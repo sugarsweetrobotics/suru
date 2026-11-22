@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.18"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
@@ -8,6 +8,9 @@ dynamic = ["version"]
 description = "日本語の関数型プログラミング言語「する」(インタプリタ・型検査・LLVM コンパイラ)"
 readme = "README.md"
 requires-python = ">=3.10"
+# 本体は GPL、コンパイルしたプログラムに入る実行時ライブラリ(runtime/)と標準ライブラリ(lib/)は MIT
+license = "GPL-3.0-or-later AND MIT"
+license-files = ["LICENSE", "lib/LICENSE", "runtime/LICENSE"]
 authors = [{ name = "sugarsweetrobotics" }]
 classifiers = [
     "Programming Language :: Python :: 3",
@@ -34,4 +37,4 @@ only-include = ["suru.py", "suru_check.py", "suru_compile.py"]
 "runtime" = "suru_data/runtime"
 
 [tool.hatch.build.targets.sdist]
-include = ["suru.py", "suru_check.py", "suru_compile.py", "lib/", "runtime/", "examples/", "tests/", "README.md"]
+include = ["suru.py", "suru_check.py", "suru_compile.py", "lib/", "runtime/", "examples/", "tests/", "README.md", "LICENSE"]

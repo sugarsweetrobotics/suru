@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 sugarsweetrobotics
 """日本語関数型プログラミング言語「する」のインタプリタ(プロトタイプ)
 
 使い方:
