@@ -51,7 +51,7 @@ def same(source: str, tmp_path: pathlib.Path, base_dir: str = ".") -> str:
     return r.stdout
 
 
-EXAMPLES = sorted(p for p in (ROOT / "examples").glob("*.suru") if p.stem != "数学")
+EXAMPLES = sorted(p for p in (ROOT / "examples").glob("*.suru") if p.stem not in ("数学", "http"))  # http は待ち続ける
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=[p.stem for p in EXAMPLES])
@@ -278,3 +278,26 @@ def test_HTTPのサーバーは失敗しても何も送らない相手がいて�
     finally:
         p.kill()
     assert "通信に失敗しました" in p.communicate()[1]
+
+
+def test_HTTPのサーバーは1万件続けて答える(tmp_path):
+    import http.client
+
+    import net_helper as N
+
+    port = N.free_port()
+    ir = suru_compile.compile_source(N.HTTP_SERVER.replace("PORT", str(port)), ".")
+    (tmp_path / "srv.ll").write_text(ir, encoding="utf-8")
+    suru_compile.build(str(tmp_path / "srv.ll"), str(tmp_path / "srv"))
+    p = subprocess.Popen([str(tmp_path / "srv")], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    try:
+        N.wait_http(port)
+        for _ in range(10000):
+            c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+            c.request("GET", "/")
+            r = c.getresponse()
+            assert (r.status, r.read()) == (200, "こんにちは".encode("utf-8"))
+            c.close()
+        assert p.poll() is None
+    finally:
+        p.kill()
