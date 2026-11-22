@@ -1049,6 +1049,7 @@ class Module:
     name: str  # 「数学・円周率」の「数学」
     path: str
     program: list
+    private: frozenset = frozenset()  # 「… は 非公開とする」で外から見えない名前
 
 
 @dataclass
@@ -1083,7 +1084,19 @@ class Extern:
     pointer: str = ""  # 「外部の（f）」なら、関数の番地を持つ引数の名前(C には渡さない)
 
 
-TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import, ExternLib)
+@dataclass
+class Visibility:
+    """「確保する と 解放する は 非公開とする」: 読み込んだ側から見えるか"""
+
+    names: list
+    public: bool
+    line: int
+
+
+VIS_PUBLIC = "公開とする"
+VIS_PRIVATE = "非公開とする"
+
+TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import, ExternLib, Visibility)
 TYPE_VAR_NAMES = "甲乙丙丁戊己庚辛壬癸"
 # 小数・整数は数の別名(外部の関数の宣言で C の double・int を表す)。番地は C のポインタ
 # 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
@@ -2143,6 +2156,9 @@ def parse_statement(node: Node) -> Any:
         if not isinstance(inner, Define):
             raise SuruError("「ただし」の後には「…とは」の定義を書いてください", tokens[0].line)
         return Proviso(inner, tokens[0].line)
+    vis = try_parse_visibility(nosep(flatten(node)))
+    if vis is not None:
+        return vis
     typedef = try_parse_typedef(node)
     if typedef is not None:
         return typedef
@@ -2475,6 +2491,48 @@ def attach_provisos(statements: list) -> list:
     return merge_clauses(out)
 
 
+def try_parse_visibility(tokens: list[Token]) -> Visibility | None:
+    """「a と b は 非公開とする」「a は 公開とする」なら Visibility"""
+    if tokens and tokens[-1].kind == "PERIOD":
+        tokens = tokens[:-1]
+    if (len(tokens) < 3 or tokens[-1].kind != "CALL" or tokens[-1].value not in (VIS_PUBLIC, VIS_PRIVATE)
+            or not is_kw(tokens[-2], KW_WA)):
+        return None
+    word = tokens[-1].value
+    names = []
+    for i, t in enumerate(tokens[:-2]):
+        if i % 2 == 1:
+            if not is_kw(t, KW_TO):
+                raise SuruError(f"「{word}」の前には、名前を「と」で並べてください(「確保する と 解放する は {word}」)", t.line)
+        elif t.kind in ("WORD", "CALL"):
+            names.append(t.value)
+        else:
+            raise SuruError(f"「{word}」の前には、このファイルで定義した名前を書いてください", t.line)
+    if len(tokens[:-2]) % 2 == 0:
+        raise SuruError(f"「{word}」の前には、名前を「と」で並べてください(「確保する と 解放する は {word}」)", tokens[-2].line)
+    return Visibility(names, word == VIS_PUBLIC, tokens[0].line)
+
+
+def private_names(statements: list) -> frozenset:
+    """一番外の「… は 非公開とする」「… は 公開とする」から、外から見えない名前を決める"""
+    vis = [s for s in statements if isinstance(s, Visibility)]
+    if not vis:
+        return frozenset()
+    defined = {s.name for s in statements if isinstance(s, Define)}
+    public: dict[str, int] = {}
+    private: dict[str, int] = {}
+    for v in vis:
+        for n in v.names:
+            if n not in defined:
+                raise SuruError(f"「{n}」はこのファイルで定義していないので、{VIS_PUBLIC if v.public else VIS_PRIVATE}にできません", v.line)
+            (public if v.public else private)[n] = v.line
+            if n in public and n in private:
+                raise SuruError(f"「{n}」が「{VIS_PUBLIC}」と「{VIS_PRIVATE}」の両方に書かれています", v.line)
+    if public:
+        return frozenset(defined - set(public))
+    return frozenset(private)
+
+
 def parse_block(nodes: list[Node]) -> Any:
     statements = attach_provisos([parse_statement(n) for n in nodes])
     for s, n in zip(statements, nodes):
@@ -2531,7 +2589,7 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
 
 def module_names(module: Module) -> set:
     """読み込んだファイルの一番外の名前(標準ライブラリなら組み込みも)"""
-    names = {s.name for s in module.program if isinstance(s, Define)}
+    names = {s.name for s in module.program if isinstance(s, Define)} - module.private
     names |= {b.name for b in LIB_PRIMITIVES.get(module.path, ())}
     return names
 
@@ -2667,7 +2725,7 @@ def load_module(name: str, ctx: ParseContext, line: int) -> Module:
         raise SuruError(f"「{stem}{SOURCE_SUFFIX}」の{_where(e.line) if e.line else ''}: {e.message}", line) from None
     ctx.ctors.update(sub.ctors)
     ctx.types.update(sub.types)
-    module = Module(stem, path, program)
+    module = Module(stem, path, program, private_names(program))
     ctx.modules[path] = module
     return module
 
@@ -3720,7 +3778,7 @@ class Interpreter:
             if isinstance(stmt, Import):
                 mod = self.load_module(stmt.module)
                 for name, v in mod.vars.items():
-                    if MODULE_SEP not in name:
+                    if MODULE_SEP not in name and name not in stmt.module.private:
                         env.vars[stmt.module.name + MODULE_SEP + name] = v
                         if stmt.open:
                             env.vars[name] = v

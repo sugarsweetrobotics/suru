@@ -229,6 +229,9 @@ func collectDefinitions(program []Node, main []string) []Definition {
 			if m != nil && !seen[m.Path] {
 				seen[m.Path] = true
 				for _, s := range m.Program {
+					if d, ok := s.(*Define); ok && m.Private[d.Name] {
+						continue // 外から見えない名前は、読み込んだ側の定義の一覧に入れない
+					}
 					walk(s, m.Path, m.Name+ModuleSep)
 					if x.Open {
 						walk(s, m.Path, "")

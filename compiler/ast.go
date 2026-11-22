@@ -250,6 +250,14 @@ type Module struct {
 	Name    string
 	Path    string
 	Program []Node
+	Private map[string]bool // 「… は 非公開とする」で外から見えない名前
+}
+
+// Visibility は「確保する と 解放する は 非公開とする」: 読み込んだ側から見えるか
+type Visibility struct {
+	Names  []string
+	Public bool
+	Line   Pos
 }
 type Import struct {
 	Module *Module
@@ -378,6 +386,7 @@ func (n *TypeVarName) Children() []Node { return nil }
 func (n *Module) Children() []Node      { return n.Program }
 func (n *Import) Children() []Node      { return nn(n.Module) }
 func (n *ExternLib) Children() []Node   { return nil }
+func (n *Visibility) Children() []Node  { return nil }
 func (n *Extern) Children() []Node      { return nil }
 
 func (n *Num) GetLine() Pos            { return n.Line }
@@ -409,6 +418,7 @@ func (n *TraitImpl) GetLine() Pos      { return n.Line }
 func (n *TypeSig) GetLine() Pos        { return n.Line }
 func (n *Import) GetLine() Pos         { return n.Line }
 func (n *ExternLib) GetLine() Pos      { return n.Line }
+func (n *Visibility) GetLine() Pos     { return n.Line }
 func (n *Extern) GetLine() Pos         { return n.Line }
 
 // lineOf は Python の getattr(node, "line", 0)
@@ -437,7 +447,7 @@ func firstLine(n Node) Pos {
 
 func isTopLevelOnly(n Node) bool {
 	switch n.(type) {
-	case *TypeDef, *TraitDecl, *TraitImpl, *TypeSig, *Import, *ExternLib:
+	case *TypeDef, *TraitDecl, *TraitImpl, *TypeSig, *Import, *ExternLib, *Visibility:
 		return true
 	}
 	return false
