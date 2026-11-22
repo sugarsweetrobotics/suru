@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+__version__ = "0.1.0"
+
 import math
 import os
 import sys
@@ -2933,7 +2935,18 @@ BUILTINS = [
 # ---------------------------------------------------------------------------
 
 STD_NAME = "標準"
-LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")  # 見つからないファイルはここから探す
+
+
+def data_path(*parts: str) -> str:
+    """lib/ や runtime/ の場所。リポジトリでは suru.py の隣、pip で入れたときは隣の suru_data/ の中"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for base in (here, os.path.join(here, "suru_data")):
+        if os.path.exists(os.path.join(base, parts[0])):
+            return os.path.join(base, *parts)
+    return os.path.join(here, *parts)
+
+
+LIB_DIR = data_path("lib")  # 見つからないファイルはここから探す
 STD_PATH = os.path.join(LIB_DIR, STD_NAME + SOURCE_SUFFIX)
 
 
@@ -3711,6 +3724,9 @@ def type_check(source: str, base_dir: str = ".") -> bool:
 
 def main(argv: list[str]) -> int:
     sys.setrecursionlimit(10000)
+    if len(argv) >= 2 and argv[1] in ("--version", "--版"):
+        print(f"する {__version__}")
+        return 0
     if len(argv) >= 2 and argv[1] in COMPILE_FLAGS:
         import suru_compile
 
@@ -3749,5 +3765,10 @@ def main(argv: list[str]) -> int:
     return 0
 
 
-if __name__ == "__main__":
+def cli() -> None:
+    """pip で入れたときの「suru」コマンド"""
     sys.exit(main(sys.argv))
+
+
+if __name__ == "__main__":
+    cli()

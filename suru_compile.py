@@ -21,7 +21,7 @@ from typing import Any
 
 import suru as S
 
-RUNTIME = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runtime", "suru_rt.c")
+RUNTIME = S.data_path("runtime", "suru_rt.c")
 
 PART_IDS = {"を": 0, "に": 1, "で": 2, "から": 3, "へ": 4, "より": 5, "が": 6}
 OPS = {"+": 0, "-": 1, "*": 2, "/": 3, "%": 4, "^": 5, "<": 6, ">": 7, "<=": 8, ">=": 9, "==": 10, "!=": 11}
