@@ -90,11 +90,21 @@ defs.suru:15:6: 未使用の定義: 「件数にする」は定義されてい�
 defs.suru:15:6: 組み込みの上書き: 「件数にする」は「表」の関数と同じ名前です
 """
 
-# ライブラリ(一番外に式の文がないファイル)では、一番外の定義が使われていなくても知らせない
+# ライブラリ(一番外に式の文がないファイル)では、一番外の定義が使われていなくても知らせない。
+# 型の宣言のない関数はライブラリでだけ知らせる(宣言は後ろに書いてもよい)
 LIBRARY = """x を 二倍する とは x * 2
 n を 三倍する とは
   m とは n * 3
   m
+数 を 二倍する は 数
+"""
+
+# 句読点の書き方と空白の書き方が混ざっていれば、少ないほうの最初の文で1回だけ知らせる
+MIXED = """x とは 1
+y とは 2
+zとは、3。
+wとは、4。
+（x + y + z + w） を 表示する
 """
 
 KINDS = ["interp"] + (["binary"] if suru_compile.find_cc() is not None else [])
@@ -130,9 +140,12 @@ def test_定義と使用(kind, tmp_path):
     (tmp_path / "型.suru").write_text(TYPES, encoding="utf-8")
     (tmp_path / "defs.suru").write_text(DEFS, encoding="utf-8")
     (tmp_path / "lib.suru").write_text(LIBRARY, encoding="utf-8")
-    r = run_lint(kind, tmp_path, "defs.suru", "lib.suru")
+    (tmp_path / "mixed.suru").write_text(MIXED, encoding="utf-8")
+    r = run_lint(kind, tmp_path, "defs.suru", "lib.suru", "mixed.suru")
     assert r.returncode == 1, r.stderr
-    assert r.stdout == DEFS_OUT
+    assert r.stdout == DEFS_OUT + (
+        "lib.suru:2:5: 型の宣言なし: 「三倍する」に型の宣言がありません(『数 を 三倍する は 数』のように書きます)\n"
+        "mixed.suru:3:1: 書き方の混在: このファイルは空白の書き方が3文、句読点の書き方が2文あります。空白の書き方にそろえると読みやすくなります\n")
 
 
 def test_例とライブラリは知らせなし(tmp_path):
