@@ -39,7 +39,11 @@ func need(c *Checker, a typedArgs, p string, t Type, line Pos, name string) {
 
 var builtinCalls = map[string]typer{}
 
+// builtinParts は組み込み関数の助詞(エディターの案内に使う)
+var builtinParts = map[string][]partReq{}
+
 func builtin(name string, parts []partReq, fn typer) {
+	builtinParts[name] = parts
 	builtinCalls[name] = func(c *Checker, a typedArgs, line Pos) Type {
 		checkParts(name, a, parts, line, c)
 		return fn(c, a, line)
