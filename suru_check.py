@@ -1834,6 +1834,13 @@ _simple("番地数値にする", [(WO, ADDR)], NUM)
 _simple("バイト列取得する", [("から", ADDR), (WO, NUM)], act(BYTES))
 _simple("書込する", [(WO, BYTES), ("へ", ADDR)], act(NUM))
 _simple("エラー番号取得する", [], act(NUM))
+_simple("引数取得する", [], act(lst(STR)))
+
+
+@prim("終了する", {WO: True}, lambda: TFun([(WO, NUM)], act(TVar())))
+def _t_exit(c, a, line):
+    _need(c, a, WO, NUM, line, "終了する")
+    return act(TVar())
 
 
 @prim("失敗する", {WO: True}, lambda: TFun([(WO, STR)], act(TVar())))

@@ -3200,7 +3200,24 @@ STD_PRIMITIVES = [
     Builtin("書込する", [(WO, True), ("へ", True)], lambda it, a, line: _poke(a[WO], a["へ"], line)),
     Builtin("エラー番号取得する", [], lambda it, a, line: Action("エラー番号取得する", lambda it2: _errno())),
     Builtin("失敗する", [(WO, True)], lambda it, a, line: _fail_action(a[WO], line)),
+    # 環境(lib/環境.suru が使う)
+    Builtin("引数取得する", [], lambda it, a, line: Action("引数取得する", lambda it2: tuple(PROGRAM_ARGS))),
+    Builtin("終了する", [(WO, True)], lambda it, a, line: _exit_action(a[WO], line)),
 ]
+
+PROGRAM_ARGS: list[str] = []  # プログラムに渡した引数(「suru プログラム.suru a b」の a と b)
+
+
+def _exit_action(v: Any, line: int) -> Action:
+    n = _num(v, line)
+    if not isinstance(n, int) or not 0 <= n <= 255:
+        raise SuruError(f"「{format_value(v)}」は終了コードではありません(0 から 255 までの整数です)", line)
+
+    def perform(it: "Interpreter") -> Any:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        raise SystemExit(n)
+    return Action("終了する", perform)
 
 
 def _bytes(v: Any, what: str, line: int) -> bytes:
@@ -4229,6 +4246,7 @@ def main(argv: list[str]) -> int:
         return 0
     with open(argv[1], encoding="utf-8") as f:
         source = f.read()
+    PROGRAM_ARGS[:] = argv[2:]
     base_dir = os.path.dirname(os.path.abspath(argv[1]))
     # 実行の前に必ず型を調べる(間違いがあれば実行しない)
     try:

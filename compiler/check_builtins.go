@@ -214,6 +214,13 @@ func init() {
 	simple("バイト列取得する", []TParam{{"から", addr}, {WO, NUM}}, act(bytesT))
 	simple("書込する", []TParam{{WO, bytesT}, {"へ", addr}}, act(NUM))
 	simple("エラー番号取得する", nil, act(NUM))
+	simple("引数取得する", nil, act(lst(STR)))
+	prim("終了する", []partReq{req(WO)}, func() Type {
+		return &TFun{[]TParam{{WO, NUM}}, act(newTVar())}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		need(c, a, WO, NUM, line, "終了する")
+		return act(newTVar())
+	})
 	prim("失敗する", []partReq{req(WO)}, func() Type {
 		return &TFun{[]TParam{{WO, STR}}, act(newTVar())}
 	}, func(c *Checker, a typedArgs, line Pos) Type {

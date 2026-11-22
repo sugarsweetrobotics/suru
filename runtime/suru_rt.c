@@ -63,7 +63,7 @@ typedef struct Fn {
     struct Trait *trait;    /* FK_TRAIT */
     int32_t wo, wo_list;
 } Fn;
-enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL };
+enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
@@ -1062,7 +1062,7 @@ static V act_run(Act *a) {
         return (V)(intptr_t)out;
     }
     case A_CALL: return apply1(a->a, V_EMPTY, a->pos); /* 外部の関数を呼ぶ動作 */
-    case A_PEEK: case A_POKE: case A_ERRNO: case A_FAIL: return mem_run(a);
+    case A_PEEK: case A_POKE: case A_ERRNO: case A_FAIL: case A_ARGS: case A_EXIT: return mem_run(a);
     case A_CHAIN: return apply1(a->b, perform(a->a), 0); /* 続きの動作は perform のループで行う */
     case A_FMAP: return apply1(a->b, perform(a->a), 0);
     }
@@ -1869,6 +1869,14 @@ BI(m_poke) { /* を, へ */
     return mk_act_pos(A_POKE, "書込する", a[0], a[1], pos);
 }
 BI(m_errno) { return mk_act_pos(A_ERRNO, "エラー番号取得する", 0, 0, pos); }
+static int prog_argc;
+static char **prog_argv;
+BI(m_args) { return mk_act_pos(A_ARGS, "引数取得する", 0, 0, pos); }
+BI(m_exit) {
+    V n = need_num(a[0], pos);
+    if (!IS_INT(n) || INT_VAL(n) < 0 || INT_VAL(n) > 255) fail(pos, "「%s」は終了コードではありません(0 から 255 までの整数です)", plain(n).s);
+    return mk_act_pos(A_EXIT, "終了する", n, 0, pos);
+}
 BI(m_fail) {
     need_str(a[0], "「失敗する」の「を」", pos);
     return mk_act_pos(A_FAIL, "失敗する", a[0], 0, pos);
@@ -1890,6 +1898,16 @@ static V mem_run(Act *a) {
     }
     case A_ERRNO: return mk_int(ffi_errno, a->pos);
     case A_FAIL: fail(a->pos, "%s", AS(Str, a->a)->s);
+    case A_ARGS: {
+        if (prog_argc <= 1) return V_EMPTY;
+        List *l = new_list(prog_argc - 1);
+        for (int i = 1; i < prog_argc; i++) l->it[i - 1] = cstr(prog_argv[i]);
+        return (V)(intptr_t)l;
+    }
+    case A_EXIT:
+        fflush(stdout);
+        fflush(stderr);
+        exit((int)INT_VAL(a->a));
     }
     return 0;
 }
@@ -1927,6 +1945,8 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"書込する", 2, P2_WO_HE, NULL, m_poke},
     {"エラー番号取得する", 0, NULL, NULL, m_errno},
     {"失敗する", 1, P1_WO, NULL, m_fail},
+    {"引数取得する", 0, NULL, NULL, m_args},
+    {"終了する", 1, P1_WO, NULL, m_exit},
     /* 「通信」の組み込み */
     {"待受開始する", 1, P1_WO, NULL, n_listen},
     {"接続受付する", 1, P1_KARA, NULL, n_accept},
@@ -2081,7 +2101,9 @@ static void *run_main(void *arg) {
     return NULL;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    prog_argc = argc;
+    prog_argv = argv;
     source_text = suru_source;
     init_builtins();
     /* 深い再帰のために、大きなスタックのスレッドで動かす */
