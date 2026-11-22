@@ -131,8 +131,77 @@ static size_t gc_min = (size_t)8 << 20; /* これだけ確保するまでは GC 
 static size_t gc_next = (size_t)8 << 20;
 static int gc_log;
 static size_t gc_live;
-static char *gc_stack_top;         /* スタックの底(GC はここまで調べる)。NULL なら GC しない */
+static int gc_on;                  /* プログラムが始まったら 1(それまでは GC しない) */
 static int64_t gc_count;
+
+/* --- スレッド ---
+ * する のコードを動かせるのは「実行権」を持つ1つのスレッドだけ(全体ロック)。待つところ(外部の関数・入力・通信)では
+ * 実行権を手放し、そのときのレジスタとスタックの位置を残しておく。GC は実行権を持つスレッドが行い、手放している
+ * スレッドのスタックも調べる。スレッドが1つだけのうちは手放さない(何もしない)。 */
+typedef struct SThread {
+    char *top;                    /* スタックの底(一番大きい番地)。ここまで調べる */
+    char *lo;                     /* 手放したときのスタックの位置(NULL ならまだスタックに値がない) */
+    jmp_buf regs;                 /* 手放したときのレジスタ */
+    uintptr_t start;              /* 始める動作(始まるまで GC から守る) */
+    struct SThread *next;
+} SThread;
+static SThread main_thread;
+static SThread *threads = &main_thread; /* 生きているスレッド(実行権を持つスレッドだけが変える) */
+static _Thread_local SThread *self_thread = &main_thread;
+static int world_multi;                 /* 2つ目のスレッドを作ったら 1 */
+static pthread_mutex_t world_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t world_cv = PTHREAD_COND_INITIALIZER;
+/* 番号札: 待つ順に札を取り、world_serving の札のスレッドが実行権を持つ(取った順に回るので、同じスレッドが取り続けない) */
+static uint64_t world_next = 1, world_serving = 0;
+
+/* 実行権を手放す。このあと戻るまで、する の値を作ったり runtime の表を触ったりしない */
+__attribute__((noinline)) static void world_release(void) {
+    if (!world_multi) return;
+    SThread *t = self_thread;
+    setjmp(t->regs); /* レジスタにだけある値も GC から見えるように */
+    volatile char here = 0;
+    t->lo = (char *)&here;
+    pthread_mutex_lock(&world_mu);
+    world_serving++;
+    pthread_cond_broadcast(&world_cv);
+    pthread_mutex_unlock(&world_mu);
+}
+
+/* 実行権を取り戻す(順番が来るまで待つ) */
+static void world_acquire(void) {
+    if (!world_multi) return;
+    pthread_mutex_lock(&world_mu);
+    uint64_t me = world_next++;
+    while (world_serving != me) pthread_cond_wait(&world_cv, &world_mu);
+    pthread_mutex_unlock(&world_mu);
+}
+
+/* 待っているスレッドがあれば、実行権を譲る(確保のたびに数えて、ときどき呼ぶ) */
+static void world_yield(void) {
+    if (!world_multi) return;
+    pthread_mutex_lock(&world_mu);
+    int waiting = world_next - world_serving > 1;
+    pthread_mutex_unlock(&world_mu);
+    if (!waiting) return;
+    world_release();
+    world_acquire();
+}
+
+/* fork: 子には呼んだスレッドだけが残る。GC の途中で fork しないよう実行権を取ってから fork し、
+ * 子ではスレッドの表を自分だけにして、スレッドが1つの状態に戻す */
+static void world_atfork_prepare(void) { world_acquire(); }
+static void world_atfork_parent(void) { world_release(); }
+static void world_atfork_child(void) {
+    if (!world_multi) return;
+    pthread_mutex_init(&world_mu, NULL);
+    pthread_cond_init(&world_cv, NULL);
+    world_serving = 0;
+    world_next = 1;
+    world_multi = 0; /* 戻ったところの world_acquire は何もしない(実行権はこのスレッドにある) */
+    threads = self_thread;
+    self_thread->next = NULL;
+    self_thread->lo = NULL;
+}
 
 static void gc_oom(void) {
     fputs("エラー: メモリが足りません\n", stderr);
@@ -277,7 +346,15 @@ __attribute__((noinline)) static void gc_mark_stack(void) {
     setjmp(regs);
     volatile char here = 0;
     gc_mark_range((const void *)&regs, (const void *)(&regs + 1));
-    gc_mark_range((const void *)&here, gc_stack_top);
+    gc_mark_range((const void *)&here, self_thread->top);
+    /* 実行権を手放しているほかのスレッド: 手放したときのレジスタとスタック */
+    for (SThread *t = threads; t; t = t->next) {
+        if (t == self_thread) continue;
+        if (t->start) gc_mark(t->start);
+        if (!t->lo) continue;
+        gc_mark_range((const void *)&t->regs, (const void *)(&t->regs + 1));
+        gc_mark_range((const void *)t->lo, t->top);
+    }
 }
 
 static void gc_collect(void) {
@@ -332,7 +409,7 @@ static void gc_collect(void) {
     gc_next = 2 * gc_live > gc_min ? 2 * gc_live : gc_min;
     if (gc_log)
         fprintf(stderr, "GC %lld: 生きている %zu KB、領域 %zu、スタック %zu KB\n", (long long)gc_count, gc_live >> 10, gc_nregs,
-                (size_t)(gc_stack_top - (char *)__builtin_frame_address(0)) >> 10);
+                (size_t)(self_thread->top - (char *)__builtin_frame_address(0)) >> 10);
 }
 
 static void gc_init(void) {
@@ -344,7 +421,12 @@ static void gc_init(void) {
 
 static void *gc_alloc(int64_t size, int atomic) {
     if (size < 16) size = 16;
-    if (gc_stack_top && gc_since >= gc_next) gc_collect();
+    static _Thread_local unsigned yield_tick;
+    if (world_multi && ++yield_tick >= 4096) { /* ほかのスレッドにも順番を回す */
+        yield_tick = 0;
+        world_yield();
+    }
+    if (gc_on && gc_since >= gc_next) gc_collect();
     if (size > GC_SMALL_MAX) {
         GcBlk *b = malloc(sizeof(GcBlk));
         char *mem = calloc(1, (size_t)size);
@@ -442,7 +524,7 @@ static int display_width(const char *s, size_t n) {
 
 /* 「試行する」の中なら、実行時エラーで止まらずに代わりの動作へ戻る */
 typedef struct TryFrame { jmp_buf jb; struct TryFrame *prev; } TryFrame;
-static TryFrame *try_top;
+static _Thread_local TryFrame *try_top;
 
 __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
     fflush(stdout);
@@ -1375,7 +1457,9 @@ static V act_run(Act *a) {
         fflush(stdout);
         char *line = NULL;
         size_t cap = 0;
+        world_release();
         ssize_t n = getline(&line, &cap, stdin);
+        world_acquire();
         if (n < 0) fail((int32_t)a->b, "入力がありません");
         if (n > 0 && line[n - 1] == '\n') n--;
         if (n > 0 && line[n - 1] == '\r') n--;
@@ -2015,10 +2099,14 @@ static V net_run(Act *a) {
         return mk_int(sock_add(fd), pos);
     }
     case A_ACCEPT: {
-        Sock *s = sock_get(a->a, "待受口", pos);
+        int lfd = sock_get(a->a, "待受口", pos)->fd;
         fflush(stdout); /* 待つ前に、それまでの表示を出しておく */
         int fd;
-        do fd = accept(s->fd, NULL, NULL); while (fd < 0 && errno == EINTR);
+        world_release(); /* 待つ間は、表(socks)に触らない */
+        do fd = accept(lfd, NULL, NULL); while (fd < 0 && errno == EINTR);
+        int e = errno;
+        world_acquire();
+        errno = e;
         if (fd < 0) net_fail(a);
         struct timeval tv = {5, 0}; /* 何も送ってこない相手で止まらないように(インタプリタの NET_TIMEOUT と同じ) */
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
@@ -2038,11 +2126,13 @@ static V net_run(Act *a) {
             int fd2 = dup(s->fd);
             if (fd2 < 0 || !(s->in = fdopen(fd2, "rb"))) net_fail(a);
         }
+        FILE *in = s->in; /* 待つ間は、表(socks)に触らない */
         Buf b = {0};
+        world_release();
         if (a->kind == A_RECVLINE) {
             /* 終わりの改行を含めて1行(長すぎる行は 65536 バイトで切る) */
             int c;
-            while (b.n < 65536 && (c = fgetc(s->in)) != EOF) {
+            while (b.n < 65536 && (c = fgetc(in)) != EOF) {
                 char ch = (char)c;
                 buf_add(&b, &ch, 1);
                 if (ch == '\n') break;
@@ -2050,24 +2140,32 @@ static V net_run(Act *a) {
         } else {
             char tmp[4096];
             while ((int64_t)b.n < want) {
-                size_t k = fread(tmp, 1, (size_t)(want - (int64_t)b.n) < sizeof tmp ? (size_t)(want - (int64_t)b.n) : sizeof tmp, s->in);
+                size_t k = fread(tmp, 1, (size_t)(want - (int64_t)b.n) < sizeof tmp ? (size_t)(want - (int64_t)b.n) : sizeof tmp, in);
                 if (k == 0) break;
                 buf_add(&b, tmp, k);
             }
         }
-        if (ferror(s->in)) { free(b.s); net_fail(a); }
+        int bad = ferror(in), e = errno;
+        world_acquire();
+        errno = e;
+        if (bad) { free(b.s); net_fail(a); }
         return buf_str(&b);
     }
     case A_SEND: {
         Str *str = need_str(a->a, "「送信する」の「を」", pos);
-        Sock *s = sock_get(a->b, "接続", pos);
+        int fd = sock_get(a->b, "接続", pos)->fd;
         int64_t off = 0;
+        world_release(); /* str は手放しているスレッドのスタックから見えるので回収されない */
         while (off < str->n) {
-            ssize_t k = send(s->fd, str->s + off, (size_t)(str->n - off), 0);
+            ssize_t k = send(fd, str->s + off, (size_t)(str->n - off), 0);
             if (k < 0 && errno == EINTR) continue;
-            if (k < 0) net_fail(a);
+            if (k < 0) break;
             off += k;
         }
+        int e = errno;
+        world_acquire();
+        errno = e;
+        if (off < str->n) net_fail(a);
         return mk_int(str->n, pos);
     }
     case A_CLOSE: {
@@ -2130,7 +2228,7 @@ static const BuiltinDef BUILTINS[] = {
 /* ------------------------------------------------------------------ */
 
 V rt_ffi_from_ptr(void *p);
-static int ffi_errno;
+static _Thread_local int ffi_errno;
 
 static V mk_bytes(const void *p, int64_t n) {
     Bytes *b = rt_alloc_atomic(sizeof(Bytes) + n + 1); /* 中にポインタはない */
@@ -2354,9 +2452,15 @@ const uint8_t *rt_ffi_bytes(V v, const char *fname, int32_t part, int32_t pos) {
 }
 
 /* 外部の関数を呼ぶ前と後: 「エラー番号取得する」はその関数が残した errno */
-static int ffi_errno;
-void rt_ffi_pre(void) { errno = 0; }
-void rt_ffi_post(void) { ffi_errno = errno; }
+/* 外部の関数を呼ぶ前後: 呼んでいる間は実行権を手放す(待つ関数でもほかのスレッドが動けるように) */
+void rt_ffi_pre(void) {
+    world_release();
+    errno = 0;
+}
+void rt_ffi_post(void) {
+    ffi_errno = errno;
+    world_acquire();
+}
 
 void *rt_ffi_ptr(V v, const char *fname, int32_t part, int32_t pos) {
     if (TAG(v) != T_ADDR) ffi_bad(v, fname, part, "番地", pos);
@@ -2451,7 +2555,9 @@ extern const char suru_source[];
 
 static void *run_main(void *arg) {
     (void)arg;
-    gc_stack_top = __builtin_frame_address(0); /* ここより上(呼び出した側)には値がない */
+    self_thread = &main_thread;
+    main_thread.top = __builtin_frame_address(0); /* ここより上(呼び出した側)には値がない */
+    gc_on = 1;
     const char *e = getenv("SURU_GC_MIN");
     if (e) gc_min = gc_next = (size_t)strtoull(e, NULL, 10) << 10;
     gc_log = getenv("SURU_GC_LOG") != NULL;
@@ -2466,6 +2572,7 @@ int main(int argc, char **argv) {
     prog_argv = argv;
     source_text = suru_source;
     init_builtins();
+    pthread_atfork(world_atfork_prepare, world_atfork_parent, world_atfork_child);
     /* 深い再帰のために、大きなスタックのスレッドで動かす */
     pthread_attr_t attr;
     pthread_attr_init(&attr);
