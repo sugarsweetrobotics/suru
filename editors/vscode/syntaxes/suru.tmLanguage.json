@@ -1,0 +1,314 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "する",
+  "scopeName": "source.suru",
+  "comment": "editors/vscode/make_grammar.py が作るファイルです。直接編集しないでください",
+  "fileTypes": [
+    "suru"
+  ],
+  "patterns": [
+    {
+      "include": "#punct-line"
+    },
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#quoted-name"
+    },
+    {
+      "include": "#import"
+    },
+    {
+      "include": "#module"
+    },
+    {
+      "include": "#lambda"
+    },
+    {
+      "include": "#builtin"
+    },
+    {
+      "include": "#spaced-call"
+    },
+    {
+      "include": "#kanji-keyword"
+    },
+    {
+      "include": "#number"
+    },
+    {
+      "include": "#operator"
+    },
+    {
+      "include": "#punctuation"
+    },
+    {
+      "include": "#hiragana"
+    },
+    {
+      "include": "#name"
+    }
+  ],
+  "repository": {
+    "comment": {
+      "name": "comment.line.suru",
+      "match": "(?<![^\\s　、。（）()」])[#＃※].*$"
+    },
+    "string": {
+      "patterns": [
+        {
+          "name": "string.quoted.other.suru",
+          "match": "「[^」]*」"
+        },
+        {
+          "name": "invalid.illegal.unclosed-string.suru",
+          "match": "「[^」]*$"
+        }
+      ]
+    },
+    "quoted-name": {
+      "patterns": [
+        {
+          "match": "(『)([^』]*)(』)(\\p{Hiragana}*?(?:しましてから|であること|してから|しまして|すること|します|である|でない|した|して|する))",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.name.begin.suru"
+            },
+            "2": {
+              "name": "entity.name.function.suru"
+            },
+            "3": {
+              "name": "punctuation.definition.name.end.suru"
+            },
+            "4": {
+              "name": "entity.name.function.suru"
+            }
+          }
+        },
+        {
+          "match": "(『)([^』]*)(』)",
+          "captures": {
+            "1": {
+              "name": "punctuation.definition.name.begin.suru"
+            },
+            "2": {
+              "name": "variable.other.suru"
+            },
+            "3": {
+              "name": "punctuation.definition.name.end.suru"
+            }
+          }
+        }
+      ]
+    },
+    "import": {
+      "name": "keyword.control.import.suru",
+      "match": "(?:読み込みます|読み込んで|使います|読み込む|使う)"
+    },
+    "module": {
+      "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])([\\p{L}\\p{Nd}_&&[^ぁ-ゟ]]+?)(内)(の)",
+      "captures": {
+        "1": {
+          "name": "entity.name.namespace.suru"
+        },
+        "2": {
+          "name": "keyword.operator.module.suru"
+        },
+        "3": {
+          "name": "keyword.operator.module.suru"
+        }
+      }
+    },
+    "lambda": {
+      "name": "keyword.other.lambda.suru",
+      "match": "(?:受け取って|返すこと)"
+    },
+    "builtin": {
+      "name": "support.function.builtin.suru",
+      "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(?:文字列化|畳み込み|絶対値に|数値に|結果に|乗算|入力|写像|加算|実行|挿入|減算|表示|追加|連鎖|適用|選別|除算)(?:しましてから|であること|してから|しまして|すること|します|である|でない|した|して|する)"
+    },
+    "call": {
+      "name": "entity.name.function.suru",
+      "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(?:(?:畳み込み)|[\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])+\\p{Hiragana}*?(?:しましてから|であること|してから|しまして|すること|します|である|でない|した|して|する)"
+    },
+    "spaced-call": {
+      "name": "entity.name.function.suru",
+      "match": "(?<=^|[\\s　（）()]|内の)[^\\s　（）()「」『』。、#＃※+\\-*/%^<>=!−×÷＋－＊／％＾＝≠≦≧≤≥＜＞・]+?(?:しましてから|であること|してから|しまして|すること|します|である|でない|した|して|する)(?=$|[\\s　（）()])"
+    },
+    "kanji-keyword": {
+      "patterns": [
+        {
+          "name": "keyword.control.suru",
+          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(?:手順)(?![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])"
+        },
+        {
+          "name": "storage.type.suru",
+          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(?:性質|組)(?![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])"
+        },
+        {
+          "name": "constant.language.suru",
+          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(?:偽|真|空)(?![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])"
+        },
+        {
+          "name": "variable.language.suru",
+          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(?:先頭|最後|残り|結果|長さ)(?![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])"
+        }
+      ]
+    },
+    "number": {
+      "name": "constant.numeric.suru",
+      "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])[0-9０-９]+(?:[.．][0-9０-９]+)?"
+    },
+    "operator": {
+      "name": "keyword.operator.arithmetic.suru",
+      "match": "\\*\\*|[<>=!]=|[+\\-*/%^<>=]|[−×÷＋－＊／％＾＝≠≦≧≤≥＜＞]"
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.terminator.statement.suru",
+          "match": "。"
+        },
+        {
+          "name": "punctuation.separator.suru",
+          "match": "、"
+        },
+        {
+          "name": "punctuation.section.parens.suru",
+          "match": "[()（）]"
+        },
+        {
+          "name": "invalid.illegal.reserved.suru",
+          "match": "・"
+        }
+      ]
+    },
+    "hiragana": {
+      "match": "(そうでなければ)|(それから)|(それぞれ)|(ただし)|(という)|(ならば)|(または)|(かつ)|(から)|(です)|(とは)|(もし)|(より)|(か)|(が)|(で)|(と)|(に)|(の)|(は)|(へ)|(を)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.suru"
+        },
+        "2": {
+          "name": "keyword.control.suru"
+        },
+        "3": {
+          "name": "variable.language.suru"
+        },
+        "4": {
+          "name": "keyword.control.suru"
+        },
+        "5": {
+          "name": "keyword.other.declaration.suru"
+        },
+        "6": {
+          "name": "keyword.control.suru"
+        },
+        "7": {
+          "name": "keyword.control.suru"
+        },
+        "8": {
+          "name": "keyword.control.suru"
+        },
+        "9": {
+          "name": "keyword.other.particle.suru"
+        },
+        "10": {
+          "name": "keyword.other.declaration.suru"
+        },
+        "11": {
+          "name": "keyword.other.declaration.suru"
+        },
+        "12": {
+          "name": "keyword.control.suru"
+        },
+        "13": {
+          "name": "keyword.other.particle.suru"
+        },
+        "14": {
+          "name": "keyword.other.declaration.suru"
+        },
+        "15": {
+          "name": "keyword.other.particle.suru"
+        },
+        "16": {
+          "name": "keyword.other.particle.suru"
+        },
+        "17": {
+          "name": "keyword.other.particle.suru"
+        },
+        "18": {
+          "name": "keyword.other.particle.suru"
+        },
+        "19": {
+          "name": "keyword.other.particle.suru"
+        },
+        "20": {
+          "name": "keyword.other.declaration.suru"
+        },
+        "21": {
+          "name": "keyword.other.particle.suru"
+        },
+        "22": {
+          "name": "keyword.other.particle.suru"
+        }
+      }
+    },
+    "name": {
+      "name": "variable.other.suru",
+      "match": "[\\p{L}_&&[^ぁ-ゟ]][\\p{L}\\p{Nd}_&&[^ぁ-ゟ]]*"
+    },
+    "punct-line": {
+      "begin": "^(?=(?:「[^」]*」|『[^』]*』|[^「『#＃※。、])*[。、])",
+      "end": "$",
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#quoted-name"
+        },
+        {
+          "include": "#import"
+        },
+        {
+          "include": "#module"
+        },
+        {
+          "include": "#lambda"
+        },
+        {
+          "include": "#builtin"
+        },
+        {
+          "include": "#call"
+        },
+        {
+          "include": "#kanji-keyword"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#operator"
+        },
+        {
+          "include": "#punctuation"
+        },
+        {
+          "include": "#hiragana"
+        },
+        {
+          "include": "#name"
+        }
+      ]
+    }
+  }
+}

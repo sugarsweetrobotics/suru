@@ -1,0 +1,118 @@
+{
+  "name": "suru",
+  "displayName": "する",
+  "description": "日本語の関数型プログラミング言語「する」の色分け・型の検査・実行",
+  "version": "0.1.0",
+  "publisher": "sugarsweetrobotics",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sugarsweetrobotics/suru",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "suru",
+        "aliases": [
+          "する",
+          "suru"
+        ],
+        "extensions": [
+          ".suru"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "suru",
+        "scopeName": "source.suru",
+        "path": "./syntaxes/suru.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "suru.run",
+        "title": "このファイルを実行する",
+        "category": "する",
+        "icon": "$(play)"
+      },
+      {
+        "command": "suru.check",
+        "title": "型を検査する",
+        "category": "する",
+        "icon": "$(check)"
+      },
+      {
+        "command": "suru.compile",
+        "title": "バイナリを作る",
+        "category": "する",
+        "icon": "$(package)"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "suru.run",
+          "when": "editorLangId == suru",
+          "group": "navigation@1"
+        },
+        {
+          "command": "suru.compile",
+          "when": "editorLangId == suru",
+          "group": "navigation@2"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "suru.run",
+          "when": "editorLangId == suru"
+        },
+        {
+          "command": "suru.check",
+          "when": "editorLangId == suru"
+        },
+        {
+          "command": "suru.compile",
+          "when": "editorLangId == suru"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "suru.run",
+        "key": "f5",
+        "when": "editorLangId == suru && !inDebugMode"
+      }
+    ],
+    "configuration": {
+      "title": "する",
+      "properties": {
+        "suru.command": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "「する」を動かすコマンド(例: `suru`、`python3 /path/to/suru.py`)。空のときは、開いているフォルダーの一番上に `suru.py` があればそれを、なければ pip で入れた `suru` を使います。"
+        },
+        "suru.python": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "`suru.py` を動かす Python(空のときは Windows で `python`、それ以外で `python3`)。"
+        },
+        "suru.checkOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "ファイルを開いたときと保存したときに型を検査して、間違いを「問題」に表示する"
+        }
+      }
+    }
+  }
+}
