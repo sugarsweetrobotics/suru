@@ -3692,6 +3692,7 @@ def repl() -> None:
 
 CHECK_FLAGS = ("--検査", "--check")  # 型の検査だけを行う(実行はしない)
 NO_CHECK_FLAGS = ("--検査なし", "--no-check")  # 型の検査をせずに実行する
+COMPILE_FLAGS = ("--翻訳", "--compile")  # バイナリにコンパイルする(suru_compile.py)
 
 
 def type_check(source: str, base_dir: str = ".") -> bool:
@@ -3710,6 +3711,10 @@ def type_check(source: str, base_dir: str = ".") -> bool:
 
 def main(argv: list[str]) -> int:
     sys.setrecursionlimit(10000)
+    if len(argv) >= 2 and argv[1] in COMPILE_FLAGS:
+        import suru_compile
+
+        return suru_compile.main(argv[:1] + argv[2:])
     if len(argv) >= 3 and argv[1] in CHECK_FLAGS:
         with open(argv[2], encoding="utf-8") as f:
             source = f.read()
