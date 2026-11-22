@@ -11,6 +11,16 @@ python3 suru.py --翻訳 examples/basic.suru  # バイナリ examples/basic を�
 python3 -m pytest tests               # テスト
 ```
 
+### pip で入れる
+
+```sh
+pip install git+https://github.com/sugarsweetrobotics/suru   # または、取ってきたフォルダで pip install .
+suru examples/basic.suru          # python3 suru.py と同じ(--検査・--検査なし・--翻訳 も使えます)
+suru --version
+```
+
+標準ライブラリ(`lib/標準.suru`)とコンパイラの実行時ライブラリ(`runtime/suru_rt.c`)も一緒に入ります。`--翻訳` には clang が別に必要です。
+
 ## 例
 
 ```
@@ -314,8 +324,12 @@ n が 偶数である とは n % 2 が 0
 82. **速い・深い再帰も動く。** 関数は機械語の関数になり、整数の計算はその場で行います。再帰は 1GB のスタックで動くので、インタプリタでは止まる深さ(10万段など)でも動きます。
 83. **インタプリタとの違い。** 整数は ±4611686018427387903(2^62 − 1)までで、超えると「整数が大きすぎます」のエラーです(インタプリタはいくらでも大きくできます)。`大文字にする` / `小文字にする` が変えるのは英字(半角と全角)だけです。メモリはプログラムが終わるまで解放しません。対話モードはありません。
 
+### 配布
+
+84. **pip で入れられる。** `pip install .`(または GitHub の URL)で `suru` コマンドが入ります。中身は `suru.py`・`suru_check.py`・`suru_compile.py` の3つのモジュールと、`suru_data/` に入れた `lib/` と `runtime/` です。リポジトリのまま `python3 suru.py` で動かす使い方も変わりません(`data_path` が、隣の `lib/` か `suru_data/lib/` を探します)。版は `suru.py` の `__version__` に書きます。パッケージ作りは hatchling(`python -m build` で wheel と sdist)。
+
 ## 今後の候補
 
 - 標準ライブラリの続き: 乱数、ファイルの読み書き、日付と時刻、並べる基準を渡す整列、「ないかもしれない値」の型
 - コンパイラの続き: 大きな整数、メモリの片付け(GC)、型の情報を使った速い呼び出し
-- 配布(pip で入れられる形)
+- 配布の続き: PyPI への公開、clang を使わない環境向けの配布

@@ -1133,3 +1133,21 @@ def test_標準ライブラリのまちがい(tmp_path):
 def test_自分のフォルダの同じ名前のファイルが先(tmp_path):
     _files(tmp_path, 標準="x とは 1\n")
     assert _run_in(tmp_path, "「標準」 を 読み込む\n標準内のx") == ["1"]
+
+
+def test_data_files_found():
+    # lib/ と runtime/ は、リポジトリでも pip で入れたとき(suru_data/)でも見つかる
+    import os
+
+    import suru
+    import suru_compile
+
+    assert os.path.exists(suru.STD_PATH)
+    assert os.path.exists(suru_compile.RUNTIME)
+
+
+def test_version(capsys):
+    import suru
+
+    assert suru.main(["suru", "--version"]) == 0
+    assert suru.__version__ in capsys.readouterr().out
