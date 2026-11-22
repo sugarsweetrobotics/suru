@@ -84,7 +84,12 @@ func build(llPath, out, opt string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(cc, opt, "-w", llPath, rt, "-o", out, "-lm", "-lpthread")
+	ir, err := os.ReadFile(llPath)
+	if err != nil {
+		return err
+	}
+	args := append([]string{opt, "-w", llPath, rt, "-o", out}, compiler.LinkFlags(string(ir))...)
+	cmd := exec.Command(cc, append(args, "-lm", "-lpthread")...)
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("clang でのビルドに失敗しました:\n%s", b)
 	}

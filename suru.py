@@ -113,6 +113,7 @@ KW_IMPORT_TE = "読み込んで"  # 「数学」 を 読み込んで 使う: 前
 KW_USE = "使う"
 KW_USE_POLITE = "使います"
 SOURCE_SUFFIX = ".suru"
+KW_EXTERN = "外部の"  # 外部の「m」 を 読み込む / x を 余弦にする とは 外部の「cos」
 
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
@@ -1059,9 +1060,36 @@ class Import:
     open: bool = False  # 「読み込んで 使う」: 中の名前を前置きなしでも使う
 
 
-TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import)
+@dataclass
+class ExternLib:
+    """「外部の「m」 を 読み込む」: C の呼び出し規約で呼べるライブラリ(.so / .dylib)を使う"""
+
+    name: str  # 書いたとおり(「m」「./libあれ.so」)
+    path: str  # 短い名前(「m」)か、ファイルなら絶対パス
+    line: int
+
+
+@dataclass
+class Extern:
+    """「x を 余弦にする とは 外部の「cos」」の本体。型の宣言から引数と値の C の型を決める。
+    params は定義の引数の順に C の型(FFI_TYPES の値)、result は値の C の型、action は値が動作か"""
+
+    symbol: str
+    line: int
+    libs: list = field(default_factory=list)  # このファイルの ExternLib.path
+    params: list = field(default_factory=list)
+    result: str = ""
+    action: bool = False
+
+
+TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import, ExternLib)
 TYPE_VAR_NAMES = "甲乙丙丁戊己庚辛壬癸"
-BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作")
+# 小数・整数は数の別名(外部の関数の宣言で C の double・int を表す)。番地は C のポインタ
+# 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
+BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無")
+# 外部の関数に渡せる型 → C の型の名前(バイト列は引数だけ、無は値だけ)
+FFI_TYPES = {"数": "i64", "小数": "f64", "整数": "i32", "真偽": "bool", "文字列": "str", "番地": "ptr",
+             "バイト列": "bytes", "無": "void"}
 
 
 class ParseContext:
@@ -2136,6 +2164,15 @@ def parse_statement(node: Node) -> Any:
     if len(after_t) == 1 and after_t[0].kind == "WORD" and after_t[0].value == TEJUN and not after_t[0].quoted and node.children:
         # 「挨拶する とは 手順」+ 深い行: 深い行を順に行う
         return Define(name, params, parse_do(node.children, node.line.number), is_function, node.line.number)
+    if (len(after_t) == 2 and after_t[0].kind == "WORD" and after_t[0].value == KW_EXTERN and not after_t[0].quoted
+            and after_t[1].kind == "STR" and not node.children):
+        # 「x を 余弦にする とは 外部の「cos」」: C の関数を呼ぶ
+        sym = after_t[1].value
+        if not sym.isascii() or not (sym[:1].isalpha() or sym[:1] == "_") or not all(c.isalnum() or c == "_" for c in sym):
+            raise SuruError(f"「{sym}」は C の関数の名前ではありません", after_t[1].line)
+        if sym.startswith(("rt_", "suru_")):
+            raise SuruError(f"「{sym}」は「する」の実行時が使う名前なので、外部の関数にできません", after_t[1].line)
+        return Define(name, params, Extern(sym, after_t[1].line), is_function, node.line.number)
     if nosep(after):
         # 同じ行に本体がある: 深い行はその続き
         body: Any = ExprParser(_with_children(after, node.children)).parse_all()
@@ -2240,7 +2277,7 @@ def _type_word(tok: Token, args: list) -> Any:
         if args:
             raise SuruError(f"「{name}」は型の引数をとりません", tok.line)
         return TypeVarName(name)
-    if name in ("数", "文字列", "真偽") and args:
+    if name in ("数", "文字列", "真偽", "小数", "整数", "番地", "バイト列", "無") and args:
         raise SuruError(f"「{name}」は型の引数をとりません", tok.line)
     if name in ("リスト", "動作") and len(args) != 1:
         raise SuruError(f"「{name}」の前には型を1つ書いてください(「数 の {name}」)", tok.line)
@@ -2461,13 +2498,17 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
     nodes = build_layout(split_lines(source))
     ctx = ctx if ctx is not None else ParseContext()
     # 読み込むファイルを先に読む(その中の型を使えるように)
-    imports = {}
+    imports: dict = {}
     for n in nodes:
+        lib = extern_lib_target(n, ctx)
+        if lib is not None:
+            imports[id(n)] = lib
+            continue
         target = import_target(n)
         if target is not None:
             imports[id(n)] = Import(load_module(target[0], ctx, n.line.number), n.line.number, target[1])
-    if imports:
-        _join_in_nodes(nodes, {i.module.name for i in imports.values()})
+    if any(isinstance(i, Import) for i in imports.values()):
+        _join_in_nodes(nodes, {i.module.name for i in imports.values() if isinstance(i, Import)})
     # 「3 と 4 の 点」を読むために、型の定義を先に集める(定義の順番は自由)
     for n in nodes:
         td = try_parse_typedef(n)
@@ -2477,6 +2518,7 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
     try:
         statements = [imports[id(n)] if id(n) in imports else parse_statement(n) for n in nodes]
         _check_open_imports(statements)
+        _attach_externs(statements)
         return attach_provisos(statements)
     finally:
         _CTX = saved
@@ -2524,6 +2566,63 @@ def import_target(node: Node) -> tuple[str, bool] | None:
         raise SuruError(f"ファイルは一番外に「「数学」 を {KW_IMPORT}」か「「数学」 を {KW_IMPORT_TE} {KW_USE}」のように書いて読み込みます",
                         tokens[0].line)
     return tokens[0].value, len(tail) == 2
+
+
+def extern_lib_target(node: Node, ctx: ParseContext) -> ExternLib | None:
+    """「外部の「m」 を 読み込む」なら ExternLib"""
+    tokens = nosep(flatten(node))
+    if tokens and tokens[-1].kind == "PERIOD":
+        tokens = tokens[:-1]
+    if not tokens or not (tokens[0].kind == "WORD" and tokens[0].value == KW_EXTERN and not tokens[0].quoted):
+        return None
+    if (len(tokens) != 4 or tokens[1].kind != "STR" or not (tokens[2].kind == "PART" and tokens[2].value == WO)
+            or not (is_kw(tokens[3], KW_IMPORT) or is_kw(tokens[3], KW_IMPORT_POLITE)) or node.line.indent):
+        raise SuruError(f"外部のライブラリは一番外に「{KW_EXTERN}「m」 を {KW_IMPORT}」のように書いて読み込みます", tokens[0].line)
+    name = tokens[1].value
+    if not name:
+        raise SuruError("外部のライブラリの名前が空です", tokens[0].line)
+    path = name
+    if "/" in name or name.endswith((".so", ".dylib")):
+        path = os.path.abspath(os.path.join(ctx.base_dir, name))
+    return ExternLib(name, path, tokens[0].line)
+
+
+def _ffi_type(te: Any, sig: TypeSig, what: str) -> str:
+    result = what == "値"
+    names = [n for n, t in FFI_TYPES.items() if t != ("bytes" if result else "void")]
+    if isinstance(te, TypeName) and not te.args and te.name in names:
+        return FFI_TYPES[te.name]
+    raise SuruError(f"外部の関数「{sig.name}」の{what}には {'・'.join(names)} のどれかの型を書いてください", sig.line)
+
+
+def _attach_externs(statements: list) -> None:
+    """外部の関数の定義に、同じファイルのライブラリと型の宣言(C の型)を付ける"""
+    libs = [s.path for s in statements if isinstance(s, ExternLib)]
+    sigs = {s.name: s for s in statements if isinstance(s, TypeSig)}
+    seen: dict[str, str] = {}
+    for d in statements:
+        if not (isinstance(d, Define) and isinstance(d.body, Extern)):
+            continue
+        ext = d.body
+        sig = sigs.get(d.name)
+        if not d.is_function or sig is None or sig.params is None:
+            raise SuruError(f"外部の関数「{d.name}」には型の宣言が必要です(「小数 を 余弦にする は 小数」のように書きます)", d.line)
+        types = dict(sig.params)
+        if sorted(types) != sorted(p for p, _ in d.params):
+            raise SuruError(f"「{d.name}」の型の宣言の助詞が定義の助詞と違います", d.line)
+        for p, pat in d.params:
+            if not isinstance(pat, str):
+                raise SuruError(f"外部の関数「{d.name}」の引数は名前だけで書いてください", d.line)
+        ext.params = [_ffi_type(types[p], sig, f"「{p}」") for p, _ in d.params]
+        result = sig.result
+        if isinstance(result, TypeName) and result.name == "動作":
+            ext.action = True
+            result = result.args[0]
+        ext.result = _ffi_type(result, sig, "値")
+        ext.libs = libs
+        if ext.symbol in seen:
+            raise SuruError(f"外部の関数「{ext.symbol}」が2回定義されています(「{seen[ext.symbol]}」と「{d.name}」)", d.line)
+        seen[ext.symbol] = d.name
 
 
 def load_module(name: str, ctx: ParseContext, line: int) -> Module:
@@ -2674,9 +2773,23 @@ class Record:
         return self.values[self.fields.index(name)]
 
 
+@dataclass(frozen=True)
+class Address:
+    """番地: 外部の関数とやりとりする C のポインタ(中は見ない)"""
+
+    value: int
+
+    def __str__(self) -> str:
+        return f"番地(0x{self.value:x})"
+
+
 def type_name_of(v: Any) -> str:
     if isinstance(v, Record):
         return v.type_name
+    if isinstance(v, Address):
+        return "番地"
+    if isinstance(v, bytes):
+        return "バイト列"
     if isinstance(v, ACTION_TYPES):
         return "動作"
     if isinstance(v, bool):
@@ -2726,6 +2839,8 @@ def format_value(v: Any, nested: bool = False, fmt: Any = None) -> str:
         return f"<動作 {v.name}>"
     if isinstance(v, Pure):
         return "<動作 結果にする>"
+    if isinstance(v, bytes):
+        return "バイト列（" + " ".join(f"{b:02x}" for b in v) + "）"
     return str(v)
 
 
@@ -3073,7 +3188,98 @@ STD_PRIMITIVES = [
     Builtin("文字にする", [(WO, True)], lambda it, a, line: _chr(a[WO], line)),
     Builtin("文字コードにする", [(WO, True)], lambda it, a, line: _ord(a[WO], line)),
     Builtin("試行する", [(WO, True), ("で", True)], lambda it, a, line: _try(a[WO], a["で"], line)),
+    # バイト列と、外部の関数とのやりとり
+    Builtin("バイト列にする", [(WO, True)], lambda it, a, line: _str(a[WO], "「バイト列にする」の「を」", line).encode("utf-8")),
+    Builtin("バイト列組立する", [(WO, True)], lambda it, a, line: _bytes_of_list(a[WO], line)),
+    Builtin("数列にする", [(WO, True)], lambda it, a, line: tuple(_bytes(a[WO], "「数列にする」の「を」", line))),
+    Builtin("文字列にする", [(WO, True)], lambda it, a, line: _decode(a[WO], line)),
+    Builtin("バイト長にする", [(WO, True)], lambda it, a, line: len(_bytes(a[WO], "「バイト長にする」の「を」", line))),
+    Builtin("番地にする", [(WO, True)], lambda it, a, line: Address(_addr_num(a[WO], line))),
+    Builtin("番地数値にする", [(WO, True)], lambda it, a, line: _addr(a[WO], "「番地数値にする」の「を」", line).value),
+    Builtin("バイト列取得する", [("から", True), (WO, True)], lambda it, a, line: _peek(a["から"], a[WO], line)),
+    Builtin("書込する", [(WO, True), ("へ", True)], lambda it, a, line: _poke(a[WO], a["へ"], line)),
+    Builtin("エラー番号取得する", [], lambda it, a, line: Action("エラー番号取得する", lambda it2: _errno())),
+    Builtin("失敗する", [(WO, True)], lambda it, a, line: _fail_action(a[WO], line)),
 ]
+
+
+def _bytes(v: Any, what: str, line: int) -> bytes:
+    if not isinstance(v, bytes):
+        raise SuruError(f"{what}はバイト列でなければなりません(「{format_value(v)}」が渡されました)", line)
+    return v
+
+
+def _addr(v: Any, what: str, line: int) -> Address:
+    if not isinstance(v, Address):
+        raise SuruError(f"{what}は番地でなければなりません(「{format_value(v)}」が渡されました)", line)
+    return v
+
+
+def _bytes_of_list(v: Any, line: int) -> bytes:
+    if not isinstance(v, tuple):
+        raise SuruError(f"「バイト列組立する」の「を」はリストでなければなりません(「{format_value(v)}」が渡されました)", line)
+    for x in v:
+        if isinstance(x, bool) or not isinstance(x, int) or not 0 <= x <= 255:
+            raise SuruError(f"「{format_value(x)}」は 0 から 255 までの整数ではありません", line)
+    return bytes(v)
+
+
+def _decode(v: Any, line: int) -> str:
+    try:
+        return _bytes(v, "「文字列にする」の「を」", line).decode("utf-8")
+    except UnicodeDecodeError:
+        raise SuruError("バイト列が UTF-8 の文字列ではありません", line) from None
+
+
+def _addr_num(v: Any, line: int) -> int:
+    n = _num(v, line)
+    if not isinstance(n, int) or not 0 <= n <= MAX_COMPILED_INT:
+        raise SuruError(f"「{format_value(v)}」は番地にできません(0 以上の整数が必要です)", line)
+    return n
+
+
+def _peek(p: Any, n: Any, line: int) -> Action:
+    addr = _addr(p, "「バイト列取得する」の「から」", line)
+    k = _num(n, line)
+    if not isinstance(k, int) or k < 0:
+        raise SuruError(f"「{format_value(n)}」は取得するバイト数ではありません", line)
+
+    def perform(it: "Interpreter") -> bytes:
+        import ctypes
+
+        if addr.value == 0 and k > 0:
+            raise SuruError("番地(0x0)からは取得できません", line)
+        return ctypes.string_at(addr.value, k) if k else b""
+    return Action("バイト列取得する", perform)
+
+
+def _poke(b: Any, p: Any, line: int) -> Action:
+    data = _bytes(b, "「書込する」の「を」", line)
+    addr = _addr(p, "「書込する」の「へ」", line)
+
+    def perform(it: "Interpreter") -> int:
+        import ctypes
+
+        if addr.value == 0 and data:
+            raise SuruError("番地(0x0)へは書き込めません", line)
+        if data:
+            ctypes.memmove(addr.value, data, len(data))
+        return len(data)
+    return Action("書込する", perform)
+
+
+def _errno() -> int:
+    import ctypes
+
+    return ctypes.get_errno()
+
+
+def _fail_action(v: Any, line: int) -> Action:
+    msg = _str(v, "「失敗する」の「を」", line)
+
+    def perform(it: "Interpreter") -> Any:
+        raise SuruError(msg, line)
+    return Action("失敗する", perform)
 
 
 def _try(m: Any, alt: Any, line: int) -> Any:
@@ -3213,6 +3419,131 @@ NET_PRIMITIVES = [
     Builtin("送信する", [(WO, True), ("へ", True)], _net_action("送信する", _send)),
     Builtin("切断する", [(WO, True)], _net_action("切断する", _close)),
 ]
+
+
+# ---------------------------------------------------------------------------
+# 外部の関数(FFI)。インタプリタは ctypes で C の呼び出し規約の関数を呼ぶ
+# ---------------------------------------------------------------------------
+
+INT64_MIN, INT64_MAX = -(1 << 63), (1 << 63) - 1
+MIN_COMPILED_INT, MAX_COMPILED_INT = -(1 << 62), (1 << 62) - 1  # コンパイルしたプログラムの整数の範囲
+_FFI_LIBS: dict = {}
+
+
+def _ffi_lib(path: str, line: int) -> Any:
+    """ライブラリを開く(同じものは一度だけ)。短い名前(「m」)は OS の探し方で探す"""
+    import ctypes
+    import ctypes.util
+
+    if path in _FFI_LIBS:
+        return _FFI_LIBS[path]
+    found = path if os.path.isabs(path) else ctypes.util.find_library(path) or f"lib{path}.so"
+    try:
+        lib = ctypes.CDLL(found, use_errno=True)
+    except OSError as e:
+        raise SuruError(f"外部のライブラリ「{path}」を開けません({e})", line) from None
+    _FFI_LIBS[path] = lib
+    return lib
+
+
+def _ffi_symbol(ext: Extern, line: int) -> Any:
+    import ctypes
+
+    for path in ext.libs:
+        lib = _ffi_lib(path, line)
+        if hasattr(lib, ext.symbol):
+            return getattr(lib, ext.symbol)
+    proc = _FFI_LIBS.setdefault("\0プロセス", ctypes.CDLL(None, use_errno=True))  # libc などリンク済みのもの
+    if hasattr(proc, ext.symbol):
+        return getattr(proc, ext.symbol)
+    where = "・".join(f"「{p}」" for p in ext.libs) or "読み込んだライブラリ"
+    raise SuruError(f"外部の関数「{ext.symbol}」が{where}に見つかりません", line)
+
+
+def _ffi_ctype(t: str) -> Any:
+    import ctypes
+
+    return {"i64": ctypes.c_int64, "f64": ctypes.c_double, "i32": ctypes.c_int32, "bool": ctypes.c_int32,
+            "str": ctypes.c_char_p, "ptr": ctypes.c_void_p, "bytes": ctypes.c_char_p, "void": None}[t]
+
+
+def _ffi_arg(t: str, v: Any, name: str, part: str, line: int) -> Any:
+    def bad(want: str) -> SuruError:
+        return SuruError(f"外部の関数「{name}」の「{part}」には{want}が必要です(「{format_value(v)}」が渡されました)", line)
+
+    if t in ("i64", "i32"):
+        if isinstance(v, float) and v.is_integer():
+            v = int(v)
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise bad("整数")
+        lo, hi = (INT64_MIN, INT64_MAX) if t == "i64" else (-(1 << 31), (1 << 31) - 1)
+        if not lo <= v <= hi:
+            raise bad(f"{lo} から {hi} までの整数")
+        return v
+    if t == "f64":
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            raise bad("数")
+        return float(v)
+    if t == "bool":
+        if not isinstance(v, bool):
+            raise bad("真偽")
+        return 1 if v else 0
+    if t == "str":
+        if not isinstance(v, str):
+            raise bad("文字列")
+        data = v.encode("utf-8")
+        if b"\0" in data:
+            raise bad("途中に文字コード 0 を含まない文字列")
+        return data
+    if t == "bytes":
+        if not isinstance(v, bytes):
+            raise bad("バイト列")
+        return v
+    if not isinstance(v, Address):
+        raise bad("番地")
+    return v.value or None
+
+
+def _ffi_result(t: str, r: Any, name: str, line: int) -> Any:
+    if t == "void":
+        return 0
+    if t == "i64":
+        if not MIN_COMPILED_INT <= r <= MAX_COMPILED_INT:
+            raise SuruError(f"外部の関数「{name}」の値 {r} が大きすぎます(整数は ±{MAX_COMPILED_INT} までです)", line)
+        return r
+    if t == "i32":
+        return int(r)
+    if t == "f64":
+        return float(r)
+    if t == "bool":
+        return r != 0
+    if t == "str":
+        return "" if r is None else r.decode("utf-8", "replace")
+    return Address(r or 0)
+
+
+def extern_builtin(d: Define) -> Builtin:
+    """外部の関数の定義を、呼ぶと C の関数を呼ぶ組み込みにする(値が動作なら、行ったときに呼ぶ)"""
+    ext: Extern = d.body
+    parts = [p for p, _ in d.params]
+    cfn: list = []
+
+    def call(a: dict, line: int) -> Any:
+        if not cfn:
+            f = _ffi_symbol(ext, line)
+            f.argtypes = [_ffi_ctype(t) for t in ext.params]
+            f.restype = _ffi_ctype(ext.result)
+            cfn.append(f)
+        import ctypes
+
+        args = [_ffi_arg(t, a[p], d.name, p, line) for t, p in zip(ext.params, parts)]
+        ctypes.set_errno(0)
+        return _ffi_result(ext.result, cfn[0](*args), d.name, line)
+
+    if ext.action:
+        return Builtin(d.name, [(p, True) for p in parts],
+                       lambda it, a, line: Action(d.name, lambda it2: call(a, line)))
+    return Builtin(d.name, [(p, True) for p in parts], lambda it, a, line: call(a, line))
 
 # lib/ のファイルごとの組み込み(そのファイルの中と、読み込んだ側の「標準内の…」「通信内の…」で使える)
 LIB_PRIMITIVES = {STD_PATH: STD_PRIMITIVES, NET_PATH: NET_PRIMITIVES}
@@ -3602,7 +3933,9 @@ class Interpreter:
         return v
 
     def define(self, d: Define, env: Env) -> None:
-        if d.is_function:
+        if isinstance(d.body, Extern):
+            env.vars[d.name] = extern_builtin(d)
+        elif d.is_function:
             env.vars[d.name] = Function(d.name, d.params, d.body, env)
         else:
             env.vars[d.name] = Lazy(d.body, env)

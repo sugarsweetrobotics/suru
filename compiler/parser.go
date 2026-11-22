@@ -111,7 +111,17 @@ func (t *TypeMap) Update(o *TypeMap) {
 	}
 }
 
-var builtinTypes = []string{"数", "文字列", "真偽", "リスト", "関数", "動作"}
+// 小数・整数は数の別名(外部の関数の宣言で C の double・int を表す)。番地は C のポインタ
+// 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
+var builtinTypes = []string{"数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無"}
+
+// KwExtern は外部の関数・ライブラリの印
+const KwExtern = "外部の"
+
+// ffiTypeNames は外部の関数に渡せる型(書く順)と C の型
+var ffiTypeNames = []string{"数", "小数", "整数", "真偽", "文字列", "番地", "バイト列", "無"}
+var ffiTypes = map[string]string{"数": "i64", "小数": "f64", "整数": "i32", "真偽": "bool", "文字列": "str", "番地": "ptr",
+	"バイト列": "bytes", "無": "void"}
 var builtinTypeSet = setOf(builtinTypes...)
 
 const typeVarNames = "甲乙丙丁戊己庚辛壬癸"
@@ -1664,6 +1674,18 @@ func parseStatement(node *LNode) Node {
 	if len(afterT) == 1 && afterT[0].Kind == "WORD" && afterT[0].S == Tejun && !afterT[0].Quoted && len(node.Children) > 0 {
 		return &Define{name, params, parseDo(node.Children, node.Line.Number), isFunction, node.Line.Number}
 	}
+	if len(afterT) == 2 && afterT[0].Kind == "WORD" && afterT[0].S == KwExtern && !afterT[0].Quoted &&
+		afterT[1].Kind == "STR" && len(node.Children) == 0 {
+		// 「x を 余弦にする とは 外部の「cos」」: C の関数を呼ぶ
+		sym := afterT[1].S
+		if !isCSymbol(sym) {
+			raise(afterT[1].Line, "「"+sym+"」は C の関数の名前ではありません")
+		}
+		if strings.HasPrefix(sym, "rt_") || strings.HasPrefix(sym, "suru_") {
+			raise(afterT[1].Line, "「"+sym+"」は「する」の実行時が使う名前なので、外部の関数にできません")
+		}
+		return &Define{name, params, &Extern{Symbol: sym, Line: afterT[1].Line}, isFunction, node.Line.Number}
+	}
 	var body Node
 	if len(afterT) > 0 {
 		body = newExprParser(withChildren(after, node.Children)).parseAll()
@@ -1800,7 +1822,7 @@ func typeWord(t *Token, args []Node) Node {
 		}
 		return &TypeVarName{name}
 	}
-	if (name == "数" || name == "文字列" || name == "真偽") && len(args) > 0 {
+	if (name == "数" || name == "文字列" || name == "真偽" || name == "小数" || name == "整数" || name == "番地" || name == "バイト列" || name == "無") && len(args) > 0 {
 		raise(t.Line, "「"+name+"」は型の引数をとりません")
 	}
 	if (name == "リスト" || name == "動作") && len(args) != 1 {
@@ -2098,16 +2120,20 @@ func parseDo(nodes []*LNode, line Pos) Node {
 func ParseProgram(source string, ctx *ParseContext) []Node {
 	lines := must(splitSourceLines(source))
 	nodes := buildLayout(lines)
-	imports := map[*LNode]*Import{}
+	imports := map[*LNode]Node{}
 	var modNames []string
 	for _, n := range nodes {
+		if lib := externLibTarget(n, ctx); lib != nil {
+			imports[n] = lib
+			continue
+		}
 		if name, open, ok := importTarget(n); ok {
 			imp := &Import{loadModule(name, ctx, n.Line.Number), n.Line.Number, open}
 			imports[n] = imp
 			modNames = append(modNames, imp.Module.Name)
 		}
 	}
-	if len(imports) > 0 {
+	if len(modNames) > 0 {
 		joinInNodes(nodes, setOf(modNames...))
 	}
 	for _, n := range nodes {
@@ -2127,7 +2153,128 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 		}
 	}
 	checkOpenImports(statements)
+	attachExterns(statements)
 	return attachProvisos(statements)
+}
+
+// externLibTarget は「外部の「m」 を 読み込む」なら ExternLib
+func externLibTarget(node *LNode, ctx *ParseContext) *ExternLib {
+	tokens := nosep(flatten(node))
+	if len(tokens) > 0 && tokens[len(tokens)-1].Kind == "PERIOD" {
+		tokens = tokens[:len(tokens)-1]
+	}
+	if len(tokens) == 0 || !(tokens[0].Kind == "WORD" && tokens[0].S == KwExtern && !tokens[0].Quoted) {
+		return nil
+	}
+	if len(tokens) != 4 || tokens[1].Kind != "STR" || !(tokens[2].Kind == "PART" && tokens[2].S == WO) ||
+		!(isKw(tokens[3], KwImport) || isKw(tokens[3], KwImportPolit)) || node.Line.Indent != 0 {
+		raise(tokens[0].Line, "外部のライブラリは一番外に「"+KwExtern+"「m」 を "+KwImport+"」のように書いて読み込みます")
+	}
+	name := tokens[1].S
+	if name == "" {
+		raise(tokens[0].Line, "外部のライブラリの名前が空です")
+	}
+	path := name
+	if strings.Contains(name, "/") || strings.HasSuffix(name, ".so") || strings.HasSuffix(name, ".dylib") {
+		path = absPath(filepath.Join(ctx.BaseDir, name))
+	}
+	return &ExternLib{name, path, tokens[0].Line}
+}
+
+func ffiType(te Node, sig *TypeSig, what string) string {
+	skip := "void"
+	if what == "値" {
+		skip = "bytes"
+	}
+	var names []string
+	for _, n := range ffiTypeNames {
+		if ffiTypes[n] != skip {
+			names = append(names, n)
+		}
+	}
+	if tn, ok := te.(*TypeName); ok && len(tn.Args) == 0 {
+		if t, ok := ffiTypes[tn.Name]; ok && t != skip {
+			return t
+		}
+	}
+	raise(sig.Line, "外部の関数「"+sig.Name+"」の"+what+"には "+strings.Join(names, "・")+" のどれかの型を書いてください")
+	return ""
+}
+
+// attachExterns は外部の関数の定義に、同じファイルのライブラリと型の宣言(C の型)を付ける
+func attachExterns(statements []Node) {
+	var libs []string
+	sigs := map[string]*TypeSig{}
+	for _, s := range statements {
+		switch x := s.(type) {
+		case *ExternLib:
+			libs = append(libs, x.Path)
+		case *TypeSig:
+			sigs[x.Name] = x
+		}
+	}
+	seen := map[string]string{}
+	for _, s := range statements {
+		d, ok := s.(*Define)
+		if !ok {
+			continue
+		}
+		ext, ok := d.Body.(*Extern)
+		if !ok {
+			continue
+		}
+		sig := sigs[d.Name]
+		if !d.IsFunction || sig == nil || !sig.HasParams {
+			raise(d.Line, "外部の関数「"+d.Name+"」には型の宣言が必要です(「小数 を 余弦にする は 小数」のように書きます)")
+		}
+		types := map[string]Node{}
+		var got, want []string
+		for _, p := range sig.Params {
+			types[p.Part] = p.Type
+			got = append(got, p.Part)
+		}
+		for _, p := range d.Params {
+			want = append(want, p.Part)
+		}
+		sort.Strings(got)
+		sort.Strings(want)
+		if !eqStrings(got, want) {
+			raise(d.Line, "「"+d.Name+"」の型の宣言の助詞が定義の助詞と違います")
+		}
+		for _, p := range d.Params {
+			if p.List || !p.simple() {
+				raise(d.Line, "外部の関数「"+d.Name+"」の引数は名前だけで書いてください")
+			}
+		}
+		ext.Params = nil
+		for _, p := range d.Params {
+			ext.Params = append(ext.Params, ffiType(types[p.Part], sig, "「"+p.Part+"」"))
+		}
+		result := sig.Result
+		if tn, ok := result.(*TypeName); ok && tn.Name == "動作" {
+			ext.Action = true
+			result = tn.Args[0]
+		}
+		ext.Result = ffiType(result, sig, "値")
+		ext.Libs = libs
+		if prev, ok := seen[ext.Symbol]; ok {
+			raise(d.Line, "外部の関数「"+ext.Symbol+"」が2回定義されています(「"+prev+"」と「"+d.Name+"」)")
+		}
+		seen[ext.Symbol] = d.Name
+	}
+}
+
+func isCSymbol(sym string) bool {
+	if sym == "" {
+		return false
+	}
+	for i, c := range sym {
+		alpha := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		if !(alpha || c == '_' || (i > 0 && c >= '0' && c <= '9')) {
+			return false
+		}
+	}
+	return true
 }
 
 func moduleNames(m *Module) map[string]bool {

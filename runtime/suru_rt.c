@@ -30,13 +30,15 @@
 
 typedef int64_t V;
 
-enum { T_INT = 0, T_FLT = 1, T_BOOL, T_STR, T_LIST, T_REC, T_FN, T_ACT, T_PURE, T_LAZY };
+enum { T_INT = 0, T_FLT = 1, T_BOOL, T_STR, T_LIST, T_REC, T_FN, T_ACT, T_PURE, T_LAZY, T_ADDR, T_BYTES };
 
 typedef struct { int32_t tag; } Hdr;
 typedef struct { int32_t tag; double d; } Flt;
 typedef struct { int32_t tag; int32_t b; } Bool;
 typedef struct { int32_t tag; int64_t n; int64_t ncp; char s[]; } Str;
 typedef struct { int32_t tag; int64_t n; V it[]; } List;
+typedef struct { int32_t tag; void *p; } Addr; /* 番地: 外部の関数とやりとりする C のポインタ */
+typedef struct { int32_t tag; int64_t n; uint8_t d[]; } Bytes; /* バイト列(変更しない) */
 typedef struct Ctor {
     const char *name, *type;
     int32_t n;
@@ -61,7 +63,7 @@ typedef struct Fn {
     struct Trait *trait;    /* FK_TRAIT */
     int32_t wo, wo_list;
 } Fn;
-enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY };
+enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
@@ -693,6 +695,8 @@ static const char *type_name_of(V v) {
     case T_INT: case T_FLT: return "数";
     case T_STR: return "文字列";
     case T_LIST: return "リスト";
+    case T_ADDR: return "番地";
+    case T_BYTES: return "バイト列";
     default: return "関数";
     }
 }
@@ -763,6 +767,14 @@ static void fmt_value(Buf *b, V v, int nested, int use_traits) {
     }
     case T_ACT: buf_printf(b, "<動作 %s>", AS(Act, v)->name); return;
     case T_PURE: buf_cat(b, "<動作 結果にする>"); return;
+    case T_ADDR: buf_printf(b, "番地(0x%llx)", (unsigned long long)(uintptr_t)AS(Addr, v)->p); return;
+    case T_BYTES: {
+        Bytes *x = AS(Bytes, v);
+        buf_cat(b, "バイト列（");
+        for (int64_t i = 0; i < x->n; i++) buf_printf(b, i ? " %02x" : "%02x", x->d[i]);
+        buf_cat(b, "）");
+        return;
+    }
     default: buf_cat(b, "?"); return;
     }
 }
@@ -857,6 +869,8 @@ int32_t rt_eq(V a, V b) {
         return 1;
     }
     case T_PURE: return rt_eq(AS(Pure, a)->v, AS(Pure, b)->v);
+    case T_ADDR: return AS(Addr, a)->p == AS(Addr, b)->p;
+    case T_BYTES: return AS(Bytes, a)->n == AS(Bytes, b)->n && memcmp(AS(Bytes, a)->d, AS(Bytes, b)->d, AS(Bytes, a)->n) == 0;
     default: return 0;
     }
 }
@@ -1223,6 +1237,7 @@ static V dispatch(Fn *m, V *args, int32_t pos) {
 
 static V perform(V v);
 static V net_run(Act *a);
+static V mem_run(Act *a);
 
 static V act_run(Act *a) {
     switch (a->kind) {
@@ -1264,6 +1279,8 @@ static V act_run(Act *a) {
         for (int64_t i = 0; i < l->n; i++) out->it[i] = perform(l->it[i]);
         return (V)(intptr_t)out;
     }
+    case A_CALL: return apply1(a->a, V_EMPTY, a->pos); /* 外部の関数を呼ぶ動作 */
+    case A_PEEK: case A_POKE: case A_ERRNO: case A_FAIL: return mem_run(a);
     case A_CHAIN: return apply1(a->b, perform(a->a), 0); /* 続きの動作は perform のループで行う */
     case A_FMAP: return apply1(a->b, perform(a->a), 0);
     }
@@ -1986,6 +2003,122 @@ static const BuiltinDef BUILTINS[] = {
     {"畳み込みする", 3, P3_WO_KARA_DE, NULL, b_fold},
 };
 
+/* ------------------------------------------------------------------ */
+/* バイト列と、外部の関数とのやりとり(標準の組み込み)                 */
+/* ------------------------------------------------------------------ */
+
+V rt_ffi_from_ptr(void *p);
+static int ffi_errno;
+
+static V mk_bytes(const void *p, int64_t n) {
+    Bytes *b = rt_alloc_atomic(sizeof(Bytes) + n + 1); /* 中にポインタはない */
+    b->tag = T_BYTES;
+    b->n = n;
+    if (n && p) memcpy(b->d, p, n);
+    return (V)(intptr_t)b;
+}
+static Bytes *need_bytes(V v, const char *what, int32_t pos) {
+    if (TAG(v) != T_BYTES) fail(pos, "%sはバイト列でなければなりません(「%s」が渡されました)", what, plain(v).s);
+    return AS(Bytes, v);
+}
+static Addr *need_addr(V v, const char *what, int32_t pos) {
+    if (TAG(v) != T_ADDR) fail(pos, "%sは番地でなければなりません(「%s」が渡されました)", what, plain(v).s);
+    return AS(Addr, v);
+}
+/* Python の bytes.decode("utf-8") と同じ厳しさで調べる */
+static int utf8_valid(const uint8_t *s, int64_t n) {
+    int64_t i = 0;
+    while (i < n) {
+        uint8_t c = s[i];
+        if (c < 0x80) { i++; continue; }
+        int k;
+        uint32_t cp, min;
+        if ((c & 0xe0) == 0xc0) { k = 1; cp = c & 0x1f; min = 0x80; }
+        else if ((c & 0xf0) == 0xe0) { k = 2; cp = c & 0x0f; min = 0x800; }
+        else if ((c & 0xf8) == 0xf0) { k = 3; cp = c & 0x07; min = 0x10000; }
+        else return 0;
+        for (int j = 1; j <= k; j++) {
+            if (i + j >= n || (s[i + j] & 0xc0) != 0x80) return 0;
+            cp = (cp << 6) | (s[i + j] & 0x3f);
+        }
+        if (cp < min || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) return 0;
+        i += k + 1;
+    }
+    return 1;
+}
+BI(m_tobytes) { Str *x = need_str(a[0], "「バイト列にする」の「を」", pos); return mk_bytes(x->s, x->n); }
+BI(m_build) {
+    if (TAG(a[0]) != T_LIST) fail(pos, "「バイト列組立する」の「を」はリストでなければなりません(「%s」が渡されました)", plain(a[0]).s);
+    List *l = AS(List, a[0]);
+    Bytes *b = AS(Bytes, mk_bytes(NULL, l->n));
+    for (int64_t i = 0; i < l->n; i++) {
+        V x = l->it[i];
+        if (!IS_INT(x) || INT_VAL(x) < 0 || INT_VAL(x) > 255) fail(pos, "「%s」は 0 から 255 までの整数ではありません", plain(x).s);
+        b->d[i] = (uint8_t)INT_VAL(x);
+    }
+    return (V)(intptr_t)b;
+}
+BI(m_list) {
+    Bytes *b = need_bytes(a[0], "「数列にする」の「を」", pos);
+    if (b->n == 0) return V_EMPTY;
+    List *l = new_list(b->n);
+    for (int64_t i = 0; i < b->n; i++) l->it[i] = mk_int(b->d[i], pos);
+    return (V)(intptr_t)l;
+}
+BI(m_tostr) {
+    Bytes *b = need_bytes(a[0], "「文字列にする」の「を」", pos);
+    if (!utf8_valid(b->d, b->n)) fail(pos, "バイト列が UTF-8 の文字列ではありません");
+    return mk_str((const char *)b->d, b->n);
+}
+BI(m_len) { return mk_int(need_bytes(a[0], "「バイト長にする」の「を」", pos)->n, pos); }
+BI(m_addr) {
+    V v = need_num(a[0], pos);
+    if (!IS_INT(v) || INT_VAL(v) < 0) fail(pos, "「%s」は番地にできません(0 以上の整数が必要です)", plain(v).s);
+    return rt_ffi_from_ptr((void *)(intptr_t)INT_VAL(v));
+}
+BI(m_addrnum) { return mk_int((int64_t)(intptr_t)need_addr(a[0], "「番地数値にする」の「を」", pos)->p, pos); }
+static V mk_act_pos(int kind, const char *name, V x, V y, int32_t pos) {
+    Act *act = AS(Act, mk_act(kind, name, x, y));
+    act->pos = pos;
+    return (V)(intptr_t)act;
+}
+BI(m_peek) { /* から, を */
+    need_addr(a[0], "「バイト列取得する」の「から」", pos);
+    V n = need_num(a[1], pos);
+    if (!IS_INT(n) || INT_VAL(n) < 0) fail(pos, "「%s」は取得するバイト数ではありません", plain(n).s);
+    return mk_act_pos(A_PEEK, "バイト列取得する", a[0], n, pos);
+}
+BI(m_poke) { /* を, へ */
+    need_bytes(a[0], "「書込する」の「を」", pos);
+    need_addr(a[1], "「書込する」の「へ」", pos);
+    return mk_act_pos(A_POKE, "書込する", a[0], a[1], pos);
+}
+BI(m_errno) { return mk_act_pos(A_ERRNO, "エラー番号取得する", 0, 0, pos); }
+BI(m_fail) {
+    need_str(a[0], "「失敗する」の「を」", pos);
+    return mk_act_pos(A_FAIL, "失敗する", a[0], 0, pos);
+}
+static V mem_run(Act *a) {
+    switch (a->kind) {
+    case A_PEEK: {
+        void *p = AS(Addr, a->a)->p;
+        int64_t n = INT_VAL(a->b);
+        if (!p && n > 0) fail(a->pos, "番地(0x0)からは取得できません");
+        return mk_bytes(p, n);
+    }
+    case A_POKE: {
+        Bytes *b = AS(Bytes, a->a);
+        void *p = AS(Addr, a->b)->p;
+        if (!p && b->n > 0) fail(a->pos, "番地(0x0)へは書き込めません");
+        if (b->n) memcpy(p, b->d, b->n);
+        return mk_int(b->n, a->pos);
+    }
+    case A_ERRNO: return mk_int(ffi_errno, a->pos);
+    case A_FAIL: fail(a->pos, "%s", AS(Str, a->a)->s);
+    }
+    return 0;
+}
+
 static const BuiltinDef STD_PRIMITIVES[] = {
     {"切捨する", 1, P1_WO, NULL, s_floor},
     {"平方根にする", 1, P1_WO, NULL, s_sqrt},
@@ -2008,6 +2141,17 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"文字にする", 1, P1_WO, NULL, s_chr},
     {"文字コードにする", 1, P1_WO, NULL, s_ord},
     {"試行する", 2, P2_WO_DE, NULL, s_try},
+    {"バイト列にする", 1, P1_WO, NULL, m_tobytes},
+    {"バイト列組立する", 1, P1_WO, NULL, m_build},
+    {"数列にする", 1, P1_WO, NULL, m_list},
+    {"文字列にする", 1, P1_WO, NULL, m_tostr},
+    {"バイト長にする", 1, P1_WO, NULL, m_len},
+    {"番地にする", 1, P1_WO, NULL, m_addr},
+    {"番地数値にする", 1, P1_WO, NULL, m_addrnum},
+    {"バイト列取得する", 2, P2_KARA_WO, NULL, m_peek},
+    {"書込する", 2, P2_WO_HE, NULL, m_poke},
+    {"エラー番号取得する", 0, NULL, NULL, m_errno},
+    {"失敗する", 1, P1_WO, NULL, m_fail},
     /* 「通信」の組み込み */
     {"待受開始する", 1, P1_WO, NULL, n_listen},
     {"接続受付する", 1, P1_KARA, NULL, n_accept},
@@ -2020,6 +2164,87 @@ static const BuiltinDef STD_PRIMITIVES[] = {
 static V def_builtin(const BuiltinDef *d) { return mk_builtin(d->name, d->n, d->parts, d->req, d->code, NULL); }
 
 /* 標準ライブラリの組み込み(「標準」の中で使う) */
+/* ------------------------------------------------------------------ */
+/* 外部の関数(FFI): する の値と C の値の変換                           */
+/* ------------------------------------------------------------------ */
+
+__attribute__((noreturn)) static void ffi_bad(V v, const char *fname, int32_t part, const char *want, int32_t pos) {
+    fail(pos, "外部の関数「%s」の「%s」には%sが必要です(「%s」が渡されました)", fname, PART_NAMES[part], want, plain(v).s);
+}
+
+static int64_t ffi_int(V v, const char *fname, int32_t part, int32_t pos, const char *want) {
+    if (IS_INT(v)) return INT_VAL(v);
+    if (TAG(v) == T_FLT) {
+        double d = AS(Flt, v)->d;
+        if (d == floor(d) && d >= -9223372036854775808.0 && d < 9223372036854775808.0) return (int64_t)d;
+    }
+    ffi_bad(v, fname, part, want, pos);
+}
+
+int64_t rt_ffi_i64(V v, const char *fname, int32_t part, int32_t pos) { return ffi_int(v, fname, part, pos, "整数"); }
+
+int32_t rt_ffi_i32(V v, const char *fname, int32_t part, int32_t pos) {
+    int64_t n = ffi_int(v, fname, part, pos, "整数");
+    if (n < INT32_MIN || n > INT32_MAX) ffi_bad(v, fname, part, "-2147483648 から 2147483647 までの整数", pos);
+    return (int32_t)n;
+}
+
+double rt_ffi_f64(V v, const char *fname, int32_t part, int32_t pos) {
+    if (!is_num(v)) ffi_bad(v, fname, part, "数", pos);
+    return num_d(v);
+}
+
+int32_t rt_ffi_bool(V v, const char *fname, int32_t part, int32_t pos) {
+    if (TAG(v) != T_BOOL) ffi_bad(v, fname, part, "真偽", pos);
+    return AS(Bool, v)->b ? 1 : 0;
+}
+
+const char *rt_ffi_str(V v, const char *fname, int32_t part, int32_t pos) {
+    if (TAG(v) != T_STR) ffi_bad(v, fname, part, "文字列", pos);
+    Str *s = AS(Str, v);
+    if ((int64_t)strlen(s->s) != s->n) ffi_bad(v, fname, part, "途中に文字コード 0 を含まない文字列", pos);
+    return s->s; /* 呼んでいる間だけ使える(C 側で持ち続けない) */
+}
+
+const uint8_t *rt_ffi_bytes(V v, const char *fname, int32_t part, int32_t pos) {
+    if (TAG(v) != T_BYTES) ffi_bad(v, fname, part, "バイト列", pos);
+    return AS(Bytes, v)->d; /* 呼んでいる間だけ使える(C 側で書き換えない) */
+}
+
+/* 外部の関数を呼ぶ前と後: 「エラー番号取得する」はその関数が残した errno */
+static int ffi_errno;
+void rt_ffi_pre(void) { errno = 0; }
+void rt_ffi_post(void) { ffi_errno = errno; }
+
+void *rt_ffi_ptr(V v, const char *fname, int32_t part, int32_t pos) {
+    if (TAG(v) != T_ADDR) ffi_bad(v, fname, part, "番地", pos);
+    return AS(Addr, v)->p;
+}
+
+V rt_ffi_from_i64(int64_t n, const char *fname, int32_t pos) {
+    if (n > INT_MAX62 || n < INT_MIN62)
+        fail(pos, "外部の関数「%s」の値 %lld が大きすぎます(整数は ±%lld までです)", fname, (long long)n, (long long)INT_MAX62);
+    return mk_int(n, pos);
+}
+
+V rt_ffi_from_i32(int32_t n) { return mk_int(n, 0); }
+V rt_ffi_from_bool(int32_t b) { return rt_bool(b != 0); }
+V rt_ffi_from_str(const char *s) { return s ? cstr(s) : cstr(""); }
+
+V rt_ffi_from_ptr(void *p) {
+    Addr *a = rt_alloc(sizeof(Addr));
+    a->tag = T_ADDR;
+    a->p = p;
+    return (V)(intptr_t)a;
+}
+
+/* 値が動作の外部の関数: 行ったときに k(引数を捕まえた関数)を呼ぶ */
+V rt_ffi_action(V k, const char *fname, int32_t pos) {
+    Act *x = AS(Act, mk_act(A_CALL, fname, k, 0));
+    x->pos = pos;
+    return (V)(intptr_t)x;
+}
+
 V rt_std(const char *name) {
     for (size_t i = 0; i < sizeof STD_PRIMITIVES / sizeof STD_PRIMITIVES[0]; i++)
         if (strcmp(STD_PRIMITIVES[i].name, name) == 0) return def_builtin(&STD_PRIMITIVES[i]);

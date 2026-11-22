@@ -29,6 +29,10 @@ import suru as S
 
 RUNTIME = S.data_path("runtime", "suru_rt.c")
 
+# 外部の関数の C の型 → LLVM IR の型
+FFI_IR = {"i64": "i64", "f64": "double", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr", "bytes": "ptr",
+          "void": "void"}
+LINK_MARK = "; suru-link: "  # IR の中の、リンクするライブラリの印(build が読む)
 PART_IDS = {"を": 0, "に": 1, "で": 2, "から": 3, "へ": 4, "より": 5, "が": 6}
 OPS = {"+": 0, "-": 1, "*": 2, "/": 3, "%": 4, "^": 5, "<": 6, ">": 7, "<=": 8, ">=": 9, "==": 10, "!=": 11}
 INT_MAX = (1 << 62) - 1
@@ -36,6 +40,21 @@ INT_MIN = -(1 << 62)
 
 DECLS = """
 declare ptr @rt_alloc(i64)
+declare i64 @rt_ffi_i64(i64, ptr, i32, i32)
+declare i32 @rt_ffi_i32(i64, ptr, i32, i32)
+declare double @rt_ffi_f64(i64, ptr, i32, i32)
+declare i32 @rt_ffi_bool(i64, ptr, i32, i32)
+declare ptr @rt_ffi_str(i64, ptr, i32, i32)
+declare ptr @rt_ffi_ptr(i64, ptr, i32, i32)
+declare ptr @rt_ffi_bytes(i64, ptr, i32, i32)
+declare void @rt_ffi_pre()
+declare void @rt_ffi_post()
+declare i64 @rt_ffi_from_i64(i64, ptr, i32)
+declare i64 @rt_ffi_from_i32(i32)
+declare i64 @rt_ffi_from_bool(i32)
+declare i64 @rt_ffi_from_str(ptr)
+declare i64 @rt_ffi_from_ptr(ptr)
+declare i64 @rt_ffi_action(i64, ptr, i32)
 declare i64 @rt_bool(i32)
 declare i64 @rt_float(double)
 declare i64 @rt_str(ptr, i64)
@@ -254,6 +273,8 @@ class Compiler:
         self.n = 0
         self.modules: dict[str, Scope] = {}
         self.init_fg: FnGen | None = None
+        self.ffi_decls: dict[str, str] = {}  # 外部の関数の名前 → declare の行
+        self.link_libs: list[str] = []  # リンクするライブラリ(ExternLib.path)
 
     def uid(self) -> int:
         self.n += 1
@@ -561,6 +582,8 @@ class Compiler:
                     k = fg.new_slot()
                     fg.store_slot(k, v)
                     local.vars[x] = Binding("slot", owner=fg, slot=k)
+        if isinstance(body, S.Extern):
+            body = self.extern_body(name, params, body)
         r = body(local, fg) if callable(body) else self.ex(body, local, fg)
         if check_pred and S.is_predicate(name):
             r = fg.call("i64", "@rt_pred_check", f"i64 {r}, ptr {self.cstr(name)}, i32 %pos")
@@ -578,6 +601,42 @@ class Compiler:
         w.append("  ret i64 %r")
         w.append("}")
         self.functions.append("\n".join(w))
+
+    def extern_body(self, name: str, params: list, ext: S.Extern) -> Any:
+        """外部の関数の本体: 引数を C の値にして呼び、値を戻す。値が動作なら、行ったときに呼ぶ動作を返す"""
+        for lib in ext.libs:
+            if lib not in self.link_libs:
+                self.link_libs.append(lib)
+        ret = FFI_IR[ext.result]
+        decl = f"declare {ret} @{ext.symbol}({', '.join(FFI_IR[t] for t in ext.params)})"
+        if self.ffi_decls.setdefault(ext.symbol, decl) != decl:
+            raise S.SuruError(f"外部の関数「{ext.symbol}」が違う型で2回宣言されています", ext.line)
+        fname = self.cstr(name)
+
+        def call(sc: Scope, fg: FnGen) -> str:
+            args = []
+            for (p, x), t in zip(params, ext.params):
+                v = self.var_value(x, sc, fg, ext.line)
+                c = fg.call(FFI_IR[t], f"@rt_ffi_{t}", f"i64 {v}, ptr {fname}, i32 {PART_IDS[p]}, i32 %pos")
+                args.append(f"{FFI_IR[t]} {c}")
+            fg.call("void", "@rt_ffi_pre", "")
+            r = fg.call(ret, f"@{ext.symbol}", ", ".join(args))
+            fg.call("void", "@rt_ffi_post", "")
+            if ext.result == "void":
+                return "1"  # 数の 0
+            if ext.result == "i64":
+                return fg.call("i64", "@rt_ffi_from_i64", f"i64 {r}, ptr {fname}, i32 %pos")
+            if ext.result == "f64":
+                return fg.call("i64", "@rt_float", f"double {r}")
+            return fg.call("i64", f"@rt_ffi_from_{ext.result}", f"{ret} {r}")
+
+        if not ext.action:
+            return call
+
+        def action(sc: Scope, fg: FnGen) -> str:
+            k = self.closure(name, [(S.WO, f"\0捨てる{self.uid()}")], call, sc, fg, check_pred=False)
+            return fg.call("i64", "@rt_ffi_action", f"i64 {k}, ptr {fname}, i32 %pos")
+        return action
 
     def new_info(self, name: str, params: list) -> FnInfo:
         k = self.uid()
@@ -890,7 +949,9 @@ class Compiler:
         entry = f"define void @suru_main() {{\nentry:\n{consts}\n  %r = call i64 @suru_init(ptr null)\n  ret void\n}}"
         src = self.source.encode("utf-8")
         source = f'@suru_source = constant [{len(src) + 1} x i8] c"{ir_bytes(src)}\\00"'
-        return "\n".join(["; 「する」のコンパイラが作った LLVM IR", DECLS, source] + self.globals + self.functions + [entry, self.roots_table()]) + "\n"
+        links = [LINK_MARK + lib for lib in self.link_libs]
+        ffi = [self.ffi_decls[k] for k in sorted(self.ffi_decls)]
+        return "\n".join(["; 「する」のコンパイラが作った LLVM IR"] + links + [DECLS] + ffi + [source] + self.globals + self.functions + [entry, self.roots_table()]) + "\n"
 
     def roots_table(self) -> str:
         """GC の根: 値を入れる大域変数の一覧(runtime/suru_rt.c の suru_roots)"""
@@ -941,11 +1002,27 @@ def runtime_object(cc: str) -> str:
     return obj
 
 
+def link_flags(ll_path: str) -> list[str]:
+    """IR の始めの「; suru-link: 」の行から、外部のライブラリをリンクする引数を作る"""
+    flags: list[str] = []
+    with open(ll_path, encoding="utf-8") as f:
+        for line in f:
+            if not line.startswith(";"):
+                break
+            if line.startswith(LINK_MARK):
+                lib = line[len(LINK_MARK):].rstrip("\n")
+                if os.path.isabs(lib):
+                    flags += [lib, f"-Wl,-rpath,{os.path.dirname(lib)}"]
+                elif lib != "c":
+                    flags.append(f"-l{lib}")
+    return flags
+
+
 def build(ll_path: str, out: str, opt: str = "-O2") -> None:
     cc = find_cc()
     if cc is None:
         raise S.SuruError("バイナリを作るには clang が必要です(LLVM IR だけなら --ll を付けてください)")
-    cmd = [cc, opt, "-w", ll_path, runtime_object(cc), "-o", out, "-lm", "-lpthread"]
+    cmd = [cc, opt, "-w", ll_path, runtime_object(cc), "-o", out] + link_flags(ll_path) + ["-lm", "-lpthread"]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise S.SuruError("clang でのビルドに失敗しました:\n" + r.stderr)
