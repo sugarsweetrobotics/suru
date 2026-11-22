@@ -1686,6 +1686,11 @@ func parseStatement(node *LNode) Node {
 		}
 		return &Define{name, params, &Extern{Symbol: sym, Line: afterT[1].Line}, isFunction, node.Line.Number}
 	}
+	if len(afterT) == 4 && afterT[0].Kind == "WORD" && afterT[0].S == KwExtern && !afterT[0].Quoted &&
+		afterT[1].Kind == "LP" && afterT[2].Kind == "WORD" && afterT[3].Kind == "RP" && len(node.Children) == 0 {
+		// 「x を f で 呼ぶ とは 外部の（f）」: 引数 f の番地にある C の関数を呼ぶ
+		return &Define{name, params, &Extern{Line: afterT[2].Line, Pointer: afterT[2].S}, isFunction, node.Line.Number}
+	}
 	var body Node
 	if len(afterT) > 0 {
 		body = newExprParser(withChildren(after, node.Children)).parseAll()
@@ -2257,6 +2262,21 @@ func attachExterns(statements []Node) {
 		}
 		ext.Result = ffiType(result, sig, "値")
 		ext.Libs = libs
+		if ext.Pointer != "" {
+			k := -1
+			for i, p := range d.Params {
+				if p.Name == ext.Pointer {
+					k = i
+				}
+			}
+			if k < 0 {
+				raise(ext.Line, "「外部の（"+ext.Pointer+"）」の「"+ext.Pointer+"」は「"+d.Name+"」の引数ではありません")
+			}
+			if ext.Params[k] != "ptr" {
+				raise(ext.Line, "「外部の（"+ext.Pointer+"）」の「"+ext.Pointer+"」は型の宣言で 番地 にしてください")
+			}
+			continue
+		}
 		if prev, ok := seen[ext.Symbol]; ok {
 			raise(d.Line, "外部の関数「"+ext.Symbol+"」が2回定義されています(「"+prev+"」と「"+d.Name+"」)")
 		}

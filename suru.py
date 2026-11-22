@@ -1080,6 +1080,7 @@ class Extern:
     params: list = field(default_factory=list)
     result: str = ""
     action: bool = False
+    pointer: str = ""  # 「外部の（f）」なら、関数の番地を持つ引数の名前(C には渡さない)
 
 
 TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import, ExternLib)
@@ -2173,6 +2174,10 @@ def parse_statement(node: Node) -> Any:
         if sym.startswith(("rt_", "suru_")):
             raise SuruError(f"「{sym}」は「する」の実行時が使う名前なので、外部の関数にできません", after_t[1].line)
         return Define(name, params, Extern(sym, after_t[1].line), is_function, node.line.number)
+    if (len(after_t) == 4 and after_t[0].kind == "WORD" and after_t[0].value == KW_EXTERN and not after_t[0].quoted
+            and after_t[1].kind == "LP" and after_t[2].kind == "WORD" and after_t[3].kind == "RP" and not node.children):
+        # 「x を f で 呼ぶ とは 外部の（f）」: 引数 f の番地にある C の関数を呼ぶ
+        return Define(name, params, Extern("", after_t[2].line, pointer=after_t[2].value), is_function, node.line.number)
     if nosep(after):
         # 同じ行に本体がある: 深い行はその続き
         body: Any = ExprParser(_with_children(after, node.children)).parse_all()
@@ -2614,12 +2619,20 @@ def _attach_externs(statements: list) -> None:
             if not isinstance(pat, str):
                 raise SuruError(f"外部の関数「{d.name}」の引数は名前だけで書いてください", d.line)
         ext.params = [_ffi_type(types[p], sig, f"「{p}」") for p, _ in d.params]
+        if ext.pointer:
+            names = [x for _, x in d.params]
+            if ext.pointer not in names:
+                raise SuruError(f"「外部の（{ext.pointer}）」の「{ext.pointer}」は「{d.name}」の引数ではありません", ext.line)
+            if ext.params[names.index(ext.pointer)] != "ptr":
+                raise SuruError(f"「外部の（{ext.pointer}）」の「{ext.pointer}」は型の宣言で 番地 にしてください", ext.line)
         result = sig.result
         if isinstance(result, TypeName) and result.name == "動作":
             ext.action = True
             result = result.args[0]
         ext.result = _ffi_type(result, sig, "値")
         ext.libs = libs
+        if ext.pointer:
+            continue
         if ext.symbol in seen:
             raise SuruError(f"外部の関数「{ext.symbol}」が2回定義されています(「{seen[ext.symbol]}」と「{d.name}」)", d.line)
         seen[ext.symbol] = d.name
@@ -3545,13 +3558,26 @@ def extern_builtin(d: Define) -> Builtin:
     parts = [p for p, _ in d.params]
     cfn: list = []
 
+    names = [x for _, x in d.params]
+
     def call(a: dict, line: int) -> Any:
+        import ctypes
+
+        if ext.pointer:
+            k = names.index(ext.pointer)
+            fp = a[parts[k]]
+            if not isinstance(fp, Address) or fp.value == 0:
+                raise SuruError(f"外部の関数「{d.name}」の「{parts[k]}」には関数の番地が必要です(「{format_value(fp)}」が渡されました)", line)
+            ts = [t for i, t in enumerate(ext.params) if i != k]
+            f = ctypes.CFUNCTYPE(_ffi_ctype(ext.result), *[_ffi_ctype(t) for t in ts], use_errno=True)(fp.value)
+            args = [_ffi_arg(t, a[p], d.name, p, line) for i, (t, p) in enumerate(zip(ext.params, parts)) if i != k]
+            ctypes.set_errno(0)
+            return _ffi_result(ext.result, f(*args), d.name, line)
         if not cfn:
             f = _ffi_symbol(ext, line)
             f.argtypes = [_ffi_ctype(t) for t in ext.params]
             f.restype = _ffi_ctype(ext.result)
             cfn.append(f)
-        import ctypes
 
         args = [_ffi_arg(t, a[p], d.name, p, line) for t, p in zip(ext.params, parts)]
         ctypes.set_errno(0)
