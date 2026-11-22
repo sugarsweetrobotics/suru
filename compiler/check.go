@@ -416,6 +416,10 @@ type Checker struct {
 	env         *TEnv
 	base        *TEnv
 	checked     map[string]*TEnv
+	// エディター向け(Analyze): 名前を使ったところと定義したところの型を覚える
+	record bool
+	file   string // 調べている読み込んだファイル(本体なら "")
+	uses   []Use
 }
 
 func newChecker(ctx *ParseContext, shapes *Shapes) *Checker {
@@ -591,6 +595,9 @@ func (c *Checker) checkModule(m *Module, line Pos) *TEnv {
 				prims[b.Name] = &PrimRef{b.Name}
 			}
 		}
+		savedFile := c.file
+		c.file = m.Path
+		defer func() { c.file = savedFile }()
 		sc = c.checkUnit(m.Program, prims)
 		c.checked[m.Path] = sc
 		for n, v := range prims {
@@ -704,6 +711,9 @@ func (c *Checker) inferDefs(defs []*Define, env *TEnv, sigs map[string]*TypeSig)
 		c.solve(inner)
 		for _, name := range declOrder {
 			c.checkRigid(sigs[name], declared[name].tvars)
+		}
+		for _, d := range comp {
+			c.note(d.Line, d.Name, mono[d.Name], true)
 		}
 		outerFree := scope.freeVars()
 		taken := map[*Constraint]bool{}
@@ -1189,7 +1199,9 @@ func (c *Checker) infer(node Node, env *TEnv) Type {
 	case *Str:
 		return STR
 	case *Var:
-		return c.inferVar(n, env)
+		t := c.inferVar(n, env)
+		c.note(n.Line, n.Name, t, false)
+		return t
 	case *ListLit:
 		elem := newTVar()
 		for _, item := range n.Items {
@@ -1429,6 +1441,13 @@ func (c *Checker) inferCall(n *Call, env *TEnv) Type {
 		}
 	}
 	result := c.callType(n.Name, args, n.Line, env)
+	if c.record {
+		ps := make([]TParam, len(args))
+		for i, a := range args {
+			ps[i] = TParam{a.part, a.t}
+		}
+		c.note(n.Line, n.Name, &TFun{ps, result}, false)
+	}
 	if each {
 		result = lst(result)
 	}
@@ -1516,6 +1535,7 @@ func (c *Checker) funValue(name string, env *TEnv, line Pos) Type {
 
 func (c *Checker) inferRef(n *Ref, env *TEnv) Type {
 	t := prune(c.funValue(n.Name, env, n.Line))
+	c.note(n.Line, n.Name, t, false)
 	if len(n.Args) == 0 {
 		return t
 	}
@@ -2037,11 +2057,20 @@ func (c *Checker) doType(stmts []Node, i int, env *TEnv, line Pos) Type {
 
 // TypeCheck は型を調べる。間違いがあれば *SuruError で panic する
 func TypeCheck(program []Node, ctx *ParseContext) {
+	if err := typeCheck(program, ctx, false, nil); err != nil {
+		panic(err)
+	}
+}
+
+// typeCheck は型を調べて、最初の間違いを返す。done があれば、最後に使った検査器を渡す
+// (型の表示が ts.usual に左右されるので、片付ける前に呼ぶ)
+func typeCheck(program []Node, ctx *ParseContext, record bool, done func(*Checker)) *SuruError {
 	shapes := newShapes(ctx)
 	attempt := func() (*SuruError, *Checker) {
 		var checker *Checker
 		for n := 0; n < 100; n++ {
 			checker = newChecker(ctx, shapes)
+			checker.record = record
 			restarted := false
 			var serr *SuruError
 			func() {
@@ -2069,16 +2098,26 @@ func TypeCheck(program []Node, ctx *ParseContext) {
 	ts.usual = map[string][]Type{}
 	first, checker := attempt()
 	if first == nil {
-		return
+		if done != nil {
+			done(checker)
+		}
+		return nil
 	}
 	if shapes.learnUsual(checker.instances) {
-		second, _ := attempt()
+		second, checker2 := attempt()
+		if done != nil {
+			done(checker2)
+		}
 		ts.usual = map[string][]Type{}
 		if second != nil {
-			panic(second)
+			return second
 		}
+		return first
 	}
-	panic(first)
+	if done != nil {
+		done(checker)
+	}
+	return first
 }
 
 var _ = sort.Strings

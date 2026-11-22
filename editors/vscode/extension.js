@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 sugarsweetrobotics
 
-// VS Code 拡張「する」: 実行・型の検査・バイナリ作り。色分けは syntaxes/ の文法が行う。
+// VS Code 拡張「する」: 言語サーバー(suru-ls)の起動、実行・型の検査・バイナリ作り。
+// 色分けは syntaxes/ の文法が行う。言語サーバーが見つからなければ、保存したときに suru --検査 で調べる。
 
 const vscode = require("vscode");
 const cp = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 
 const LANG = "suru";
 let diagnostics;
 let output;
 let terminal;
+let client; // 言語サーバーにつないでいるとき
 
 /** 設定とワークスペースから「する」を動かすコマンドを決める(先頭がプログラム、残りが引数) */
 function suruCommand(doc) {
@@ -142,7 +145,7 @@ function check(doc, { quiet } = { quiet: false }) {
           diagnostics.delete(doc.uri);
           if (!quiet) {
             vscode.window.showErrorMessage(
-              `「する」のコマンド ${program} が見つかりません。pip で入れるか、設定「suru.command」で場所を指定してください。`
+              `「する」のコマンド ${program} が見つかりません。pip で入れるか、設定「suru.command」で場所を指定してください。`,
             );
           }
           output.appendLine(`${program} が見つかりません`);
@@ -154,14 +157,16 @@ function check(doc, { quiet } = { quiet: false }) {
           output.appendLine(`型の検査を実行できませんでした(${doc.uri.fsPath}):\n${text}`);
           if (!quiet) output.show(true);
         }
-        diagnostics.set(
-          doc.uri,
-          errors.map((e) => {
-            const d = new vscode.Diagnostic(errorRange(doc, e), e.message, vscode.DiagnosticSeverity.Error);
-            d.source = "する";
-            return d;
-          })
-        );
+        // 言語サーバーにつないでいるときは、間違いの表示はそちらに任せる
+        if (!client)
+          diagnostics.set(
+            doc.uri,
+            errors.map((e) => {
+              const d = new vscode.Diagnostic(errorRange(doc, e), e.message, vscode.DiagnosticSeverity.Error);
+              d.source = "する";
+              return d;
+            }),
+          );
         if (!quiet) {
           if (errors.length) {
             vscode.window.showErrorMessage(`型の検査: ${errors[0].message}`);
@@ -170,12 +175,89 @@ function check(doc, { quiet } = { quiet: false }) {
           }
         }
         resolve();
-      }
+      },
     );
   });
 }
 
-function activate(context) {
+/** 言語サーバー suru-ls の場所(設定、同梱、PATH、~/go/bin の順)。使わないなら undefined */
+function findServer(context) {
+  const configured = (vscode.workspace.getConfiguration("suru").get("languageServer") || "").trim();
+  if (configured === "off") return undefined;
+  if (configured) return configured;
+  const exe = process.platform === "win32" ? ".exe" : "";
+  const bundled = path.join(context.extensionPath, "server", `suru-ls-${process.platform}-${process.arch}${exe}`);
+  if (fs.existsSync(bundled)) {
+    try {
+      if (process.platform !== "win32") fs.chmodSync(bundled, 0o755); // .vsix から出すと実行できる印が消えることがある
+    } catch {
+      // 書き込めなければそのまま試す
+    }
+    return bundled;
+  }
+  const candidates = [];
+  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+    if (dir) candidates.push(path.join(dir, `suru-ls${exe}`));
+  }
+  const gopath = process.env.GOPATH || path.join(os.homedir(), "go");
+  candidates.push(path.join(gopath, "bin", `suru-ls${exe}`));
+  return candidates.find((p) => {
+    try {
+      return fs.statSync(p).isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+async function startServer(context) {
+  const command = findServer(context);
+  if (!command) {
+    output.appendLine("言語サーバー suru-ls が見つからないので、保存したときに suru --検査 で調べます");
+    return;
+  }
+  const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
+  const c = new LanguageClient(
+    "suru",
+    "する 言語サーバー",
+    { command, transport: TransportKind.stdio },
+    {
+      documentSelector: [
+        { scheme: "file", language: LANG },
+        { scheme: "untitled", language: LANG },
+      ],
+      outputChannel: output,
+    },
+  );
+  try {
+    await c.start();
+    client = c;
+    diagnostics.clear(); // 間違いは言語サーバーが出す
+    output.appendLine(`言語サーバーを起動しました: ${command}`);
+  } catch (e) {
+    output.appendLine(`言語サーバー ${command} を起動できませんでした: ${e}`);
+    vscode.workspace.textDocuments.forEach((doc) => autoCheck(doc));
+  }
+}
+
+async function stopServer() {
+  if (client) {
+    const c = client;
+    client = undefined;
+    try {
+      await c.stop();
+    } catch {
+      // 止まっていればそれでよい
+    }
+  }
+}
+
+function autoCheck(doc) {
+  if (client) return;
+  if (vscode.workspace.getConfiguration("suru", doc.uri).get("checkOnSave")) check(doc, { quiet: true });
+}
+
+async function activate(context) {
   diagnostics = vscode.languages.createDiagnosticCollection("suru");
   output = vscode.window.createOutputChannel("する");
   context.subscriptions.push(diagnostics, output);
@@ -193,22 +275,27 @@ function activate(context) {
       const doc = activeSuruDocument();
       if (doc && (await saved(doc))) await check(doc);
     }),
+    vscode.commands.registerCommand("suru.restartServer", async () => {
+      await stopServer();
+      await startServer(context);
+      vscode.window.showInformationMessage(client ? "言語サーバーを再起動しました" : "言語サーバーが見つかりません");
+    }),
     vscode.window.onDidCloseTerminal((t) => {
       if (t === terminal) terminal = undefined;
-    })
+    }),
   );
 
-  const auto = (doc) => {
-    if (vscode.workspace.getConfiguration("suru", doc.uri).get("checkOnSave")) check(doc, { quiet: true });
-  };
   context.subscriptions.push(
-    vscode.workspace.onDidOpenTextDocument(auto),
-    vscode.workspace.onDidSaveTextDocument(auto),
-    vscode.workspace.onDidCloseTextDocument((doc) => diagnostics.delete(doc.uri))
+    vscode.workspace.onDidOpenTextDocument(autoCheck),
+    vscode.workspace.onDidSaveTextDocument(autoCheck),
+    vscode.workspace.onDidCloseTextDocument((doc) => diagnostics.delete(doc.uri)),
   );
-  vscode.workspace.textDocuments.forEach(auto);
+  await startServer(context);
+  vscode.workspace.textDocuments.forEach(autoCheck);
 }
 
-function deactivate() {}
+function deactivate() {
+  return stopServer();
+}
 
 module.exports = { activate, deactivate, parseErrors, splitCommand };
