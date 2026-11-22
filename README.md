@@ -21,6 +21,19 @@ suru --version
 
 標準ライブラリ(`lib/標準.suru`)とコンパイラの実行時ライブラリ(`runtime/suru_rt.c`)も一緒に入ります。`--翻訳` には clang が別に必要です。
 
+### 速いコンパイラ(Go 版)
+
+`--翻訳` と同じことを、Go で書いたコンパイラ `suruc` でもできます。出す LLVM IR は Python 版と一字一句同じで、IR を作るまでが 14〜35 倍ほど速くなります(Go 1.23 以降が必要です)。
+
+```sh
+go install github.com/sugarsweetrobotics/suru/cmd/suruc@latest   # または、取ってきたフォルダで go build ./cmd/suruc
+suruc examples/basic.suru          # バイナリ examples/basic を作る(clang が必要)
+suruc -O0 examples/basic.suru      # clang の最適化を弱めて、もっと速く作る(-O0 〜 -O3。既定は -O2)
+suruc --ll examples/basic.suru     # LLVM IR だけを出す
+```
+
+`suruc` は1つの実行ファイルで、標準ライブラリと実行時ライブラリを中に持っています(`SURU_LIB` で lib/ の場所を変えられます)。
+
 ## 例
 
 ```
@@ -328,8 +341,15 @@ n が 偶数である とは n % 2 が 0
 
 84. **pip で入れられる。** `pip install .`(または GitHub の URL)で `suru` コマンドが入ります。中身は `suru.py`・`suru_check.py`・`suru_compile.py` の3つのモジュールと、`suru_data/` に入れた `lib/` と `runtime/` です。リポジトリのまま `python3 suru.py` で動かす使い方も変わりません(`data_path` が、隣の `lib/` か `suru_data/lib/` を探します)。版は `suru.py` の `__version__` に書きます。パッケージ作りは hatchling(`python -m build` で wheel と sdist)。
 
+### Go 版のコンパイラ
+
+85. **Go 版のコンパイラ `suruc`。** `compiler/`(字句解析・構文解析・型の検査・IR の生成)と `cmd/suruc/`(clang の呼び出し)を Go で書き、Python 版と同じ IR・同じエラーの文を出します。`tests/test_go_compiler.py` が、例と、テストに書いた全部のプログラム(エラーになるものも)で、Python 版と出力が同じかを調べます(go がなければ飛ばします)。Python 版を直したら、Go 版も同じに直します。
+86. **型の検査は行数に比例する時間。** Python 版では、定義を1つ推論するたびに、それまでの全部の定義の型をなめていたので、定義の数の2乗の時間がかかっていました。Go 版は、環境の中の自由な型変数を覚えておいて使い回します(多相にした型変数が後から決まったときだけ作り直します)。8,000 行のプログラムで、検査は 10.2 秒 → 0.03 秒です。
+87. **時間のほとんどは clang。** 8,000 行のプログラムで、IR を作るまでは Python 版 13.6 秒 → Go 版 0.4 秒、バイナリまでは 28 秒 → 18 秒(-O2)/ 2.4 秒(-O0)です。clang の時間を減らすには、IR を小さくするのが次の手です。
+
 ## 今後の候補
 
 - 標準ライブラリの続き: 乱数、ファイルの読み書き、日付と時刻、並べる基準を渡す整列、「ないかもしれない値」の型
-- コンパイラの続き: 大きな整数、メモリの片付け(GC)、型の情報を使った速い呼び出し
+- コンパイラの続き: 大きな整数、メモリの片付け(GC)、型の情報を使った速い呼び出し、clang を速くするための小さな IR(Go 版で)
+- Go 版の続き: `suru --翻訳` から suruc を使う、pip や GitHub のリリースで suruc のバイナリを配る
 - 配布の続き: PyPI への公開、clang を使わない環境向けの配布
