@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import math
 import os
 import sys
 import unicodedata
@@ -104,12 +105,15 @@ MODULE_MARK = "内"  # 読み込んだファイルの中の名前: 数学内の�
 MODULE_SEP = MODULE_MARK + "の"
 KW_IMPORT = "読み込む"  # 「数学」 を 読み込む
 KW_IMPORT_POLITE = "読み込みます"
+KW_IMPORT_TE = "読み込んで"  # 「数学」 を 読み込んで 使う: 前置きなしで使う
+KW_USE = "使う"
+KW_USE_POLITE = "使います"
 SOURCE_SUFFIX = ".suru"
 
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
     KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA, DESU,
-    KW_IMPORT, KW_IMPORT_POLITE,
+    KW_IMPORT, KW_IMPORT_POLITE, KW_IMPORT_TE, KW_USE, KW_USE_POLITE,
 }
 KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU}
 CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}  # 行頭に来たら前の文の続きとみなす
@@ -355,7 +359,7 @@ def _find_name_close(text: str, i: int, line: int) -> int:
 
 OPERATOR_CHARS = {c for op in OPERATORS for c in unicodedata.normalize("NFKC", op)} | set(OPERATORS)
 # 漢字とひらがなが混ざった決まった言葉(名前の切り出しより先に照合する)
-MIXED_WORDS = ("受け取って", "返すこと", "長さ", "残り", KW_IMPORT_POLITE, KW_IMPORT)
+MIXED_WORDS = ("受け取って", "返すこと", "長さ", "残り", KW_IMPORT_POLITE, KW_IMPORT, KW_IMPORT_TE, KW_USE_POLITE, KW_USE)
 # ひらがなを含む組み込み関数の名前(「する」の前の部分)。名前として切り出す
 MIXED_NAMES = ("畳み込み",)
 # ひらがなの並びを分けるときの辞書。長いものから順に照合する
@@ -1048,6 +1052,7 @@ class Import:
 
     module: Module
     line: int
+    open: bool = False  # 「読み込んで 使う」: 中の名前を前置きなしでも使う
 
 
 TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import)
@@ -1728,6 +1733,9 @@ class ExprParser:
                 if t.kind == "SEP" and self.stop_sep:
                     return False
                 if t.kind == "CALL":
+                    if t.form == KOTO and i + 1 < len(self.tokens) and self.tokens[i + 1].kind == "PART":
+                        i += 1  # 「偶数であること で 全部真である」: 引数に渡す関数の値は飛ばす
+                        continue
                     return is_predicate(t.value) and t.form == SURU
             i += 1
         return False
@@ -2451,11 +2459,11 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
     # 読み込むファイルを先に読む(その中の型を使えるように)
     imports = {}
     for n in nodes:
-        name = import_target(n)
-        if name is not None:
-            imports[id(n)] = load_module(name, ctx, n.line.number)
+        target = import_target(n)
+        if target is not None:
+            imports[id(n)] = Import(load_module(target[0], ctx, n.line.number), n.line.number, target[1])
     if imports:
-        _join_in_nodes(nodes, {m.name for m in imports.values()})
+        _join_in_nodes(nodes, {i.module.name for i in imports.values()})
     # 「3 と 4 の 点」を読むために、型の定義を先に集める(定義の順番は自由)
     for n in nodes:
         td = try_parse_typedef(n)
@@ -2463,10 +2471,34 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
             ctx.add(td)
     saved, _CTX = _CTX, ctx
     try:
-        statements = [Import(imports[id(n)], n.line.number) if id(n) in imports else parse_statement(n) for n in nodes]
+        statements = [imports[id(n)] if id(n) in imports else parse_statement(n) for n in nodes]
+        _check_open_imports(statements)
         return attach_provisos(statements)
     finally:
         _CTX = saved
+
+
+def module_names(module: Module) -> set:
+    """読み込んだファイルの一番外の名前(標準ライブラリなら組み込みも)"""
+    names = {s.name for s in module.program if isinstance(s, Define)}
+    if module.path == STD_PATH:
+        names |= {b.name for b in STD_PRIMITIVES}
+    return names
+
+
+def _check_open_imports(statements: list) -> None:
+    """「読み込んで 使う」の2つのファイルに同じ名前があれば、自分で定義していない限りエラー"""
+    own = {s.name for s in statements if isinstance(s, Define)}
+    seen: dict[str, str] = {}
+    for s in statements:
+        if isinstance(s, Import) and s.open:
+            for name in sorted(module_names(s.module) - own):
+                if name in seen and seen[name] != s.module.name:
+                    raise SuruError(
+                        f"「{name}」は「{seen[name]}」と「{s.module.name}」の両方にあります。"
+                        f"「{s.module.name}{MODULE_SEP}{name}」のように前置きを付けて使うか、片方を「{KW_IMPORT}」にしてください",
+                        s.line)
+                seen[name] = s.module.name
 
 
 def _join_in_nodes(nodes: list, modules: set) -> None:
@@ -2475,22 +2507,27 @@ def _join_in_nodes(nodes: list, modules: set) -> None:
         _join_in_nodes(n.children, modules)
 
 
-def import_target(node: Node) -> str | None:
-    """「「数学」 を 読み込む」なら読み込むファイルの名前(「数学」)"""
+def import_target(node: Node) -> tuple[str, bool] | None:
+    """「「数学」 を 読み込む」なら読み込むファイルの名前(「数学」)と、「読み込んで 使う」か"""
     tokens = nosep(flatten(node))
     if tokens and tokens[-1].kind == "PERIOD":
         tokens = tokens[:-1]
-    if not any(is_kw(t, KW_IMPORT) or is_kw(t, KW_IMPORT_POLITE) for t in tokens):
+    if not any(is_kw(t, w) for t in tokens for w in (KW_IMPORT, KW_IMPORT_POLITE, KW_IMPORT_TE)):
         return None
-    if (len(tokens) != 3 or tokens[0].kind != "STR" or not (tokens[1].kind == "PART" and tokens[1].value == WO)
+    tail = [t.value if t.kind == "KW" else None for t in tokens[2:]]
+    if (tail not in ([KW_IMPORT], [KW_IMPORT_POLITE], [KW_IMPORT_TE, KW_USE], [KW_IMPORT_TE, KW_USE_POLITE])
+            or tokens[0].kind != "STR" or not (tokens[1].kind == "PART" and tokens[1].value == WO)
             or node.line.indent):
-        raise SuruError(f"ファイルは一番外に「「数学」 を {KW_IMPORT}」のように書いて読み込みます", tokens[0].line)
-    return tokens[0].value
+        raise SuruError(f"ファイルは一番外に「「数学」 を {KW_IMPORT}」か「「数学」 を {KW_IMPORT_TE} {KW_USE}」のように書いて読み込みます",
+                        tokens[0].line)
+    return tokens[0].value, len(tail) == 2
 
 
 def load_module(name: str, ctx: ParseContext, line: int) -> Module:
     """ファイル「name.suru」を読んで解析する。同じファイルは一度だけ読む"""
     path = os.path.abspath(os.path.join(ctx.base_dir, name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX))
+    if not os.path.exists(path):
+        path = os.path.abspath(os.path.join(LIB_DIR, name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX))
     stem = os.path.splitext(os.path.basename(path))[0]
     if not stem or _is_all_hiragana(stem) or any(_is_hiragana(c) for c in stem) or any(c in stem for c in " 　「」『』（）()、。"):
         raise SuruError(f"「{stem}」はファイルの名前に使えません(名前と同じく漢字・カタカナ・英字で書いてください)", line)
@@ -2890,6 +2927,134 @@ BUILTINS = [
 ]
 
 
+
+# ---------------------------------------------------------------------------
+# 標準ライブラリ(「「標準」 を 読み込む」で「標準内の…」として使う)
+# ---------------------------------------------------------------------------
+
+STD_NAME = "標準"
+LIB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")  # 見つからないファイルはここから探す
+STD_PATH = os.path.join(LIB_DIR, STD_NAME + SOURCE_SUFFIX)
+
+
+def _int(v: Any, what: str, line: int | None) -> int:
+    v = _num(v, line)
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    if not isinstance(v, int):
+        raise SuruError(f"{what}は整数でなければなりません(「{format_value(v)}」が渡されました)", line)
+    return v
+
+
+def _str(v: Any, what: str, line: int | None) -> str:
+    if not isinstance(v, str):
+        raise SuruError(f"{what}は文字列でなければなりません(「{format_value(v)}」が渡されました)", line)
+    return v
+
+
+def _seq(v: Any, what: str, line: int | None) -> Any:
+    if not isinstance(v, (str, tuple)):
+        raise SuruError(f"{what}は文字列かリストでなければなりません(「{format_value(v)}」が渡されました)", line)
+    return v
+
+
+def _floor(it: Any, a: dict, line: int | None) -> Any:
+    return math.floor(_num(a[WO], line))
+
+
+def _sqrt(it: Any, a: dict, line: int | None) -> Any:
+    x = _num(a[WO], line)
+    if x < 0:
+        raise SuruError(f"負の数「{format_value(x)}」の平方根は求められません", line)
+    r = math.sqrt(x)
+    return int(r) if r.is_integer() else r
+
+
+def _range(it: Any, a: dict, line: int | None) -> tuple:
+    lo = _int(a["から"], "「範囲にする」の「から」", line)
+    hi = _int(a[WO], "「範囲にする」の「を」", line)
+    return tuple(range(lo, hi + 1))
+
+
+def _take(it: Any, a: dict, line: int | None) -> Any:
+    xs = _seq(a["から"], "「先頭取得する」の「から」", line)
+    n = _int(a[WO], "「先頭取得する」の「を」", line)
+    return xs[: max(n, 0)]
+
+
+def _drop(it: Any, a: dict, line: int | None) -> Any:
+    xs = _seq(a["から"], "「先頭削除する」の「から」", line)
+    n = _int(a[WO], "「先頭削除する」の「を」", line)
+    return xs[max(n, 0):]
+
+
+def _nth(it: Any, a: dict, line: int | None) -> Any:
+    xs = _seq(a["から"], "「番目取得する」の「から」", line)
+    n = _int(a[WO], "「番目取得する」の「を」", line)
+    if not 1 <= n <= len(xs):
+        raise SuruError(f"{n}番目はありません(長さは{len(xs)}です。位置は1から数えます)", line)
+    return xs[n - 1]
+
+
+def _contains(it: Any, a: dict, line: int | None) -> bool:
+    xs = _seq(a[GA], "「含有である」の「が」", line)
+    if isinstance(xs, str):
+        return _str(a[WO], "文字列の「含有である」の「を」", line) in xs
+    return a[WO] in xs
+
+
+def _split(it: Any, a: dict, line: int | None) -> tuple:
+    s = _str(a[WO], "「分割する」の「を」", line)
+    sep = _str(a["で"], "「分割する」の「で」", line)
+    if not sep:
+        raise SuruError("「分割する」の「で」に空の文字列は使えません(1文字ずつにするには「文字分解する」)", line)
+    return tuple(s.split(sep))
+
+
+def _join(it: Any, a: dict, line: int | None) -> str:
+    xs = _list(a[WO], "「結合する」の「を」", line)
+    sep = _str(a["で"], "「結合する」の「で」", line)
+    return sep.join(_str(x, "「結合する」のリストの要素", line) for x in xs)
+
+
+def _replace(it: Any, a: dict, line: int | None) -> str:
+    s = _str(a[WO], "「置換する」の「を」", line)
+    old = _str(a["から"], "「置換する」の「から」", line)
+    if not old:
+        raise SuruError("「置換する」の「から」に空の文字列は使えません", line)
+    return s.replace(old, _str(a["へ"], "「置換する」の「へ」", line))
+
+
+def _str_fn(name: str, f: Any) -> Builtin:
+    return Builtin(name, [(WO, True)], lambda it, a, line: f(_str(a[WO], f"「{name}」の「を」", line)))
+
+
+def _affix(name: str, f: Any) -> Builtin:
+    return Builtin(name, [(GA, True), ("で", True)],
+                   lambda it, a, line: f(_str(a[GA], f"「{name}」の「が」", line), _str(a["で"], f"「{name}」の「で」", line)))
+
+
+# 標準.suru の中と、読み込んだ側の「標準内の…」でだけ使える組み込み(する では書けないもの)
+STD_PRIMITIVES = [
+    Builtin("切捨する", [(WO, True)], _floor),
+    Builtin("平方根にする", [(WO, True)], _sqrt),
+    Builtin("範囲にする", [("から", True), (WO, True)], _range),
+    Builtin("逆順にする", [(WO, True)], lambda it, a, line: _seq(a[WO], "「逆順にする」の「を」", line)[::-1]),
+    Builtin("先頭取得する", [("から", True), (WO, True)], _take),
+    Builtin("先頭削除する", [("から", True), (WO, True)], _drop),
+    Builtin("番目取得する", [("から", True), (WO, True)], _nth),
+    Builtin("含有である", [(GA, True), (WO, True)], _contains),
+    _str_fn("文字分解する", tuple),
+    Builtin("分割する", [(WO, True), ("で", True)], _split),
+    Builtin("結合する", [(WO, True), ("で", True)], _join),
+    Builtin("置換する", [(WO, True), ("から", True), ("へ", True)], _replace),
+    _str_fn("大文字にする", str.upper),
+    _str_fn("小文字にする", str.lower),
+    _str_fn("空白除去する", str.strip),
+    _affix("先頭一致である", str.startswith),
+    _affix("末尾一致である", str.endswith),
+]
+
 def make_global_env() -> Env:
     env = Env()
     for b in BUILTINS:
@@ -3013,6 +3178,8 @@ class Interpreter:
                 for name, v in mod.vars.items():
                     if MODULE_SEP not in name:
                         env.vars[stmt.module.name + MODULE_SEP + name] = v
+                        if stmt.open:
+                            env.vars[name] = v
         for stmt in program:
             if isinstance(stmt, TypeDef):
                 self.register_type(stmt)
@@ -3033,6 +3200,8 @@ class Interpreter:
         env = self.loaded.get(module.path)
         if env is None:
             env = self.loaded[module.path] = Env(self.shared)
+            if module.path == STD_PATH:
+                env.vars.update((b.name, b) for b in STD_PRIMITIVES)
             self.load_program(module.program, env)
         return env
 
