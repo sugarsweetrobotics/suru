@@ -84,3 +84,12 @@ def test_通信のサーバーで同じIR(suruc, tmp_path):
     path = tmp_path / "srv.suru"
     path.write_text(SERVER.replace("PORT", "8080"), encoding="utf-8")
     compare(path, suruc, tmp_path)
+
+
+def test_HTTPのサーバーで同じIR(suruc, tmp_path):
+    from net_helper import HTTP_ACTION_SERVER, HTTP_SERVER
+
+    for k, src in enumerate((HTTP_SERVER, HTTP_ACTION_SERVER)):
+        path = tmp_path / f"http{k}.suru"
+        path.write_text(src.replace("PORT", "8080"), encoding="utf-8")
+        compare(path, suruc, tmp_path)

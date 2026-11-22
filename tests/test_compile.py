@@ -219,3 +219,28 @@ def test_通信のサーバーをコンパイルして答えてもらう(tmp_pat
         assert p.wait(10) == 0
     finally:
         p.kill()
+
+
+@pytest.mark.parametrize("which", ["HTTP_SERVER", "HTTP_ACTION_SERVER"])
+def test_HTTPのサーバーをコンパイルして答えてもらう(which, tmp_path):
+    import net_helper as N
+
+    port = N.free_port()
+    ir = suru_compile.compile_source(getattr(N, which).replace("PORT", str(port)), ".")
+    (tmp_path / "srv.ll").write_text(ir, encoding="utf-8")
+    suru_compile.build(str(tmp_path / "srv.ll"), str(tmp_path / "srv"))
+    p = subprocess.Popen([str(tmp_path / "srv")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        N.wait_http(port)
+        if which == "HTTP_SERVER":
+            assert N.http(port)[::2] == (200, "こんにちは")
+            assert N.http(port, "/zz")[::2] == (404, "見つかりません: /zz")
+        else:
+            assert N.http(port, "/post", "本文です", {"X-Name": "taro"})[::2] == (200, "本文です/taro")
+            for _ in range(100):  # 何件でも続けて答える
+                assert N.http(port, "/", "x")[0] == 200
+            assert p.poll() is None
+    finally:
+        p.kill()
+    if which == "HTTP_ACTION_SERVER":
+        assert "POST /post\n" in p.communicate()[0]
