@@ -585,10 +585,10 @@ func (c *Checker) checkModule(m *Module, line Pos) *TEnv {
 	var sc *TEnv
 	err := try(func() {
 		var prims map[string]any
-		if m.Path == StdPath {
+		if bs := libPrimitives(m.Path); bs != nil {
 			prims = map[string]any{}
-			for _, n := range primNames {
-				prims[n] = &PrimRef{n}
+			for _, b := range bs {
+				prims[b.Name] = &PrimRef{b.Name}
 			}
 		}
 		sc = c.checkUnit(m.Program, prims)

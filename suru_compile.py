@@ -811,12 +811,11 @@ class Compiler:
         sc = Scope(None, None)
         self.modules[path] = sc
         ini = self.init_fg
-        if path == S.STD_PATH:
-            for b in S.STD_PRIMITIVES:
-                g = self.new_global("gp")
-                v = ini.call("i64", "@rt_std", f"ptr {self.cstr(b.name)}")
-                ini.emit(f"store i64 {v}, ptr {g}")
-                sc.vars[b.name] = Binding("gconst", g=g)
+        for b in S.LIB_PRIMITIVES.get(path, ()):
+            g = self.new_global("gp")
+            v = ini.call("i64", "@rt_std", f"ptr {self.cstr(b.name)}")
+            ini.emit(f"store i64 {v}, ptr {g}")
+            sc.vars[b.name] = Binding("gconst", g=g)
         for stmt in program:
             if isinstance(stmt, S.Import):
                 sub = self.module(stmt.module.program, stmt.module.path, None)

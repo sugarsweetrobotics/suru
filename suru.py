@@ -2485,8 +2485,7 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
 def module_names(module: Module) -> set:
     """読み込んだファイルの一番外の名前(標準ライブラリなら組み込みも)"""
     names = {s.name for s in module.program if isinstance(s, Define)}
-    if module.path == STD_PATH:
-        names |= {b.name for b in STD_PRIMITIVES}
+    names |= {b.name for b in LIB_PRIMITIVES.get(module.path, ())}
     return names
 
 
@@ -2950,6 +2949,8 @@ def data_path(*parts: str) -> str:
 
 LIB_DIR = data_path("lib")  # 見つからないファイルはここから探す
 STD_PATH = os.path.join(LIB_DIR, STD_NAME + SOURCE_SUFFIX)
+NET_NAME = "通信"
+NET_PATH = os.path.join(LIB_DIR, NET_NAME + SOURCE_SUFFIX)
 
 
 def _int(v: Any, what: str, line: int | None) -> int:
@@ -3068,7 +3069,130 @@ STD_PRIMITIVES = [
     _str_fn("空白除去する", str.strip),
     _affix("先頭一致である", str.startswith),
     _affix("末尾一致である", str.endswith),
+    Builtin("バイト数にする", [(WO, True)], lambda it, a, line: len(_str(a[WO], "「バイト数にする」の「を」", line).encode("utf-8"))),
+    Builtin("文字にする", [(WO, True)], lambda it, a, line: _chr(a[WO], line)),
+    Builtin("文字コードにする", [(WO, True)], lambda it, a, line: _ord(a[WO], line)),
 ]
+
+
+def _chr(v: Any, line: int) -> str:
+    n = _num(v, line)
+    if not isinstance(n, int) or not 0 <= n <= 0x10FFFF or 0xD800 <= n <= 0xDFFF:
+        raise SuruError(f"「{format_value(v)}」は文字の番号ではありません", line)
+    return chr(n)
+
+
+def _ord(v: Any, line: int) -> int:
+    s = _str(v, "「文字コードにする」の「を」", line)
+    if len(s) != 1:
+        raise SuruError(f"「文字コードにする」の「を」は1文字の文字列です(「{s}」)", line)
+    return ord(s)
+
+
+# --- 通信(「通信」を読み込んだときだけ使える)。待受口と接続は番号で表す -----------
+
+class _Net:
+    """インタプリタごとの、開いている待受口と接続(番号 → ソケット)"""
+
+    def __init__(self) -> None:
+        self.socks: dict = {}
+        self.files: dict = {}  # 接続の読み込み用(行で読むため)
+        self.next = 1
+
+    def add(self, sock: Any) -> int:
+        n, self.next = self.next, self.next + 1
+        self.socks[n] = sock
+        return n
+
+    def get(self, v: Any, what: str, line: int) -> Any:
+        sock = self.socks.get(v) if isinstance(v, int) and not isinstance(v, bool) else None
+        if sock is None:
+            raise SuruError(f"「{format_value(v)}」は開いている{what}ではありません", line)
+        return sock
+
+    def reader(self, v: Any, line: int) -> Any:
+        sock = self.get(v, "接続", line)
+        if v not in self.files:
+            self.files[v] = sock.makefile("rb")
+        return self.files[v]
+
+
+def _net(it: "Interpreter") -> _Net:
+    net = getattr(it, "_net", None)
+    if net is None:
+        net = it._net = _Net()
+    return net
+
+
+def _net_action(name: str, run: Any) -> Any:
+    """通信の動作。OS のエラーは「通信に失敗しました」の実行時エラーにする"""
+    def fn(it: "Interpreter", a: dict, line: int) -> Any:
+        def perform(it2: "Interpreter") -> Any:
+            try:
+                return run(_net(it2), a, line)
+            except OSError as e:
+                raise SuruError(f"「{name}」で通信に失敗しました({e.strerror or e})", line) from None
+        return Action(name, perform)
+    return fn
+
+
+def _listen(net: _Net, a: dict, line: int) -> int:
+    import socket
+    port = _num(a[WO], line)
+    if not isinstance(port, int) or not 0 <= port <= 65535:
+        raise SuruError(f"「{format_value(a[WO])}」はポートの番号ではありません", line)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", port))
+    sock.listen(16)
+    return net.add(sock)
+
+
+def _accept(net: _Net, a: dict, line: int) -> int:
+    conn, _ = net.get(a["から"], "待受口", line).accept()
+    return net.add(conn)
+
+
+def _recv_line(net: _Net, a: dict, line: int) -> str:
+    # 行の終わりの改行も含めて返す。相手が閉じていれば空の文字列
+    return net.reader(a["から"], line).readline(65536).decode("utf-8", "replace")
+
+
+def _recv(net: _Net, a: dict, line: int) -> str:
+    n = _num(a[WO], line)
+    if not isinstance(n, int) or n < 0:
+        raise SuruError(f"「{format_value(a[WO])}」は受信するバイト数ではありません", line)
+    return net.reader(a["から"], line).read(n).decode("utf-8", "replace")
+
+
+def _send(net: _Net, a: dict, line: int) -> int:
+    data = _str(a[WO], "「送信する」の「を」", line).encode("utf-8")
+    net.get(a["へ"], "接続", line).sendall(data)
+    return len(data)
+
+
+def _close(net: _Net, a: dict, line: int) -> int:
+    v = a[WO]
+    sock = net.get(v, "待受口か接続", line)
+    f = net.files.pop(v, None)
+    if f is not None:
+        f.close()
+    sock.close()
+    del net.socks[v]
+    return v
+
+
+NET_PRIMITIVES = [
+    Builtin("待受開始する", [(WO, True)], _net_action("待受開始する", _listen)),
+    Builtin("接続受付する", [("から", True)], _net_action("接続受付する", _accept)),
+    Builtin("行受信する", [("から", True)], _net_action("行受信する", _recv_line)),
+    Builtin("受信する", [("から", True), (WO, True)], _net_action("受信する", _recv)),
+    Builtin("送信する", [(WO, True), ("へ", True)], _net_action("送信する", _send)),
+    Builtin("切断する", [(WO, True)], _net_action("切断する", _close)),
+]
+
+# lib/ のファイルごとの組み込み(そのファイルの中と、読み込んだ側の「標準内の…」「通信内の…」で使える)
+LIB_PRIMITIVES = {STD_PATH: STD_PRIMITIVES, NET_PATH: NET_PRIMITIVES}
 
 def make_global_env() -> Env:
     env = Env()
@@ -3215,8 +3339,7 @@ class Interpreter:
         env = self.loaded.get(module.path)
         if env is None:
             env = self.loaded[module.path] = Env(self.shared)
-            if module.path == STD_PATH:
-                env.vars.update((b.name, b) for b in STD_PRIMITIVES)
+            env.vars.update((b.name, b) for b in LIB_PRIMITIVES.get(module.path, ()))
             self.load_program(module.program, env)
         return env
 

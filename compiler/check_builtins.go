@@ -199,6 +199,16 @@ func init() {
 	for _, n := range []string{"先頭一致である", "末尾一致である"} {
 		simple(n, []TParam{{GA, STR}, {"で", STR}}, BOOL)
 	}
+	simple("バイト数にする", []TParam{{WO, STR}}, NUM)
+	simple("文字にする", []TParam{{WO, NUM}}, STR)
+	simple("文字コードにする", []TParam{{WO, STR}}, NUM)
+	// 通信(「通信」の組み込み)。待受口と接続は番号
+	simple("待受開始する", []TParam{{WO, NUM}}, act(NUM))
+	simple("接続受付する", []TParam{{"から", NUM}}, act(NUM))
+	simple("行受信する", []TParam{{"から", NUM}}, act(STR))
+	simple("受信する", []TParam{{"から", NUM}, {WO, NUM}}, act(STR))
+	simple("送信する", []TParam{{WO, STR}, {"へ", NUM}}, act(NUM))
+	simple("切断する", []TParam{{WO, NUM}}, act(NUM))
 	prim("逆順にする", []partReq{req(WO)}, func() Type {
 		x := newTVar()
 		return &TFun{[]TParam{{WO, x}}, x}

@@ -6,7 +6,7 @@ import pytest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from suru import Call, ListLit, SuruError, Var, format_error, parse_program, run  # noqa: E402
+from suru import Call, ListLit, SuruError, Var, format_error, parse_program, run, Interpreter  # noqa: E402
 
 ADD = "a　と　b　を加算する　とは　a + b\n"
 TRIPLE = "引数　を三倍する　とは　引数　と　引数　を加算して　引数　を加算する\n"
@@ -1165,3 +1165,51 @@ def test_version(capsys):
 
     assert suru.main(["suru", "--version"]) == 0
     assert suru.__version__ in capsys.readouterr().out
+
+
+# --- 文字とバイト(標準)・通信 ---------------------------------------------
+
+
+def test_バイト数と文字():
+    src = "「標準」 を 読み込んで 使う\n「aあ」 を バイト数にする\n12354 を 文字にする\n「あ」 を 文字コードにする\n改行 の 長さ\n復帰改行 を バイト数にする\n"
+    assert run(src) == [4, "あ", 12354, 1, 2]
+
+
+def test_文字にできない番号はエラー():
+    with pytest.raises(SuruError, match="「-1」は文字の番号ではありません"):
+        run("「標準」 を 読み込んで 使う\n-1 を 文字にする\n")
+
+
+def test_通信は読み込まないと使えない():
+    with pytest.raises(SuruError, match="定義されていません"):
+        run("「標準」 を 読み込む\n標準内の待受開始する\n")
+
+
+def test_開いていない接続はエラー():
+    with pytest.raises(SuruError, match="「5」は開いている待受口か接続ではありません"):
+        run("「通信」 を 読み込む\n5 を 通信内の切断する\n")
+
+
+def test_通信のサーバーに答えてもらう():
+    import threading
+
+    from net_helper import REQUESTS, SERVER, ask, expected, free_port
+
+    port = free_port()
+    ready = threading.Event()
+    errors: list = []
+
+    def serve():
+        try:
+            Interpreter(out=lambda s: ready.set()).run(SERVER.replace("PORT", str(port)))
+        except Exception as e:  # noqa: BLE001
+            errors.append(e)
+            ready.set()
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    assert ready.wait(10) and not errors
+    for head, body in REQUESTS:
+        assert ask(port, head, body) == expected(head, body)
+    t.join(10)
+    assert not t.is_alive() and not errors

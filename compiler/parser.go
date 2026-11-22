@@ -2137,10 +2137,8 @@ func moduleNames(m *Module) map[string]bool {
 			names[d.Name] = true
 		}
 	}
-	if m.Path == StdPath {
-		for _, b := range stdPrimitives {
-			names[b.Name] = true
-		}
+	for _, b := range libPrimitives(m.Path) {
+		names[b.Name] = true
 	}
 	return names
 }
@@ -2219,6 +2217,9 @@ const embeddedLibPrefix = "\x00lib/"
 
 // StdPath は標準ライブラリのファイルのパス
 var StdPath = embeddedLibPrefix + "標準" + SourceSuffix
+
+// NetPath は通信ライブラリのファイルのパス
+var NetPath = embeddedLibPrefix + "通信" + SourceSuffix
 
 // LibFS は同梱の lib/(cmd/suruc が設定する)
 var LibFS fs.FS

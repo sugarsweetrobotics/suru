@@ -12,6 +12,7 @@
  *   それ以外         … ヒープ上のオブジェクトへのポインタ(先頭が tag)
  * メモリは解放しない(プログラムが終わるまで持っておく)。
  */
+#include <errno.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdarg.h>
@@ -19,6 +20,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 typedef int64_t V;
 
@@ -53,8 +59,8 @@ typedef struct Fn {
     struct Trait *trait;    /* FK_TRAIT */
     int32_t wo, wo_list;
 } Fn;
-enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP };
-typedef struct { int32_t tag, kind; const char *name; V a, b; } Act;
+enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE };
+typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
 
@@ -984,6 +990,7 @@ static V dispatch(Fn *m, V *args, int32_t pos) {
 /* ------------------------------------------------------------------ */
 
 static V perform(V v);
+static V net_run(Act *a);
 
 static V act_run(Act *a) {
     switch (a->kind) {
@@ -1004,6 +1011,8 @@ static V act_run(Act *a) {
         if (n > 0 && line[n - 1] == '\r') n--;
         return mk_str(line, n);
     }
+    case A_LISTEN: case A_ACCEPT: case A_RECVLINE: case A_RECV: case A_SEND: case A_CLOSE:
+        return net_run(a);
     case A_RUNALL: {
         List *l = AS(List, a->a);
         if (l->n == 0) return V_EMPTY;
@@ -1551,10 +1560,149 @@ BI(s_ends) {
     Str *s = need_str(a[0], "「末尾一致である」の「が」", pos), *p = need_str(a[1], "「末尾一致である」の「で」", pos);
     return rt_bool(p->n <= s->n && memcmp(s->s + s->n - p->n, p->s, p->n) == 0);
 }
+BI(s_bytes) { return mk_int(need_str(a[0], "「バイト数にする」の「を」", pos)->n, pos); }
+BI(s_chr) {
+    V v = need_num(a[0], pos);
+    int64_t c = IS_INT(v) ? INT_VAL(v) : -1;
+    if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) fail(pos, "「%s」は文字の番号ではありません", plain(v).s);
+    char b[4];
+    int n;
+    if (c < 0x80) { b[0] = (char)c; n = 1; }
+    else if (c < 0x800) { b[0] = (char)(0xc0 | (c >> 6)); b[1] = (char)(0x80 | (c & 0x3f)); n = 2; }
+    else if (c < 0x10000) { b[0] = (char)(0xe0 | (c >> 12)); b[1] = (char)(0x80 | ((c >> 6) & 0x3f)); b[2] = (char)(0x80 | (c & 0x3f)); n = 3; }
+    else { b[0] = (char)(0xf0 | (c >> 18)); b[1] = (char)(0x80 | ((c >> 12) & 0x3f)); b[2] = (char)(0x80 | ((c >> 6) & 0x3f)); b[3] = (char)(0x80 | (c & 0x3f)); n = 4; }
+    return mk_str(b, n);
+}
+BI(s_ord) {
+    Str *s = need_str(a[0], "「文字コードにする」の「を」", pos);
+    if (s->ncp != 1) fail(pos, "「文字コードにする」の「を」は1文字の文字列です(「%s」)", s->s);
+    return mk_int(utf8_cp(s->s, utf8_len(s->s[0])), pos);
+}
+
+/* --- 通信(「通信」の組み込み)。待受口と接続は1からの番号で表す(インタプリタと同じ) --- */
+
+typedef struct { int fd; FILE *in; } Sock;
+static Sock *socks;
+static int64_t nsocks, capsocks;
+
+static int64_t sock_add(int fd) {
+    if (nsocks == capsocks) {
+        capsocks = capsocks ? capsocks * 2 : 16;
+        socks = realloc(socks, capsocks * sizeof(Sock));
+        if (!socks) fail(0, "メモリが足りません");
+    }
+    socks[nsocks].fd = fd;
+    socks[nsocks].in = NULL;
+    return ++nsocks;
+}
+static Sock *sock_get(V v, const char *what, int32_t pos) {
+    int64_t i = IS_INT(v) ? INT_VAL(v) : 0;
+    if (TAG(v) == T_BOOL || i < 1 || i > nsocks || socks[i - 1].fd < 0) fail(pos, "「%s」は開いている%sではありません", plain(v).s, what);
+    return &socks[i - 1];
+}
+__attribute__((noreturn)) static void net_fail(Act *a) { fail(a->pos, "「%s」で通信に失敗しました(%s)", a->name, strerror(errno)); }
+
+static V net_run(Act *a) {
+    int32_t pos = a->pos;
+    switch (a->kind) {
+    case A_LISTEN: {
+        V v = need_num(a->a, pos);
+        int64_t port = IS_INT(v) ? INT_VAL(v) : -1;
+        if (port < 0 || port > 65535) fail(pos, "「%s」はポートの番号ではありません", plain(v).s);
+        signal(SIGPIPE, SIG_IGN); /* 相手が切れても止まらず、送信のエラーにする */
+        int fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (fd < 0) net_fail(a);
+        int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        struct sockaddr_in ad = {0};
+        ad.sin_family = AF_INET;
+        ad.sin_addr.s_addr = htonl(INADDR_ANY);
+        ad.sin_port = htons((uint16_t)port);
+        if (bind(fd, (struct sockaddr *)&ad, sizeof ad) < 0 || listen(fd, 16) < 0) { int e = errno; close(fd); errno = e; net_fail(a); }
+        return mk_int(sock_add(fd), pos);
+    }
+    case A_ACCEPT: {
+        Sock *s = sock_get(a->a, "待受口", pos);
+        fflush(stdout); /* 待つ前に、それまでの表示を出しておく */
+        int fd;
+        do fd = accept(s->fd, NULL, NULL); while (fd < 0 && errno == EINTR);
+        if (fd < 0) net_fail(a);
+        return mk_int(sock_add(fd), pos);
+    }
+    case A_RECVLINE: case A_RECV: {
+        Sock *s = sock_get(a->a, "接続", pos);
+        fflush(stdout);
+        int64_t want = 0;
+        if (a->kind == A_RECV) {
+            V v = need_num(a->b, pos);
+            want = IS_INT(v) ? INT_VAL(v) : -1;
+            if (want < 0) fail(pos, "「%s」は受信するバイト数ではありません", plain(v).s);
+        }
+        if (!s->in) {
+            int fd2 = dup(s->fd);
+            if (fd2 < 0 || !(s->in = fdopen(fd2, "rb"))) net_fail(a);
+        }
+        Buf b = {0};
+        if (a->kind == A_RECVLINE) {
+            /* 終わりの改行を含めて1行(長すぎる行は 65536 バイトで切る) */
+            int c;
+            while (b.n < 65536 && (c = fgetc(s->in)) != EOF) {
+                char ch = (char)c;
+                buf_add(&b, &ch, 1);
+                if (ch == '\n') break;
+            }
+        } else {
+            char tmp[4096];
+            while ((int64_t)b.n < want) {
+                size_t k = fread(tmp, 1, (size_t)(want - (int64_t)b.n) < sizeof tmp ? (size_t)(want - (int64_t)b.n) : sizeof tmp, s->in);
+                if (k == 0) break;
+                buf_add(&b, tmp, k);
+            }
+        }
+        if (ferror(s->in)) { free(b.s); net_fail(a); }
+        V r = mk_str(b.s ? b.s : "", (int64_t)b.n);
+        free(b.s);
+        return r;
+    }
+    case A_SEND: {
+        Str *str = need_str(a->a, "「送信する」の「を」", pos);
+        Sock *s = sock_get(a->b, "接続", pos);
+        int64_t off = 0;
+        while (off < str->n) {
+            ssize_t k = send(s->fd, str->s + off, (size_t)(str->n - off), 0);
+            if (k < 0 && errno == EINTR) continue;
+            if (k < 0) net_fail(a);
+            off += k;
+        }
+        return mk_int(str->n, pos);
+    }
+    case A_CLOSE: {
+        Sock *s = sock_get(a->a, "待受口か接続", pos);
+        if (s->in) fclose(s->in);
+        close(s->fd);
+        s->fd = -1;
+        s->in = NULL;
+        return a->a;
+    }
+    }
+    return 0;
+}
+
+static V mk_net(int kind, const char *name, V x, V y, int32_t pos) {
+    V v = mk_act(kind, name, x, y);
+    AS(Act, v)->pos = pos;
+    return v;
+}
+BI(n_listen) { return mk_net(A_LISTEN, "待受開始する", a[0], 0, pos); }
+BI(n_accept) { return mk_net(A_ACCEPT, "接続受付する", a[0], 0, pos); }
+BI(n_recvline) { return mk_net(A_RECVLINE, "行受信する", a[0], 0, pos); }
+BI(n_recv) { return mk_net(A_RECV, "受信する", a[0], a[1], pos); }  /* から, を */
+BI(n_send) { return mk_net(A_SEND, "送信する", a[0], a[1], pos); }  /* を, へ */
+BI(n_close) { return mk_net(A_CLOSE, "切断する", a[0], 0, pos); }
 
 static const int32_t P1_WO[] = {P_WO}, P2_WO_NI[] = {P_WO, P_NI}, P2_KARA_WO[] = {P_KARA, P_WO},
                      P2_WO_DE[] = {P_WO, P_DE}, P2_KARA_DE[] = {P_KARA, P_DE}, P3_WO_KARA_DE[] = {P_WO, P_KARA, P_DE},
-                     P2_GA_WO[] = {P_GA, P_WO}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P2_GA_DE[] = {P_GA, P_DE};
+                     P2_GA_WO[] = {P_GA, P_WO}, P1_KARA[] = {P_KARA}, P2_WO_HE[] = {P_WO, P_HE}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P2_GA_DE[] = {P_GA, P_DE};
 static const uint8_t R_OPT1[] = {0}, R_1_OPT[] = {1, 0};
 
 typedef struct { const char *name; int32_t n; const int32_t *parts; const uint8_t *req; Code code; } BuiltinDef;
@@ -1594,6 +1742,16 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"空白除去する", 1, P1_WO, NULL, s_strip},
     {"先頭一致である", 2, P2_GA_DE, NULL, s_starts},
     {"末尾一致である", 2, P2_GA_DE, NULL, s_ends},
+    {"バイト数にする", 1, P1_WO, NULL, s_bytes},
+    {"文字にする", 1, P1_WO, NULL, s_chr},
+    {"文字コードにする", 1, P1_WO, NULL, s_ord},
+    /* 「通信」の組み込み */
+    {"待受開始する", 1, P1_WO, NULL, n_listen},
+    {"接続受付する", 1, P1_KARA, NULL, n_accept},
+    {"行受信する", 1, P1_KARA, NULL, n_recvline},
+    {"受信する", 2, P2_KARA_WO, NULL, n_recv},
+    {"送信する", 2, P2_WO_HE, NULL, n_send},
+    {"切断する", 1, P1_WO, NULL, n_close},
 };
 
 static V def_builtin(const BuiltinDef *d) { return mk_builtin(d->name, d->n, d->parts, d->req, d->code, NULL); }

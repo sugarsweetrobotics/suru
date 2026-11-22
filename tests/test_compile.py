@@ -192,3 +192,30 @@ def test_LLVM_IRだけを出す(tmp_path):
     r = subprocess.run([sys.executable, str(ROOT / "suru_compile.py"), "--ll", str(src)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert "define void @suru_main()" in (tmp_path / "p.ll").read_text(encoding="utf-8")
+
+
+def test_バイト数と文字はインタプリタと同じ(tmp_path):
+    src = "「標準」 を 読み込んで 使う\n「aあ」 を バイト数にする\n12354 を 文字にする\n「あ」 を 文字コードにする\n改行 の 長さ\n復帰改行 を バイト数にする\n"
+    assert same(src, tmp_path) == "4\nあ\n12354\n1\n2\n"
+
+
+def test_開いていない接続のエラーはインタプリタと同じ文(tmp_path):
+    r = compiled("「通信」 を 読み込む\n5 を 通信内の切断する\n", tmp_path)
+    assert r.returncode == 1 and "「5」は開いている待受口か接続ではありません" in r.stderr
+
+
+def test_通信のサーバーをコンパイルして答えてもらう(tmp_path):
+    from net_helper import REQUESTS, SERVER, ask, expected, free_port
+
+    port = free_port()
+    ir = suru_compile.compile_source(SERVER.replace("PORT", str(port)), ".")
+    (tmp_path / "srv.ll").write_text(ir, encoding="utf-8")
+    suru_compile.build(str(tmp_path / "srv.ll"), str(tmp_path / "srv"))
+    p = subprocess.Popen([str(tmp_path / "srv")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert p.stdout.readline() == "待受中\n"  # 接続を待つ前に表示が出る
+        for head, body in REQUESTS:
+            assert ask(port, head, body) == expected(head, body)
+        assert p.wait(10) == 0
+    finally:
+        p.kill()

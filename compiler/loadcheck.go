@@ -24,6 +24,24 @@ var stdPrimitives = []builtinInfo{
 	{"文字分解する", nil}, {"分割する", nil}, {"結合する", nil}, {"置換する", nil},
 	{"大文字にする", nil}, {"小文字にする", nil}, {"空白除去する", nil},
 	{"先頭一致である", nil}, {"末尾一致である", nil},
+	{"バイト数にする", nil}, {"文字にする", nil}, {"文字コードにする", nil},
+}
+
+// 通信.suru の中と「通信内の…」でだけ使える組み込み
+var netPrimitives = []builtinInfo{
+	{"待受開始する", nil}, {"接続受付する", nil}, {"行受信する", nil}, {"受信する", nil},
+	{"送信する", nil}, {"切断する", nil},
+}
+
+// libPrimitives は lib/ のファイルごとの組み込み(suru.py の LIB_PRIMITIVES)
+func libPrimitives(path string) []builtinInfo {
+	switch path {
+	case StdPath:
+		return stdPrimitives
+	case NetPath:
+		return netPrimitives
+	}
+	return nil
 }
 
 const (
@@ -145,10 +163,8 @@ func (l *loader) loadModule(m *Module, envs map[string]*env) *env {
 	}
 	e := newEnv()
 	envs[m.Path] = e
-	if m.Path == StdPath {
-		for _, b := range stdPrimitives {
-			e.set(b.Name)
-		}
+	for _, b := range libPrimitives(m.Path) {
+		e.set(b.Name)
 	}
 	l.loadProgram(m.Program, e, envs)
 	return e
