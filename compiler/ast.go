@@ -272,6 +272,7 @@ type Extern struct {
 	Params []string // 定義の引数の順に C の型(i64 f64 i32 bool str ptr)
 	Result string
 	Action bool
+	Pointer string // 「外部の（f）」なら、関数の番地を持つ引数の名前(C には渡さない)
 }
 
 func nn(xs ...Node) []Node {

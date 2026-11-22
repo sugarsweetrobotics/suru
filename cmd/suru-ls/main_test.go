@@ -263,3 +263,43 @@ func TestRename(t *testing.T) {
 		}
 	}
 }
+
+func TestUsage(t *testing.T) {
+	src := "a を b で 割合にする とは a / b\n10 を 2 で 割合にする\n"
+	msgs := talk(t, open(uri, src),
+		at(1, "textDocument/hover", uri, 1, 9),
+		at(2, "textDocument/completion", uri, 1, 9))
+	if h := result(t, msgs, 1); !strings.Contains(h, "使い方: `a を b で 割合にする`") {
+		t.Fatalf("ホバーの使い方: %s", h)
+	}
+	its := items(t, msgs, 2)
+	if it := find(its, "加算する"); it == nil || !strings.Contains(it["documentation"].(map[string]any)["value"].(string), "… を （… に） 加算する") {
+		t.Fatalf("組み込みの使い方: %v", it)
+	}
+}
+
+func TestRenameParameter(t *testing.T) {
+	src := "n を 三倍する とは n * 3\nx を 二倍する とは\n  n * 0 + x * 2\nn とは 5\n"
+	msgs := talk(t, open(uri, src),
+		map[string]any{"id": 1, "method": "textDocument/rename", "params": map[string]any{
+			"textDocument": map[string]any{"uri": uri}, "position": map[string]any{"line": 0, "character": 0}, "newName": "値"}},
+		map[string]any{"id": 2, "method": "textDocument/rename", "params": map[string]any{
+			"textDocument": map[string]any{"uri": uri}, "position": map[string]any{"line": 2, "character": 10}, "newName": "かず"}})
+	r := result(t, msgs, 1)
+	// 1行目の n だけ(4行目の値 n は変えない)
+	if strings.Count(r, `"newText":"値"`) != 2 || strings.Contains(r, `"line":3`) {
+		t.Fatalf("引数の名前の変更: %s", r)
+	}
+	r = result(t, msgs, 2)
+	if strings.Count(r, `"newText":"『かず』"`) != 2 || !strings.Contains(r, `"line":1`) || !strings.Contains(r, `"line":2`) {
+		t.Fatalf("字下げした本体の中も変え、ひらがなは『』で囲む: %s", r)
+	}
+}
+
+func TestSeveralSyntaxErrors(t *testing.T) {
+	msgs := talk(t, open(uri, "x とは （1 +\nnを三倍するとは、n*3。\ny とは 「a\n「b」を三倍する。\n"))
+	d := diagnostics(t, msgs)
+	if len(d) != 3 {
+		t.Fatalf("構文の間違い2つと型の間違い1つが出ていません: %v", d)
+	}
+}
