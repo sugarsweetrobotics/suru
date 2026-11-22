@@ -1158,7 +1158,7 @@ func (c *Compiler) module(program []Node, path string) *scope {
 			sub := c.module(imp.Module.Program, imp.Module.Path)
 			for _, name := range append([]string{}, sub.order...) {
 				b := sub.vars[name]
-				if !strings.Contains(name, ModuleSep) {
+				if !strings.Contains(name, ModuleSep) && !imp.Module.Private[name] {
 					sc.set(imp.Module.Name+ModuleSep+name, b)
 					if imp.Open {
 						sc.set(name, b)

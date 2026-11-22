@@ -118,7 +118,7 @@ func (l *loader) loadProgram(program []Node, e *env, envs map[string]*env) {
 		if imp, ok := s.(*Import); ok {
 			mod := l.loadModule(imp.Module, envs)
 			for _, name := range mod.order {
-				if !containsStr(name, ModuleSep) {
+				if !containsStr(name, ModuleSep) && !imp.Module.Private[name] {
 					e.set(imp.Module.Name + ModuleSep + name)
 					if imp.Open {
 						e.set(name)
