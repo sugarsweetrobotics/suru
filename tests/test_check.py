@@ -20,7 +20,7 @@ def _err(src: str) -> SuruError:
 
 @pytest.mark.parametrize("path", sorted((ROOT / "examples").glob("*.suru")), ids=lambda p: p.name)
 def test_例はすべて検査を通る(path):
-    check(path.read_text(encoding="utf-8"))
+    check(path.read_text(encoding="utf-8"), str(path.parent))
 
 
 def test_引数の型の間違い():
@@ -353,3 +353,34 @@ def test_実行の前に検査する(tmp_path, capsys):
     assert out.out == "" and "リストの要素の型がそろっていません" in out.err  # 何も実行しない
     assert suru.main(["suru.py", "--検査なし", str(bad)]) == 0
     assert capsys.readouterr().out.splitlines() == ["やあ", "（1 と 「a」）"]
+
+
+
+# --- ファイルの読み込み -------------------------------------------------------
+
+
+def test_読み込んだ名前の型(tmp_path):
+    (tmp_path / "数学.suru").write_text("円周率 とは 3.14\nx を 二乗する とは x * x\n点 とは 横 と 縦 の 組\n", encoding="utf-8")
+    d = str(tmp_path)
+    check("「数学」 を 読み込む\n3 を 数学内の二乗する\n（1 と 2 の 点） の 横 + 数学内の円周率", d)
+    e = _err_in("「数学」 を 読み込む\n「a」 を 数学内の二乗する", d)
+    assert "「数学内の二乗する」の「を」には数が必要ですが、文字列が渡されています" in str(e)
+
+
+def test_読み込んだファイルの中の型の間違い(tmp_path):
+    (tmp_path / "不良.suru").write_text("x とは 1\ny とは x + 「a」\n", encoding="utf-8")
+    e = _err_in("「不良」 を 読み込む", str(tmp_path))
+    assert e.line == 1 and "「不良.suru」の2行目" in str(e) and "「+」の両側の型が違います" in str(e)
+
+
+def test_読み込みの例を実行する(capsys):
+    import suru
+
+    assert suru.main(["suru.py", str(ROOT / "examples" / "import.suru")]) == 0
+    assert capsys.readouterr().out.splitlines() == ["3.14", "9", "（1 と 4 と 9）", "自分の二乗する", "10"]
+
+
+def _err_in(src: str, base_dir: str) -> SuruError:
+    with pytest.raises(SuruError) as info:
+        check(src, base_dir)
+    return info.value

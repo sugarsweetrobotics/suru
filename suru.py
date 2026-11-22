@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 import unicodedata
 from dataclasses import dataclass, field
@@ -98,9 +99,17 @@ KW_SOREKARA = "それから"  # 前の文に続けて行う: 「やあ」を表�
 KW_KATSU = "かつ"      # 真偽の「かつ」、パターンの条件: 半径 の 円 かつ 半径 > 10 ならば …
 KW_MATAHA = "または"   # 真偽の「または」
 DESU = "です"       # 文末の飾り: 「p とは 3 と 4 の 点 です。」の「です」は読み捨てる
+RESERVED_MARKS = {"・": "中黒「・」"}
+MODULE_MARK = "内"  # 読み込んだファイルの中の名前: 数学内の円周率
+MODULE_SEP = MODULE_MARK + "の"
+KW_IMPORT = "読み込む"  # 「数学」 を 読み込む
+KW_IMPORT_POLITE = "読み込みます"
+SOURCE_SUFFIX = ".suru"
+
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
     KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA, DESU,
+    KW_IMPORT, KW_IMPORT_POLITE,
 }
 KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU}
 CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}  # 行頭に来たら前の文の続きとみなす
@@ -115,7 +124,6 @@ COMMA = "、"
 # ひらがなを含む名前を囲む括弧(「」は文字列なので『』を使う)
 NAME_OPEN, NAME_CLOSE = "『", "』"
 # 将来の書き方のために予約している記号
-RESERVED_MARKS = {"・": "中黒「・」"}
 
 SURU = "する"       # 終止形: パイプラインの終わり
 SHITE = "して"      # 連用形: 結果を次の関数の「を」へ渡す
@@ -288,6 +296,33 @@ def tokenize_line(text: str, line: int) -> list[Token]:
     return drop_desu(tokens)
 
 
+def join_module_names(tokens: list[Token], modules: set) -> list[Token]:
+    """「数学内の円周率」「数学内の二乗する」: 読み込んだファイルの名前に「内の」が続けば、
+    その後の名前と合わせて1つの名前にする(「数学」を読み込んでいなければ、ふつうの「数学内」)"""
+    out: list[Token] = []
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        nxt = tokens[i + 1] if i + 1 < len(tokens) else None
+        name = tokens[i + 2] if i + 2 < len(tokens) else None
+        if (t.kind == "WORD" and t.value.endswith(MODULE_MARK) and t.value[: -len(MODULE_MARK)] in modules
+                and nxt is not None and nxt.kind == "KW" and nxt.value == KW_NO):
+            if name is None or name.kind not in ("WORD", "CALL"):
+                raise SuruError(f"「{t.value}の」の後には、読み込んだファイルの中の名前を書いてください", t.line)
+            out.append(Token(name.kind, t.value + "の" + name.value, t.line, name.form, name.quoted, name.negated))
+            i += 3
+            continue
+        if (t.kind == "WORD" and t.value.endswith(MODULE_SEP) and t.value[: -len(MODULE_SEP)] in modules
+                and nxt is not None and nxt.kind in ("WORD", "CALL")):
+            # 空白の書き方の「数学内の 円周率」
+            out.append(Token(nxt.kind, t.value + nxt.value, t.line, nxt.form, nxt.quoted, nxt.negated))
+            i += 2
+            continue
+        out.append(t)
+        i += 1
+    return out
+
+
 def drop_desu(tokens: list[Token]) -> list[Token]:
     """文末の飾りの「です」を取り除く。「。」「、」「）」「そうでなければ」の前か、行の終わりにだけ書ける"""
     out = []
@@ -320,7 +355,7 @@ def _find_name_close(text: str, i: int, line: int) -> int:
 
 OPERATOR_CHARS = {c for op in OPERATORS for c in unicodedata.normalize("NFKC", op)} | set(OPERATORS)
 # 漢字とひらがなが混ざった決まった言葉(名前の切り出しより先に照合する)
-MIXED_WORDS = ("受け取って", "返すこと", "長さ", "残り")
+MIXED_WORDS = ("受け取って", "返すこと", "長さ", "残り", KW_IMPORT_POLITE, KW_IMPORT)
 # ひらがなを含む組み込み関数の名前(「する」の前の部分)。名前として切り出す
 MIXED_NAMES = ("畳み込み",)
 # ひらがなの並びを分けるときの辞書。長いものから順に照合する
@@ -998,7 +1033,24 @@ class TypeVarName:
     name: str
 
 
-TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig)
+@dataclass
+class Module:
+    """読み込んだファイル。program は一番外の文(定義だけ)"""
+
+    name: str  # 「数学・円周率」の「数学」
+    path: str
+    program: list
+
+
+@dataclass
+class Import:
+    """「「数学」 を 読み込む」: 数学.suru の定義を「数学・名前」で使えるようにする"""
+
+    module: Module
+    line: int
+
+
+TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import)
 TYPE_VAR_NAMES = "甲乙丙丁戊己庚辛壬癸"
 BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作")
 
@@ -1006,12 +1058,15 @@ BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作")
 class ParseContext:
     """構文解析で使う、定義済みの型と形の名前(「3 と 4 の 点」を読むために先に集める)"""
 
-    def __init__(self, ctors: dict | None = None, types: dict | None = None):
+    def __init__(self, ctors: dict | None = None, types: dict | None = None, base_dir: str = ".",
+                 modules: dict | None = None):
         self.ctors: dict[str, tuple[str, list]] = dict(ctors or {})  # 形 → (型, フィールド名)
         self.types: dict[str, list] = dict(types or {})  # 型 → [形]
+        self.base_dir = base_dir  # 「「数学」 を 読み込む」で探すフォルダ
+        self.modules: dict[str, Any] = dict(modules or {})  # 読み込んだファイル(絶対パス → Module。読み込み中は None)
 
     def copy(self) -> "ParseContext":
-        return ParseContext(self.ctors, self.types)
+        return ParseContext(self.ctors, self.types, self.base_dir, self.modules)
 
     def add(self, td: TypeDef) -> None:
         if td.name in self.types or td.name in BUILTIN_TYPES:
@@ -2063,6 +2118,8 @@ def parse_statement(node: Node) -> Any:
     if len(head) == 3 and head[0].kind == "WORD" and is_kw(head[1], KW_TOIU) and is_kw(head[2], KW_SEISHITSU):
         return parse_trait_decl(node, head[0], after)
     name, params, is_function = parse_definition_head(head, node.line.number)
+    if MODULE_SEP in name:
+        raise SuruError(f"「{name}」: 読み込んだファイルの中の名前は定義できません", head[0].line)
     after_t = nosep(after)
     if len(after_t) == 1 and after_t[0].kind == "WORD" and after_t[0].value == TEJUN and not after_t[0].quoted and node.children:
         # 「挨拶する とは 手順」+ 深い行: 深い行を順に行う
@@ -2221,6 +2278,8 @@ def _check_name(tok: Token) -> str:
         raise SuruError(f"名前に「{tok.value}」は使えません", tok.line)
     if not tok.quoted and _is_all_hiragana(tok.value):
         raise hiragana_name_error(tok.value, tok.line)
+    if MODULE_SEP in tok.value:
+        raise SuruError(f"「{tok.value}」: 読み込んだファイルの中の名前は定義できません", tok.line)
     return tok.value
 
 
@@ -2389,6 +2448,14 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
     global _CTX
     nodes = build_layout(split_lines(source))
     ctx = ctx if ctx is not None else ParseContext()
+    # 読み込むファイルを先に読む(その中の型を使えるように)
+    imports = {}
+    for n in nodes:
+        name = import_target(n)
+        if name is not None:
+            imports[id(n)] = load_module(name, ctx, n.line.number)
+    if imports:
+        _join_in_nodes(nodes, {m.name for m in imports.values()})
     # 「3 と 4 の 点」を読むために、型の定義を先に集める(定義の順番は自由)
     for n in nodes:
         td = try_parse_typedef(n)
@@ -2396,9 +2463,73 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
             ctx.add(td)
     saved, _CTX = _CTX, ctx
     try:
-        return attach_provisos([parse_statement(n) for n in nodes])
+        statements = [Import(imports[id(n)], n.line.number) if id(n) in imports else parse_statement(n) for n in nodes]
+        return attach_provisos(statements)
     finally:
         _CTX = saved
+
+
+def _join_in_nodes(nodes: list, modules: set) -> None:
+    for n in nodes:
+        n.line.tokens = join_module_names(n.line.tokens, modules)
+        _join_in_nodes(n.children, modules)
+
+
+def import_target(node: Node) -> str | None:
+    """「「数学」 を 読み込む」なら読み込むファイルの名前(「数学」)"""
+    tokens = nosep(flatten(node))
+    if tokens and tokens[-1].kind == "PERIOD":
+        tokens = tokens[:-1]
+    if not any(is_kw(t, KW_IMPORT) or is_kw(t, KW_IMPORT_POLITE) for t in tokens):
+        return None
+    if (len(tokens) != 3 or tokens[0].kind != "STR" or not (tokens[1].kind == "PART" and tokens[1].value == WO)
+            or node.line.indent):
+        raise SuruError(f"ファイルは一番外に「「数学」 を {KW_IMPORT}」のように書いて読み込みます", tokens[0].line)
+    return tokens[0].value
+
+
+def load_module(name: str, ctx: ParseContext, line: int) -> Module:
+    """ファイル「name.suru」を読んで解析する。同じファイルは一度だけ読む"""
+    path = os.path.abspath(os.path.join(ctx.base_dir, name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX))
+    stem = os.path.splitext(os.path.basename(path))[0]
+    if not stem or _is_all_hiragana(stem) or any(_is_hiragana(c) for c in stem) or any(c in stem for c in " 　「」『』（）()、。"):
+        raise SuruError(f"「{stem}」はファイルの名前に使えません(名前と同じく漢字・カタカナ・英字で書いてください)", line)
+    if path in ctx.modules:
+        if ctx.modules[path] is None:
+            raise SuruError(f"「{stem}{SOURCE_SUFFIX}」を読み込むと、自分自身を読み込むことになります", line)
+        return ctx.modules[path]
+    try:
+        with open(path, encoding="utf-8") as f:
+            source = f.read()
+    except OSError:
+        raise SuruError(f"ファイル「{name}{'' if name.endswith(SOURCE_SUFFIX) else SOURCE_SUFFIX}」が見つかりません", line) from None
+    ctx.modules[path] = None
+    sub = ParseContext(ctx.ctors, ctx.types, os.path.dirname(path))
+    sub.modules = ctx.modules
+    try:
+        program = parse_program(source, sub)
+        for s in program:
+            if not isinstance(s, (Define,) + TOP_LEVEL_ONLY):
+                raise SuruError("読み込むファイルには定義だけを書いてください", first_line_of(s))
+    except SuruError as e:
+        raise SuruError(f"「{stem}{SOURCE_SUFFIX}」の{_where(e.line) if e.line else ''}: {e.message}", line) from None
+    ctx.ctors.update(sub.ctors)
+    ctx.types.update(sub.types)
+    module = Module(stem, path, program)
+    ctx.modules[path] = module
+    return module
+
+
+def first_line_of(node: Any) -> Any:
+    line = getattr(node, "line", None)
+    if line:
+        return line
+    if hasattr(node, "__dataclass_fields__"):
+        for f in node.__dataclass_fields__:
+            line = first_line_of(getattr(node, f))
+            if line:
+                return line
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -2830,7 +2961,10 @@ class Interpreter:
     def __init__(self, out: Any = None, read: Any = None) -> None:
         self.out = out or print  # 「表示する」の出力先
         self.read = read or input  # 「入力する」の入力元
-        self.globals = make_global_env()
+        # shared は組み込み関数・形・性質の関数(どのファイルからも見える)。globals はこのプログラムの定義
+        self.shared = make_global_env()
+        self.globals = Env(self.shared)
+        self.loaded: dict[str, Env] = {}  # 読み込んだファイル(絶対パス → その定義)
         self.ctx = ParseContext()
         self.traits: dict[str, dict] = {}  # 性質 → {関数名: (引数, 既定の実装 or None)}
         self.impls: dict[tuple[str, str], dict] = {}  # (性質, 型) → {関数名: Function}
@@ -2842,7 +2976,7 @@ class Interpreter:
         self.register_trait(TraitDecl(MONAD, [(BIND, F_PARAMS), (UNIT, [(WO, "x")])], [], 0))
         unit = Builtin(UNIT, [(WO, True)], lambda it, a, line: Pure(a[WO]))
         self.traits[MONAD][UNIT] = ([(WO, "x")], unit)  # 結果にする は実装しなくてよい
-        self.globals.vars[UNIT] = unit  # 「を」の型で選ばず、いつも中立の Pure を作る
+        self.shared.vars[UNIT] = unit  # 「を」の型で選ばず、いつも中立の Pure を作る
         fmap = Builtin(MAP, [(WO, True), ("で", True)],
                        lambda it, a, line: it.fmap(a[WO], lambda v: it.apply(a["で"], [v], line), line))
         chain = Builtin(BIND, [(WO, True), ("で", True)],
@@ -2857,21 +2991,7 @@ class Interpreter:
         ctx = self.ctx.copy()
         program = parse_program(source, ctx)
         self.ctx = ctx
-        # 定義は先にすべて登録する(定義の順番は自由。相互再帰もできる)
-        for stmt in program:
-            if isinstance(stmt, TypeDef):
-                self.register_type(stmt)
-        for stmt in program:
-            if isinstance(stmt, TraitDecl):
-                self.register_trait(stmt)
-        for stmt in program:
-            if isinstance(stmt, TraitImpl):
-                self.register_impl(stmt)
-        for stmt in program:
-            if isinstance(stmt, Define):
-                if stmt.name in self.fixed:
-                    raise SuruError(f"「{stmt.name}」は形か性質の関数の名前なので、定義し直せません", stmt.line)
-                self.define(stmt, self.globals)
+        self.load_program(program, self.globals)
         results = []
         for s in program:
             if isinstance(s, (Define,) + TOP_LEVEL_ONLY):
@@ -2884,6 +3004,37 @@ class Interpreter:
             if emit is not None:
                 emit(v)
         return results
+
+    def load_program(self, program: list, env: Env) -> None:
+        """定義を先にすべて登録する(定義の順番は自由。相互再帰もできる)"""
+        for stmt in program:
+            if isinstance(stmt, Import):
+                mod = self.load_module(stmt.module)
+                for name, v in mod.vars.items():
+                    if MODULE_SEP not in name:
+                        env.vars[stmt.module.name + MODULE_SEP + name] = v
+        for stmt in program:
+            if isinstance(stmt, TypeDef):
+                self.register_type(stmt)
+        for stmt in program:
+            if isinstance(stmt, TraitDecl):
+                self.register_trait(stmt, env)
+        for stmt in program:
+            if isinstance(stmt, TraitImpl):
+                self.register_impl(stmt, env)
+        for stmt in program:
+            if isinstance(stmt, Define):
+                if stmt.name in self.fixed:
+                    raise SuruError(f"「{stmt.name}」は形か性質の関数の名前なので、定義し直せません", stmt.line)
+                self.define(stmt, env)
+
+    def load_module(self, module: Module) -> Env:
+        """読み込んだファイルの定義を登録する(同じファイルは一度だけ)。型と性質はどこからも見える"""
+        env = self.loaded.get(module.path)
+        if env is None:
+            env = self.loaded[module.path] = Env(self.shared)
+            self.load_program(module.program, env)
+        return env
 
     # --- 動作 -------------------------------------------------------------
 
@@ -2936,7 +3087,7 @@ class Interpreter:
         if fns is None:
             raise SuruError(f"「{self.format(m)}」は動作ではありません(性質「{MONAD}」を持っていません)", line)
         k = Builtin("続き", [(WO, True)], lambda it, a, l: it.coerce(f(a[WO]), m, line))
-        return self.call(self.globals.vars[BIND], {WO: m, "で": k}, line)
+        return self.call(self.shared.vars[BIND], {WO: m, "で": k}, line)
 
     def fmap(self, m: Any, f: Any, line: int) -> Any:
         """m の結果に f を適用したもの(写像)"""
@@ -2948,7 +3099,7 @@ class Interpreter:
             return tuple(f(x) for x in m)
         if isinstance(m, Record) and (MAPPABLE, m.type_name) in self.impls:
             k = Builtin("関数", [(WO, True)], lambda it, a, l: f(a[WO]))
-            return self.call(self.globals.vars[MAP], {WO: m, "で": k}, line)
+            return self.call(self.shared.vars[MAP], {WO: m, "で": k}, line)
         if self.monad_impl(m) is not None:
             return self.chain(m, lambda v: Pure(f(v)), line)
         raise SuruError(f"「{self.format(m)}」は性質「{MAPPABLE}」を持っていません(「の 結果」が使えません)", line)
@@ -3001,12 +3152,13 @@ class Interpreter:
     def register_type(self, td: TypeDef) -> None:
         for c, fields in td.ctors:
             if not fields:
-                if c in self.globals.vars:
+                if c in self.shared.vars:
                     raise SuruError(f"形「{c}」は既に別の名前として使われています", td.line)
-                self.globals.vars[c] = Record(c, td.name, (), ())
+                self.shared.vars[c] = Record(c, td.name, (), ())
                 self.fixed.add(c)
 
-    def register_trait(self, decl: TraitDecl) -> None:
+    def register_trait(self, decl: TraitDecl, env: Env | None = None) -> None:
+        env = env or self.globals
         if decl.name in self.traits:
             raise SuruError(f"性質「{decl.name}」は既に定義されています", decl.line)
         methods: dict[str, tuple] = {}
@@ -3014,16 +3166,17 @@ class Interpreter:
         for fname, params, d in members:
             if fname in methods:
                 raise SuruError(f"性質「{decl.name}」の中で「{fname}」が2回書かれています", decl.line)
-            if fname in self.globals.vars:
+            if fname in self.shared.vars or fname in env.vars:
                 raise SuruError(f"「{fname}」は既に使われている名前なので、性質の関数にできません", decl.line)
-            default = Function(fname, d.params, d.body, self.globals) if d else None
+            default = Function(fname, d.params, d.body, env) if d else None
             methods[fname] = (params, default)
         self.traits[decl.name] = methods
         for fname, (params, _) in methods.items():
-            self.globals.vars[fname] = TraitMethod(fname, decl.name, params)
+            self.shared.vars[fname] = TraitMethod(fname, decl.name, params)
             self.fixed.add(fname)
 
-    def register_impl(self, impl: TraitImpl) -> None:
+    def register_impl(self, impl: TraitImpl, env: Env | None = None) -> None:
+        env = env or self.globals
         trait = self.traits.get(impl.trait)
         if trait is None:
             raise SuruError(f"「{impl.trait}」という性質は定義されていません", impl.line)
@@ -3043,7 +3196,7 @@ class Interpreter:
                 raise SuruError(
                     f"「{d.name}」の助詞が性質「{impl.trait}」での宣言と違います(使う助詞: {'・'.join(want)})", d.line
                 )
-            fns[d.name] = Function(d.name, d.params, d.body, self.globals)
+            fns[d.name] = Function(d.name, d.params, d.body, env)
         for fname, (_, default) in trait.items():
             if fname not in fns and default is None:
                 raise SuruError(f"「{impl.type_name}」は性質「{impl.trait}」の「{fname}」を定義していません", impl.line)
@@ -3372,12 +3525,12 @@ CHECK_FLAGS = ("--検査", "--check")  # 型の検査だけを行う(実行は�
 NO_CHECK_FLAGS = ("--検査なし", "--no-check")  # 型の検査をせずに実行する
 
 
-def type_check(source: str) -> bool:
+def type_check(source: str, base_dir: str = ".") -> bool:
     """型を調べる。間違いがあれば表示して False"""
     from suru_check import check
 
     try:
-        check(source)
+        check(source, base_dir)
     except Exception as e:  # suru_check は suru を別のモジュールとして読み込むので、名前で見分ける
         if type(e).__name__ != "SuruError":
             raise
@@ -3391,7 +3544,7 @@ def main(argv: list[str]) -> int:
     if len(argv) >= 3 and argv[1] in CHECK_FLAGS:
         with open(argv[2], encoding="utf-8") as f:
             source = f.read()
-        if not type_check(source):
+        if not type_check(source, os.path.dirname(os.path.abspath(argv[2]))):
             return 1
         print("型の検査で問題は見つかりませんでした")
         return 0
@@ -3404,14 +3557,16 @@ def main(argv: list[str]) -> int:
         return 0
     with open(argv[1], encoding="utf-8") as f:
         source = f.read()
+    base_dir = os.path.dirname(os.path.abspath(argv[1]))
     # 実行の前に必ず型を調べる(間違いがあれば実行しない)
     try:
-        if checking and not type_check(source):
+        if checking and not type_check(source, base_dir):
             return 1
     except SuruError as e:  # 構文のエラー
         print(format_error(e, source), file=sys.stderr)
         return 1
     interp = Interpreter()
+    interp.ctx.base_dir = base_dir
     try:
         interp.run(source, emit=lambda v: print(interp.format(v)))
     except SuruError as e:

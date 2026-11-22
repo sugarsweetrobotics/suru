@@ -25,7 +25,7 @@ from suru import (
     BinOp, Block, Call, Chain, Construct, Define, Do, Each, Field, If, KW_KATSU, KW_MATAHA, Lambda,
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
     PValue, Ref, RESULT, Run, Sequel, Str, SuruError, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
-    HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
+    HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, Import, Module, MODULE_SEP, SOURCE_SUFFIX, _where, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
     parse_program, collect_runs, _run_key,
 )
 
@@ -618,6 +618,26 @@ class Checker:
     # --- プログラム -----------------------------------------------------
 
     def check_program(self, program: list) -> None:
+        self.base = TEnv()  # 性質の実装(どのファイルのものも)
+        self.checked: dict = {}  # 読み込んだファイル(絶対パス → その定義の型)
+        env = self.check_unit(program)
+        for s in program:
+            if isinstance(s, (Define,) + TOP_LEVEL_ONLY):
+                continue
+            self.line = first_line(s)
+            self.infer(s, env)
+            self.solve(env)
+        self.solve(env)
+
+    def check_unit(self, program: list) -> TEnv:
+        """1つのファイルの定義を推論して、その型の環境を返す"""
+        local = TEnv(self.base)
+        for s in program:
+            if isinstance(s, Import):
+                scope = self.check_module(s.module, s.line)
+                for name, v in scope.vars.items():
+                    if not name.startswith("\0") and MODULE_SEP not in name:
+                        local.vars[s.module.name + MODULE_SEP + name] = v
         defs = [s for s in program if isinstance(s, Define)]
         for s in program:
             if isinstance(s, TraitDecl):
@@ -640,14 +660,22 @@ class Checker:
             if d.name.startswith("\0"):
                 self.aliases.setdefault(d.name.split("\0")[-1], []).append(d.name)
         sigs = self.collect_sigs(program, defs)
-        env = self.infer_defs(defs, TEnv(), sigs)
-        for s in program:
-            if isinstance(s, (Define,) + TOP_LEVEL_ONLY):
-                continue
-            self.line = first_line(s)
-            self.infer(s, env)
-            self.solve(env)
-        self.solve(env)
+        scope = self.infer_defs(defs, local, sigs)
+        for name, v in scope.vars.items():
+            if name.startswith("\0"):
+                self.base.vars[name] = v
+        return scope
+
+    def check_module(self, module: Module, line: Any) -> TEnv:
+        scope = self.checked.get(module.path)
+        if scope is None:
+            try:
+                scope = self.checked[module.path] = self.check_unit(module.program)
+                self.solve(scope)
+            except SuruError as e:
+                raise SuruError(f"「{module.name}{SOURCE_SUFFIX}」の{_where(e.line) if e.line else ''}: {e.message}",
+                                line) from None
+        return scope
 
     @staticmethod
     def _renamed(d: Define, name: str) -> Define:
@@ -1713,9 +1741,9 @@ BUILTIN_FUNS["挿入する"] = _cons_fun
 # ---------------------------------------------------------------------------
 
 
-def check(source: str) -> None:
-    """型を調べる。間違いがあれば SuruError を出す"""
-    ctx = ParseContext()
+def check(source: str, base_dir: str = ".") -> None:
+    """型を調べる。間違いがあれば SuruError を出す。読み込むファイルは base_dir から探す"""
+    ctx = ParseContext(base_dir=base_dir)
     program = parse_program(source, ctx)
     shapes = Shapes(ctx)
 
