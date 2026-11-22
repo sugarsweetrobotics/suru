@@ -3557,9 +3557,14 @@ def extern_builtin(d: Define) -> Builtin:
         ctypes.set_errno(0)
         return _ffi_result(ext.result, cfn[0](*args), d.name, line)
 
+    def act(a: dict, line: int) -> Any:
+        # 動作の C の関数は、子のプロセスや C の stdio と表示の順が入れ替わらないよう、それまでの表示を出してから呼ぶ
+        sys.stdout.flush()
+        return call(a, line)
+
     if ext.action:
         return Builtin(d.name, [(p, True) for p in parts],
-                       lambda it, a, line: Action(d.name, lambda it2: call(a, line)))
+                       lambda it, a, line: Action(d.name, lambda it2: act(a, line)))
     return Builtin(d.name, [(p, True) for p in parts], lambda it, a, line: call(a, line))
 
 # lib/ のファイルごとの組み込み(そのファイルの中と、読み込んだ側の「標準内の…」「通信内の…」で使える)
