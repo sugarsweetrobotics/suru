@@ -285,3 +285,71 @@ def test_写像できない値():
 def test_多相な手順():
     check("m を 恒等にする とは m\nm を 再包装する とは 手順\n  x とは m を 恒等にした 結果\n  x を 結果にする\n"
           "（1 と 2） を 再包装する\n（入力する） を 再包装する")
+
+
+# --- 第4段階: 型の宣言と、実行の前の検査 ----------------------------------------
+
+FACT = "n を 階乗する とは もし n < 1 ならば 1 そうでなければ n * （n - 1 を 階乗する）\n"
+
+
+def test_関数の型の宣言():
+    check("数 を 階乗する は 数\n" + FACT + "5 を 階乗する")
+    check("数を階乗するは、数。nを階乗するとは、もしn<1ならば1、そうでなければn*（n-1を階乗する）。")
+    e = _err("数 を 階乗する は 数\n" + FACT + "「a」 を 階乗する")
+    assert "「階乗する」の「を」には数が必要ですが、文字列が渡されています" in str(e)
+    assert "文字列になっています" in str(_err("数 を 階乗する は 文字列\n" + FACT))
+
+
+def test_値の型の宣言():
+    check("税率 は 数\n税率 とは 0.1")
+    e = _err("税率 は 文字列\n税率 とは 0.1")
+    assert "「税率」は文字列と宣言されていますが、数になっています" in str(e)
+
+
+def test_宣言の型の書き方():
+    check("数 の リスト を 合計する は 数\nxs を 合計する とは xs を 加算する")
+    check("数 が 偶数である は 真偽\nn が 偶数である とは n % 2 が 0")
+    check("（数 を 受け取って 数 を 返すこと） を 二回する は 数\n"
+          "f を 二回する とは f を （f を 3 に 適用する） に 適用する\nx を 三倍する とは x * 3\n三倍すること を 二回する")
+    check("挨拶する は 数 の 動作\n挨拶する とは 手順\n  名前 とは 「名前? 」 を 入力した 結果\n  名前 の 長さ を 結果にする")
+    check("『たぶん』とは、値の有か無。\n数を半分にするは、数の『たぶん』。\n"
+          "xを半分にするとは、もしx%2==0ならばx/2の有、そうでなければ無。")
+    pt = "点 とは 横 と 縦 の 組\n"
+    check(pt + "p は （数 と 数） の 点\np とは 1 と 2 の 点")
+    e = _err(pt + "p は （数 と 文字列） の 点\np とは 1 と 2 の 点")
+    assert "（数 と 文字列） の 点と宣言されていますが、（数 と 数） の 点になっています" in str(e)
+
+
+def test_甲乙はどんな型でもよいところ():
+    check("甲 を 恒等にする は 甲\nx を 恒等にする とは x\n1 を 恒等にする\n「a」 を 恒等にする")
+    e = _err("甲 を 恒等にする は 甲\nx を 恒等にする とは x + 1")
+    assert "「甲」は、定義では数に決まります" in str(e)
+    e = _err("甲 を 乙 に 選択する は 甲\na を b に 選択する とは もし 真 ならば a そうでなければ b")
+    assert "「甲」と「乙」は、定義では同じ型になります" in str(e)
+
+
+def test_宣言のまちがい():
+    assert "一番外にその定義がありません" in str(_err("数 を 階乗する は 数"))
+    assert "助詞(に)が定義の助詞(を)と違います" in str(_err("数 に 階乗する は 数\n" + FACT))
+    assert "2回宣言されています" in str(_err("数 を 階乗する は 数\n数 を 階乗する は 数\n" + FACT))
+    assert "「整数」という型はありません" in str(_err("数 を 階乗する は 整数\n" + FACT))
+
+
+def test_宣言は実行では使わない():
+    from suru import Interpreter
+    assert Interpreter().run_text("数 を 階乗する は 数\n" + FACT + "5 を 階乗する") == ["120"]
+    # 「点 は 比較可能」は今までどおり性質の実装
+    check("比較可能 という 性質 とは\n  a と b を 比較する\n点 とは 横 と 縦 の 組\n点 は 比較可能\n"
+          "  a と b を 比較する とは a の 横 - b の 横")
+
+
+def test_実行の前に検査する(tmp_path, capsys):
+    import suru
+
+    bad = tmp_path / "bad.suru"
+    bad.write_text("「やあ」 を 表示する\n1 と 「a」\n", encoding="utf-8")
+    assert suru.main(["suru.py", str(bad)]) == 1
+    out = capsys.readouterr()
+    assert out.out == "" and "リストの要素の型がそろっていません" in out.err  # 何も実行しない
+    assert suru.main(["suru.py", "--検査なし", str(bad)]) == 0
+    assert capsys.readouterr().out.splitlines() == ["やあ", "（1 と 「a」）"]
