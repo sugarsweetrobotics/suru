@@ -17,12 +17,13 @@ import (
 	"runtime/debug"
 	"strings"
 
-	suru "github.com/sugarsweetrobotics/suru"
-	"github.com/sugarsweetrobotics/suru/cmd/internal/native"
-	"github.com/sugarsweetrobotics/suru/compiler"
+	suru "github.com/suru-lang/suru"
+	"github.com/suru-lang/suru/cmd/internal/native"
+	"github.com/suru-lang/suru/compiler"
 )
 
-const version = "0.1.0"
+// version はリリースのときに -ldflags "-X main.version=…" で書きかえる
+var version = "0.1.0"
 
 const usage = "使い方: suruc [--ll] [--検査なし] [-O0|-O1|-O2|-O3] プログラム.suru [-o 出力]"
 
