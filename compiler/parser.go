@@ -1678,7 +1678,7 @@ func parseStatement(node *LNode) Node {
 		return parseTraitDecl(node, head[0], after)
 	}
 	name, params, isFunction := parseDefinitionHead(head, node.Line.Number)
-	if strings.Contains(name, ModuleSep) {
+	if strings.Contains(name, ModuleSep) && !head[0].Qualified {
 		raise(head[0].Line, "「"+name+"」: 読み込んだファイルの中の名前は定義できません")
 	}
 	afterT := nosep(after)

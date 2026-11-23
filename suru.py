@@ -2210,7 +2210,7 @@ def parse_statement(node: Node) -> Any:
     if len(head) == 3 and head[0].kind == "WORD" and is_kw(head[1], KW_TOIU) and is_kw(head[2], KW_SEISHITSU):
         return parse_trait_decl(node, head[0], after)
     name, params, is_function = parse_definition_head(head, node.line.number)
-    if MODULE_SEP in name:
+    if MODULE_SEP in name and not head[0].qualified:
         raise SuruError(f"「{name}」: 読み込んだファイルの中の名前は定義できません", head[0].line)
     after_t = nosep(after)
     if len(after_t) == 1 and after_t[0].kind == "WORD" and after_t[0].value == TEJUN and not after_t[0].quoted and node.children:
