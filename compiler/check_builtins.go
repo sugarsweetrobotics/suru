@@ -316,6 +316,7 @@ func init() {
 	simple("行受信する", []TParam{{"から", NUM}}, act(STR))
 	simple("受信する", []TParam{{"から", NUM}, {WO, NUM}}, act(STR))
 	simple("送信する", []TParam{{WO, STR}, {"へ", NUM}}, act(NUM))
+	simple("バイト列送信する", []TParam{{WO, bytesT}, {"へ", NUM}}, act(NUM))
 	// スレッド(「スレッド」の組み込み)。並行開始した結果は、合流する(待って結果を返す)動作
 	prim("並行開始する", []partReq{req(WO)}, func() Type {
 		x := newTVar()

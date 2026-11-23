@@ -1217,27 +1217,36 @@ def test_通信のサーバーに答えてもらう():
 
 # --- HTTP ---------------------------------------------------------------------
 
-HTTP_PURE = "「HTTP」 を 読み込む\n"
-
-
-def test_HTTPの応答文():
-    src = HTTP_PURE + "「あ」 を HTTP内の本文応答して HTTP内の応答文にする\n"
-    assert run(src) == ["HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 3\r\n"
-                        "Connection: close\r\n\r\nあ"]
-
-
-def test_HTTPの状態と見出し():
-    src = HTTP_PURE + "404 で 「無い」 を HTTP内の状態応答して HTTP内の応答文にする\n" \
-        "（「<p>」 を HTTP内のHTML応答する） に 「X-A」 と 「1」 を HTTP内の見出し追加して HTTP内の応答文にする\n"
-    out = run(src)
-    assert out[0].startswith("HTTP/1.1 404 Not Found\r\n")
-    assert "Content-Type: text/html; charset=utf-8\r\nX-A: 1\r\nContent-Length: 3\r\n" in out[1]
-
+# HTTP のサーバーは suru-lang/http に移しました。ここでは tests/http/HTTP.suru の写しを使い、
+# 通信・試行する がサーバーとして本当に動くかを確かめます(応答の作り方などの試験は suru-lang/http にあります)。
 
 def _serve_in_thread(src: str, out: list) -> None:
     import threading
 
-    threading.Thread(target=lambda: Interpreter(out=out.append).run(src), daemon=True).start()
+    from net_helper import HTTP_DIR
+
+    it = Interpreter(out=out.append)
+    it.ctx.base_dir = str(HTTP_DIR)
+    threading.Thread(target=lambda: it.run(src), daemon=True).start()
+
+
+def test_バイト列を送る():
+    import threading
+
+    from net_helper import BYTES_EXPECTED, BYTES_SERVER, free_port, read_all
+
+    port = free_port()
+    ready = threading.Event()
+    out: list = []
+    threading.Thread(target=lambda: Interpreter(out=lambda s: (out.append(s), ready.set())).run(
+        BYTES_SERVER.replace("PORT", str(port))), daemon=True).start()
+    assert ready.wait(10)
+    assert read_all(port) == BYTES_EXPECTED
+
+
+def test_バイト列送信するにはバイト列を渡す():
+    with pytest.raises(SuruError, match="「バイト列送信する」の「を」はバイト列でなければなりません"):
+        run("「通信」 を 読み込む\n「a」 を 1 へ 通信内のバイト列送信する\n")
 
 
 def test_HTTPのサーバー():

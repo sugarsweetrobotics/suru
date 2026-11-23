@@ -1,6 +1,17 @@
 """通信のテストで使う、する のサーバーとお客さん(テストではない)"""
 
+import pathlib
+import shutil
 import socket
+
+# HTTP のテストで使うサーバーのライブラリ。suru-lang/http の HTTP.suru の写しです(本体の標準ライブラリではありません)。
+# 通信・スレッド・GC・試行する を、本物の使い方で確かめるために置いています。
+HTTP_DIR = pathlib.Path(__file__).resolve().parent / "http"
+
+
+def put_http(d: pathlib.Path) -> None:
+    """フォルダ d に HTTP.suru を置く(d のプログラムが「HTTP」を読み込めるように)"""
+    shutil.copy(HTTP_DIR / "HTTP.suru", d / "HTTP.suru")
 
 # 3回答えて待受口を閉じるサーバー。1行目と、2行目のバイト数だけの本文を受け取り、まとめて返す
 SERVER = """「標準」 を 読み込んで 使う
@@ -22,6 +33,33 @@ SERVER = """「標準」 を 読み込んで 使う
   口 と 3 を 答え続けする
 始めする
 """
+
+# 1件だけ受け付けて、0〜255 のバイト列と「あ」を送って閉じるサーバー
+BYTES_SERVER = """「標準」 を 読み込んで 使う
+「通信」 を 読み込む
+
+始めする とは 手順
+  口 とは PORT を 通信内の待受開始した 結果
+  「待受中」 を 表示する
+  接続 とは 口 から 通信内の接続受付した 結果
+  n とは （（0 から 255 を 範囲にする） を バイト列組立する） を 接続 へ 通信内のバイト列送信した 結果
+  「あ」 を 接続 へ 通信内の送信する
+  接続 を 通信内の切断する
+  口 を 通信内の切断する
+  n を 表示する
+始めする
+"""
+
+BYTES_EXPECTED = bytes(range(256)) + "あ".encode("utf-8")
+
+
+def read_all(port: int) -> bytes:
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+        out = b""
+        while chunk := s.recv(65536):
+            out += chunk
+    return out
+
 
 REQUESTS = [("こんにちは", "日本"), ("2番目", ""), ("three", "abc" * 1000)]
 
@@ -65,6 +103,18 @@ HTTP_ACTION_SERVER = """「HTTP」 を 読み込む
   （要求 の 本文 + 「/」 + （要求 から 「X-Name」 を HTTP内の見出し値にする）） を HTTP内の本文応答して 結果にする
 
 PORT を 記録すること で HTTP内の動作待受する
+"""
+
+
+# フォルダを配るサーバー(Go 版と Python 版で同じ IR になるかを見る)
+HTTP_STATIC_SERVER = """「HTTP」 を 読み込む
+「標準」 を 読み込んで 使う
+
+要求 を 案内する とは
+  もし 要求 の 道 が 「/api/」 で 先頭一致である ならば （「api」 を HTTP内の本文応答して 結果にする）
+  そうでなければ 「/static」 から 「public」 を 要求 で HTTP内の前置付配信する
+
+PORT を 案内すること で HTTP内の動作待受する
 """
 
 

@@ -3923,6 +3923,12 @@ def _send(net: _Net, a: dict, line: int) -> int:
     return len(data)
 
 
+def _send_bytes(net: _Net, a: dict, line: int) -> int:
+    data = _bytes(a[WO], "「バイト列送信する」の「を」", line)
+    net.get(a["へ"], "接続", line).sendall(data)
+    return len(data)
+
+
 def _close(net: _Net, a: dict, line: int) -> int:
     v = a[WO]
     sock = net.get(v, "待受口か接続", line)
@@ -3940,6 +3946,7 @@ NET_PRIMITIVES = [
     Builtin("行受信する", [("から", True)], _net_action("行受信する", _recv_line)),
     Builtin("受信する", [("から", True), (WO, True)], _net_action("受信する", _recv)),
     Builtin("送信する", [(WO, True), ("へ", True)], _net_action("送信する", _send)),
+    Builtin("バイト列送信する", [(WO, True), ("へ", True)], _net_action("バイト列送信する", _send_bytes)),
     Builtin("切断する", [(WO, True)], _net_action("切断する", _close)),
 ]
 
