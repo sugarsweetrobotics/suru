@@ -48,9 +48,9 @@ func TestParseDeps(t *testing.T) {
 		t.Fatalf("依存の読み違い: %+v", p.Deps)
 	}
 	for src, want := range map[string]string{
-		"名前 とは 「a」\n依存 とは 「github.com/x/y」\n":            "版がありません",
+		"名前 とは 「a」\n依存 とは 「github.com/x/y」\n":          "版がありません",
 		"名前 とは 「a」\n依存 とは 「x.com/y@1」 と 「x.com/y@2」\n": "2回書かれています",
-		"名前 とは 「a」\n依存 とは 3\n":                           "「依存」には",
+		"名前 とは 「a」\n依存 とは 3\n":                         "「依存」には",
 	} {
 		if _, err := ParseConfig(src, "/x"); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%q: %v(「%s」のはず)", src, err, want)
@@ -74,7 +74,7 @@ func TestDependencies(t *testing.T) {
 	// 表示道具 は 計算 の 1.0.0 を使う(アプリは 1.1.0 を使うので、1.1.0 になる)
 	show := filepath.Join(w, "表示道具")
 	gitRepo(t, show, "v0.2.0", map[string]string{
-		"組.suru":    "名前 とは 「表示道具」\n依存 とは 「file://" + calc + "@1.0.0」\n",
+		"組.suru":     "名前 とは 「表示道具」\n依存 とは 「file://" + calc + "@1.0.0」\n",
 		"表示道具.suru":  "「計算」 を 読み込む\n「部品/装飾」 を 読み込む\nx を 二倍表示する とは x を 計算内の二倍して 装飾内の装飾して 表示する\n",
 		"部品/装飾.suru": "x を 装飾する とは x + 1000\n",
 	})
