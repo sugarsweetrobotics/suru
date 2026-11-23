@@ -350,7 +350,7 @@ func template(a Type, node *TCon, v *TVar, t Type, mapping map[*TVar]Type) Type 
 			for i, p := range y.Params {
 				ps[i] = TParam{p.Part, build(p.T)}
 			}
-			return &TFun{ps, build(y.Result)}
+			return &TFun{Params: ps, Result: build(y.Result), Real: y.Real, Strict: y.Strict}
 		}
 		return x
 	}
@@ -381,7 +381,7 @@ func fill(t Type, mapping map[*TVar]Type, self Type) Type {
 		for i, p := range x.Params {
 			ps[i] = TParam{p.Part, fill(p.T, mapping, self)}
 		}
-		return &TFun{ps, fill(x.Result, mapping, self)}
+		return &TFun{Params: ps, Result: fill(x.Result, mapping, self), Real: x.Real, Strict: x.Strict}
 	}
 	return t
 }
@@ -403,6 +403,7 @@ func (t *traitInfo) method(name string) ([]Param, bool) {
 }
 
 type Checker struct {
+	monoNames   map[string]bool // 今推論している定義の名前(引数と区別する)
 	ctx         *ParseContext
 	shapes      *Shapes
 	instances   []*TCon
@@ -470,13 +471,17 @@ func (c *Checker) unify(a, b Type) {
 	if m.occurs && c.shapes.findRecursion(m.v, m.t) {
 		panic(restart{})
 	}
-	throwMismatch()
+	panic(&mismatch{particle: m.particle})
 }
 
 func (c *Checker) unifyOr(a, b Type, line Pos, message func(sa, sb string) string) {
-	if catchMismatch(func() { c.unify(a, b) }) != nil {
+	if m := catchMismatch(func() { c.unify(a, b) }); m != nil {
 		s := show(a, b)
-		c.fail(line, message(s[0], s[1]))
+		note := ""
+		if m.particle {
+			note = "(受け取る関数は、助詞を付けて呼ばれるので、残りの引数の助詞もそろえてください)"
+		}
+		c.fail(line, message(s[0], s[1])+note)
 	}
 }
 
@@ -652,8 +657,14 @@ func (c *Checker) inferDefs(defs []*Define, env *TEnv, sigs map[string]*TypeSig)
 	scope := newTEnv(env)
 	for _, comp := range sccs(defs, c.aliases) {
 		mono := map[string]*TVar{}
+		savedMono := c.monoNames
+		c.monoNames = map[string]bool{}
+		for k := range savedMono {
+			c.monoNames[k] = true
+		}
 		for _, d := range comp {
 			mono[d.Name] = newTVar()
+			c.monoNames[d.Name] = true
 		}
 		inner := newTEnv(scope)
 		for k, v := range mono {
@@ -718,6 +729,7 @@ func (c *Checker) inferDefs(defs []*Define, env *TEnv, sigs map[string]*TypeSig)
 			}
 		}
 		c.solve(inner)
+		c.monoNames = savedMono
 		for _, name := range declOrder {
 			c.checkRigid(sigs[name], declared[name].tvars)
 		}
@@ -969,7 +981,7 @@ func (c *Checker) traitFun(name string, line Pos) *TFun {
 			params = append(params, TParam{p.Part, newTVar()})
 		}
 	}
-	ftype := &TFun{params, newTVar()}
+	ftype := &TFun{Params: params, Result: newTVar()}
 	if len(sig) > 0 {
 		c.pending = append(c.pending, &Constraint{T: t, Line: line, Trait: trait, Method: name, FType: ftype})
 	}
@@ -1054,7 +1066,7 @@ func (c *Checker) declaredType(sg *TypeSig) (Type, *tvarMap) {
 	for _, p := range sg.Params {
 		ps = append(ps, TParam{p.Part, c.typeOf(p.Type, tvars, sg.Line)})
 	}
-	return &TFun{ps, result}, tvars
+	return &TFun{Params: ps, Result: result}, tvars
 }
 
 func (c *Checker) typeOf(te Node, tvars *tvarMap, line Pos) Type {
@@ -1066,7 +1078,7 @@ func (c *Checker) typeOf(te Node, tvars *tvarMap, line Pos) Type {
 		for _, p := range x.Params {
 			ps = append(ps, TParam{p.Part, c.typeOf(p.Type, tvars, line)})
 		}
-		return &TFun{ps, c.typeOf(x.Result, tvars, line)}
+		return &TFun{Params: ps, Result: c.typeOf(x.Result, tvars, line), Real: true}
 	}
 	tn := te.(*TypeName)
 	var args []Type
@@ -1148,7 +1160,7 @@ func (c *Checker) functionHead(d *Define, env *TEnv, mono Type) (*TEnv, *TFun) {
 	for _, p := range d.Params {
 		params = append(params, TParam{p.Part, c.bindParam(p, local)})
 	}
-	t := &TFun{params, newTVar()}
+	t := &TFun{Params: params, Result: newTVar(), Real: true}
 	if mono != nil {
 		c.unify(mono, t)
 	}
@@ -1179,7 +1191,7 @@ func (c *Checker) inferDefine(d *Define, env *TEnv, local *TEnv, t *TFun, sg *Ty
 	if isPredicate(d.Name) {
 		c.expect(result, BOOL, d.Line, "述語「"+d.Name+"」の値")
 	}
-	return &TFun{t.Params, result}
+	return &TFun{Params: t.Params, Result: result, Real: true}
 }
 
 func (c *Checker) bindParam(p Param, env *TEnv) Type {
@@ -1292,7 +1304,7 @@ func (c *Checker) infer(node Node, env *TEnv) Type {
 			return "無名関数の値の型が合いません(" + sa + " と " + sb + ")"
 		})
 		c.exits = c.exits[:len(c.exits)-1]
-		return &TFun{params, result}
+		return &TFun{Params: params, Result: result, Real: true}
 	case *Call:
 		return c.inferCall(n, env)
 	case *Ref:
@@ -1482,7 +1494,7 @@ func (c *Checker) inferCall(n *Call, env *TEnv) Type {
 		for i, a := range args {
 			ps[i] = TParam{a.part, a.t}
 		}
-		c.note(n.Line, n.Name, &TFun{ps, result}, false)
+		c.note(n.Line, n.Name, &TFun{Params: ps, Result: result}, false)
 	}
 	if each {
 		result = lst(result)
@@ -1510,6 +1522,9 @@ func (c *Checker) callType(name string, args typedArgs, line Pos, env *TEnv) Typ
 	if v != nil {
 		t := prune(c.inst(v, line, name))
 		if f, ok := t.(*TFun); ok {
+			if _, isScheme := v.(*Scheme); !isScheme && !c.monoNames[name] {
+				f.Strict = true // 受け取った関数を助詞を付けて呼ぶ
+			}
 			return c.callFun(name, f, args, line)
 		}
 		return newTVar()
@@ -1600,7 +1615,7 @@ func (c *Checker) inferRef(n *Ref, env *TEnv) Type {
 			rest = append(rest, p)
 		}
 	}
-	return &TFun{rest, f.Result}
+	return &TFun{Params: rest, Result: f.Result, Real: f.Real}
 }
 
 func (c *Checker) apply(fn Type, values []Type, line Pos, what string) Type {
@@ -1611,7 +1626,7 @@ func (c *Checker) apply(fn Type, values []Type, line Pos, what string) Type {
 		for _, v := range values {
 			ps = append(ps, TParam{WO, v})
 		}
-		c.unify(t, &TFun{ps, r})
+		c.unify(t, &TFun{Params: ps, Result: r})
 		return r
 	}
 	f, ok := t.(*TFun)
@@ -1628,7 +1643,7 @@ func (c *Checker) apply(fn Type, values []Type, line Pos, what string) Type {
 	}
 	rest := f.Params[len(values):]
 	if len(rest) > 0 {
-		return &TFun{rest, f.Result}
+		return &TFun{Params: rest, Result: f.Result, Real: f.Real}
 	}
 	return f.Result
 }
@@ -1963,7 +1978,7 @@ func (c *Checker) useImpl(impl Type, m, elem, k, out Type, method string, line P
 		})
 	}
 	if de, ok := params["で"]; ok {
-		c.unifyOr(&TFun{[]TParam{{WO, elem}}, k}, de, line, func(sa, sb string) string {
+		c.unifyOr(&TFun{Params: []TParam{{WO, elem}}, Result: k}, de, line, func(sa, sb string) string {
 			return "「" + method + "」(" + tname + "の実装)の「で」には" + sb + "が必要ですが、" + sa + "が渡されています"
 		})
 	}

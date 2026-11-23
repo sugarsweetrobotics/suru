@@ -70,13 +70,17 @@ class TCon:
 
 
 class TFun:
-    """関数。引数は (助詞, 型) の並び(定義の順)。関数の値として渡すときは順番で合わせる"""
+    """関数。引数は (助詞, 型) の並び(定義の順)。関数の値として渡すときは順番で合わせる。
+    real: 助詞が本物(定義・無名関数・部分適用・型の宣言のもの。組み込みの型の「を」の仮置きではない)。
+    strict: 受け取った関数を助詞を付けて呼ぶところがある(助詞もそろえる。#104)"""
 
-    __slots__ = ("params", "result")
+    __slots__ = ("params", "result", "real", "strict")
 
-    def __init__(self, params: list, result: Any):
+    def __init__(self, params: list, result: Any, real: bool = False, strict: bool = False):
         self.params = list(params)
         self.result = result
+        self.real = real
+        self.strict = strict
 
 
 NUM, STR, BOOL = TCon("数"), TCon("文字列"), TCon("真偽")
@@ -115,6 +119,10 @@ def ftv(t: Any, out: set | None = None) -> set:
 
 class Mismatch(Exception):
     pass
+
+
+class ParticleMismatch(Mismatch):
+    """助詞を付けて呼ぶ関数の、助詞が違う"""
 
 
 class Occurs(Mismatch):
@@ -182,8 +190,17 @@ def unify(a: Any, b: Any) -> None:
     if isinstance(a, TFun) and isinstance(b, TFun):
         if len(a.params) != len(b.params):
             raise Mismatch()
-        for (_, x), (_, y) in zip(a.params, b.params):
-            unify(x, y)
+        if (a.strict or b.strict) and a.real and b.real:
+            # 助詞を付けて呼ばれる関数は、助詞もそろえる(助詞ごとに合わせる)
+            bp = dict(b.params)
+            if sorted(bp) != sorted(p for p, _ in a.params):
+                raise ParticleMismatch()
+            a.strict = b.strict = True
+            for p, x in a.params:
+                unify(x, bp[p])
+        else:
+            for (_, x), (_, y) in zip(a.params, b.params):
+                unify(x, y)
         unify(a.result, b.result)
         return
     raise Mismatch()
@@ -316,7 +333,7 @@ def _subst(t: Any, m: dict) -> Any:
     if isinstance(t, TCon):
         return TCon(t.name, tuple(_subst(a, m) for a in t.args)) if t.args else t
     if isinstance(t, TFun):
-        return TFun([(p, _subst(a, m)) for p, a in t.params], _subst(t.result, m))
+        return TFun([(p, _subst(a, m)) for p, a in t.params], _subst(t.result, m), t.real, t.strict)
     return t
 
 
@@ -556,7 +573,7 @@ def _template(a: Any, node: TCon, v: TVar, t: Any, mapping: dict) -> Any:
         if isinstance(x, TCon):
             return TCon(x.name, tuple(build(y) for y in x.args)) if x.args else x
         if isinstance(x, TFun):
-            return TFun([(p, build(y)) for p, y in x.params], build(x.result))
+            return TFun([(p, build(y)) for p, y in x.params], build(x.result), x.real, x.strict)
         return x
 
     return build(a)
@@ -580,7 +597,7 @@ def _fill(t: Any, mapping: dict, self_t: Any) -> Any:
     if isinstance(t, TCon):
         return TCon(t.name, tuple(_fill(a, mapping, self_t) for a in t.args)) if t.args else t
     if isinstance(t, TFun):
-        return TFun([(p, _fill(a, mapping, self_t)) for p, a in t.params], _fill(t.result, mapping, self_t))
+        return TFun([(p, _fill(a, mapping, self_t)) for p, a in t.params], _fill(t.result, mapping, self_t), t.real, t.strict)
     return t
 
 
@@ -600,6 +617,7 @@ class Checker:
         self.pending: list[Constraint] = []  # まだ確かめていない条件
         self.line: Any = None  # 今見ている式の行(位置の分からない式のエラー用)
         self.env: TEnv = TEnv()  # 組み込み関数の型を調べるときの環境
+        self.mono_names: set = set()  # 今推論している定義の名前(引数と区別する)
 
     # --- エラー ---------------------------------------------------------
 
@@ -619,9 +637,11 @@ class Checker:
         """a と b をそろえる。そろわなければ message(a, b の表示) のエラー"""
         try:
             self.unify(a, b)
-        except Mismatch:
+        except Mismatch as e:
             sa, sb = show(a, b)
-            raise self.err(message(sa, sb), line) from None
+            note = ("(受け取る関数は、助詞を付けて呼ばれるので、残りの引数の助詞もそろえてください)"
+                    if isinstance(e, ParticleMismatch) else "")
+            raise self.err(message(sa, sb) + note, line) from None
 
     def expect(self, actual: Any, expected: Any, line: Any, what: str) -> None:
         self.unify_or(
@@ -726,6 +746,8 @@ class Checker:
         scope = TEnv(env)
         for comp in sccs(defs, self.aliases):
             mono = {d.name: TVar() for d in comp}
+            saved_mono = self.mono_names
+            self.mono_names = saved_mono | set(mono)
             inner = TEnv(scope)
             inner.vars.update(mono)
             # 宣言した型を先に付ける
@@ -748,6 +770,7 @@ class Checker:
                     (lambda sa, sb, d=d: f"「{display_name(d.name)}」の型が合いません({sa} と {sb})"),
                 )
             self.solve(inner)
+            self.mono_names = saved_mono
             for name, (_, tvars) in declared.items():
                 self.check_rigid(sigs[name], tvars)
             outer_free = scope.free_vars()
@@ -910,7 +933,8 @@ class Checker:
         if isinstance(te, TypeVarName):
             return tvars.setdefault(te.name, TVar())
         if isinstance(te, TypeFun):
-            return TFun([(p, self.type_of(t, tvars, line)) for p, t in te.params], self.type_of(te.result, tvars, line))
+            return TFun([(p, self.type_of(t, tvars, line)) for p, t in te.params], self.type_of(te.result, tvars, line),
+                        real=True)
         args = [self.type_of(a, tvars, line) for a in te.args]
         if te.name in NUM_ALIASES:
             return NUM
@@ -953,7 +977,7 @@ class Checker:
     def function_head(self, d: Define, env: TEnv, mono: Any = None) -> tuple:
         local = TEnv(env)
         params = [(p, self.bind_param(pat, local)) for p, pat in d.params]
-        t = TFun(params, TVar())
+        t = TFun(params, TVar(), real=True)
         if mono is not None:
             self.unify(mono, t)
         return local, t
@@ -977,7 +1001,7 @@ class Checker:
             self.expect(result, STR, d.line, f"「{TO_STRING}」の値")
         if is_predicate(d.name):
             self.expect(result, BOOL, d.line, f"述語「{d.name}」の値")
-        return TFun(params, result)
+        return TFun(params, result, real=True)
 
     def bind_param(self, pat: Any, env: TEnv) -> Any:
         """関数の引数(「a」か「a と b」)に型を付ける"""
@@ -1122,7 +1146,7 @@ class Checker:
                           lambda sa, sb: f"無名関数の値の型が合いません({sa} と {sb})")
         finally:
             self.exits.pop()
-        return TFun(params, result)
+        return TFun(params, result, real=True)
 
     def unwrap_type(self, value: Any, target: Any, call: Any, line: Any, name: str = "") -> Any:
         """「した 中身」: value(成否・有無)の中の値の型。失敗は target(返す先の型)として返す。
@@ -1196,6 +1220,8 @@ class Checker:
         if v is not None:
             t = prune(self.inst(v, line, name))
             if isinstance(t, TFun):
+                if not isinstance(v, Scheme) and name not in self.mono_names:
+                    t.strict = True  # 受け取った関数を助詞を付けて呼ぶ
                 return self.call_fun(name, t, args, line)
             return TVar()
         if name in self.method_trait:
@@ -1251,7 +1277,7 @@ class Checker:
             if p not in params:
                 raise self.err(f"「{node.name}」は「{p}」の引数を受け取りません", node.line)
             self.arg(at, params[p], node.line, node.name, p)
-        return TFun([(p, x) for p, x in t.params if p not in given], t.result)
+        return TFun([(p, x) for p, x in t.params if p not in given], t.result, t.real)
 
     def apply(self, fn: Any, values: list, line: Any, what: str) -> Any:
         """関数の値に値を順に渡したときの型(足りなければ部分適用)"""
@@ -1267,7 +1293,7 @@ class Checker:
         for (p, pt), v in zip(t.params, values):
             self.unify_or(v, pt, line, lambda sa, sb: f"{what}の関数は{sb}を受け取りますが、{sa}が渡されます")
         rest = t.params[len(values):]
-        return TFun(rest, t.result) if rest else t.result
+        return TFun(rest, t.result, t.real) if rest else t.result
 
     # --- 組 ---------------------------------------------------------------
 

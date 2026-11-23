@@ -158,22 +158,22 @@ func init() {
 
 	consFun := func() Type {
 		x := newTVar()
-		return &TFun{[]TParam{{WO, x}, {"に", lst(x)}}, lst(x)}
+		return &TFun{Params: []TParam{{WO, x}, {"に", lst(x)}}, Result: lst(x)}
 	}
 	builtinFuns = map[string]func() Type{
-		"表示する":   func() Type { return &TFun{[]TParam{{WO, newTVar()}}, act(newTVar())} },
-		"続表示する":  func() Type { return &TFun{[]TParam{{WO, newTVar()}}, act(newTVar())} },
-		"入力する":   func() Type { return &TFun{nil, act(STR)} },
-		"数値にする":  func() Type { return &TFun{[]TParam{{WO, STR}}, NUM} },
-		"絶対値にする": func() Type { return &TFun{[]TParam{{WO, NUM}}, NUM} },
-		"加算する":   func() Type { return &TFun{[]TParam{{WO, NUM}, {"に", NUM}}, NUM} },
-		"乗算する":   func() Type { return &TFun{[]TParam{{WO, NUM}, {"に", NUM}}, NUM} },
-		"減算する":   func() Type { return &TFun{[]TParam{{"から", NUM}, {WO, NUM}}, NUM} },
-		"除算する":   func() Type { return &TFun{[]TParam{{WO, NUM}, {"で", NUM}}, NUM} },
-		ToString: func() Type { return &TFun{[]TParam{{WO, newTVar()}}, STR} },
+		"表示する":   func() Type { return &TFun{Params: []TParam{{WO, newTVar()}}, Result: act(newTVar())} },
+		"続表示する":  func() Type { return &TFun{Params: []TParam{{WO, newTVar()}}, Result: act(newTVar())} },
+		"入力する":   func() Type { return &TFun{Params: nil, Result: act(STR)} },
+		"数値にする":  func() Type { return &TFun{Params: []TParam{{WO, STR}}, Result: NUM} },
+		"絶対値にする": func() Type { return &TFun{Params: []TParam{{WO, NUM}}, Result: NUM} },
+		"加算する":   func() Type { return &TFun{Params: []TParam{{WO, NUM}, {"に", NUM}}, Result: NUM} },
+		"乗算する":   func() Type { return &TFun{Params: []TParam{{WO, NUM}, {"に", NUM}}, Result: NUM} },
+		"減算する":   func() Type { return &TFun{Params: []TParam{{"から", NUM}, {WO, NUM}}, Result: NUM} },
+		"除算する":   func() Type { return &TFun{Params: []TParam{{WO, NUM}, {"で", NUM}}, Result: NUM} },
+		ToString: func() Type { return &TFun{Params: []TParam{{WO, newTVar()}}, Result: STR} },
 		UnitName: func() Type {
 			x := newTVar()
-			return &TFun{[]TParam{{WO, x}}, newPureVar(x)}
+			return &TFun{Params: []TParam{{WO, x}}, Result: newPureVar(x)}
 		},
 		"追加する": consFun,
 		"挿入する": consFun,
@@ -184,7 +184,7 @@ func init() {
 		for _, p := range params {
 			parts = append(parts, req(p.Part))
 		}
-		prim(name, parts, func() Type { return &TFun{append([]TParam{}, params...), result} },
+		prim(name, parts, func() Type { return &TFun{Params: append([]TParam{}, params...), Result: result} },
 			func(c *Checker, a typedArgs, line Pos) Type {
 				for _, p := range params {
 					need(c, a, p.Part, p.T, line, name)
@@ -222,17 +222,17 @@ func init() {
 	}
 	simple("バイト列排他和にする", []TParam{{WO, bytesT}, {"で", bytesT}}, bytesT)
 	prim("直列化する", []partReq{req(WO)}, func() Type {
-		return &TFun{[]TParam{{WO, newTVar()}}, bytesT}
+		return &TFun{Params: []TParam{{WO, newTVar()}}, Result: bytesT}
 	}, func(c *Checker, a typedArgs, line Pos) Type { return bytesT })
 	prim("復元する", []partReq{req(WO)}, func() Type {
-		return &TFun{[]TParam{{WO, bytesT}}, newTVar()}
+		return &TFun{Params: []TParam{{WO, bytesT}}, Result: newTVar()}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		need(c, a, WO, bytesT, line, "復元する")
 		return newTVar()
 	})
 	prim("固定直列化する", []partReq{req(WO), req("で")}, func() Type {
 		x := newTVar()
-		return &TFun{[]TParam{{WO, x}, {"で", x}}, bytesT}
+		return &TFun{Params: []TParam{{WO, x}, {"で", x}}, Result: bytesT}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		x := newTVar()
 		need(c, a, WO, x, line, "固定直列化する")
@@ -241,7 +241,7 @@ func init() {
 	})
 	prim("固定復元する", []partReq{req(WO), req("で")}, func() Type {
 		x := newTVar()
-		return &TFun{[]TParam{{WO, bytesT}, {"で", x}}, x}
+		return &TFun{Params: []TParam{{WO, bytesT}, {"で", x}}, Result: x}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		x := newTVar()
 		need(c, a, WO, bytesT, line, "固定復元する")
@@ -253,19 +253,19 @@ func init() {
 	simple("エラー番号取得する", nil, act(NUM))
 	simple("引数取得する", nil, act(lst(STR)))
 	prim("終了する", []partReq{req(WO)}, func() Type {
-		return &TFun{[]TParam{{WO, NUM}}, act(newTVar())}
+		return &TFun{Params: []TParam{{WO, NUM}}, Result: act(newTVar())}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		need(c, a, WO, NUM, line, "終了する")
 		return act(newTVar())
 	})
 	prim("失敗する", []partReq{req(WO)}, func() Type {
-		return &TFun{[]TParam{{WO, STR}}, act(newTVar())}
+		return &TFun{Params: []TParam{{WO, STR}}, Result: act(newTVar())}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		need(c, a, WO, STR, line, "失敗する")
 		return act(newTVar())
 	})
 	prim("中断する", []partReq{req(WO)}, func() Type {
-		return &TFun{[]TParam{{WO, STR}}, newTVar()}
+		return &TFun{Params: []TParam{{WO, STR}}, Result: newTVar()}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		need(c, a, WO, STR, line, "中断する")
 		return newTVar()
@@ -273,7 +273,7 @@ func init() {
 	resultT := func(a, e Type) Type { return &TCon{"成否", []Type{a, e}} }
 	prim("失敗説明する", []partReq{req(WO), req("で")}, func() Type {
 		r := resultT(newTVar(), newTVar())
-		return &TFun{[]TParam{{WO, r}, {"で", STR}}, r}
+		return &TFun{Params: []TParam{{WO, r}, {"で", STR}}, Result: r}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		r := resultT(newTVar(), newTVar())
 		need(c, a, WO, r, line, "失敗説明する")
@@ -281,29 +281,29 @@ func init() {
 		return r
 	})
 	prim("失敗詳細にする", []partReq{req(WO)}, func() Type {
-		return &TFun{[]TParam{{WO, resultT(newTVar(), newTVar())}}, STR}
+		return &TFun{Params: []TParam{{WO, resultT(newTVar(), newTVar())}}, Result: STR}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		need(c, a, WO, resultT(newTVar(), newTVar()), line, "失敗詳細にする")
 		return STR
 	})
 	prim("入力確認する", []partReq{opt(WO)}, func() Type {
-		return &TFun{nil, act(&TCon{"有無", []Type{STR}})}
+		return &TFun{Params: nil, Result: act(&TCon{"有無", []Type{STR}})}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		return act(&TCon{"有無", []Type{STR}})
 	})
 	prim("数値確認する", []partReq{req(WO)}, func() Type {
-		return &TFun{[]TParam{{WO, STR}}, resultT(NUM, STR)}
+		return &TFun{Params: []TParam{{WO, STR}}, Result: resultT(NUM, STR)}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		need(c, a, WO, STR, line, "数値確認する")
 		return resultT(NUM, STR)
 	})
 	prim("試算する", []partReq{req(WO)}, func() Type {
 		x := newTVar()
-		return &TFun{[]TParam{{WO, &TFun{nil, x}}}, resultT(x, STR)}
+		return &TFun{Params: []TParam{{WO, &TFun{Params: nil, Result: x}}}, Result: resultT(x, STR)}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		r := newTVar()
 		if t, ok := a.get(WO); ok {
-			c.unifyOr(t, &TFun{nil, r}, line, func(sa, sb string) string {
+			c.unifyOr(t, &TFun{Params: nil, Result: r}, line, func(sa, sb string) string {
 				return "「試算する」の「を」には、引数を全部渡した関数の値(「… すること」)が必要ですが、" + sa + "が渡されています"
 			})
 		}
@@ -311,7 +311,7 @@ func init() {
 	})
 	prim("試行する", []partReq{req(WO), opt("で")}, func() Type {
 		x := newTVar()
-		return &TFun{[]TParam{{WO, act(x)}, {"で", act(x)}}, act(x)}
+		return &TFun{Params: []TParam{{WO, act(x)}, {"で", act(x)}}, Result: act(x)}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		x := newTVar()
 		need(c, a, WO, act(x), line, "試行する")
@@ -323,7 +323,7 @@ func init() {
 	})
 	prim("後始末実行する", []partReq{req(WO), req("で")}, func() Type {
 		x := newTVar()
-		return &TFun{[]TParam{{WO, act(x)}, {"で", act(newTVar())}}, act(x)}
+		return &TFun{Params: []TParam{{WO, act(x)}, {"で", act(newTVar())}}, Result: act(x)}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		x := newTVar()
 		need(c, a, WO, act(x), line, "後始末実行する")
@@ -342,7 +342,7 @@ func init() {
 	// スレッド(「スレッド」の組み込み)。並行開始した結果は、合流する(待って結果を返す)動作
 	prim("並行開始する", []partReq{req(WO)}, func() Type {
 		x := newTVar()
-		return &TFun{[]TParam{{WO, act(x)}}, act(threadT(x))}
+		return &TFun{Params: []TParam{{WO, act(x)}}, Result: act(threadT(x))}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		x := newTVar()
 		need(c, a, WO, act(x), line, "並行開始する")
@@ -350,7 +350,7 @@ func init() {
 	})
 	prim("合流する", []partReq{req(WO)}, func() Type {
 		x := newTVar()
-		return &TFun{[]TParam{{WO, threadT(x)}}, act(x)}
+		return &TFun{Params: []TParam{{WO, threadT(x)}}, Result: act(x)}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		x := newTVar()
 		need(c, a, WO, threadT(x), line, "合流する")
@@ -358,7 +358,7 @@ func init() {
 	})
 	prim("並列写像する", []partReq{req(WO), req("で")}, func() Type {
 		x, y := newTVar(), newTVar()
-		return &TFun{[]TParam{{WO, lst(x)}, {"で", &TFun{[]TParam{{WO, x}}, y}}}, lst(y)}
+		return &TFun{Params: []TParam{{WO, lst(x)}, {"で", &TFun{Params: []TParam{{WO, x}}, Result: y}}}, Result: lst(y)}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		elem := newTVar()
 		need(c, a, WO, lst(elem), line, "並列写像する")
@@ -372,7 +372,7 @@ func init() {
 		}
 		prim(name, parts, func() Type {
 			x := newTVar()
-			return &TFun{params(x), result(x)}
+			return &TFun{Params: params(x), Result: result(x)}
 		}, func(c *Checker, a typedArgs, line Pos) Type {
 			x := newTVar()
 			for _, p := range params(x) {
@@ -400,7 +400,7 @@ func init() {
 	chanPrim("箱書込する", func(x Type) []TParam { return []TParam{{WO, x}, {"へ", boxT(x)}} }, func(x Type) Type { return act(x) })
 	prim("箱更新する", []partReq{req(WO), req("で")}, func() Type {
 		x := newTVar()
-		return &TFun{[]TParam{{WO, boxT(x)}, {"で", &TFun{[]TParam{{WO, x}}, x}}}, act(x)}
+		return &TFun{Params: []TParam{{WO, boxT(x)}, {"で", &TFun{Params: []TParam{{WO, x}}, Result: x}}}, Result: act(x)}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		x := newTVar()
 		need(c, a, WO, boxT(x), line, "箱更新する")
@@ -410,7 +410,7 @@ func init() {
 	})
 	prim("通路処理する", []partReq{req(WO), req("で")}, func() Type {
 		x, y := newTVar(), newTVar()
-		return &TFun{[]TParam{{WO, chanT(x)}, {"で", &TFun{[]TParam{{WO, x}}, act(y)}}}, act(NUM)}
+		return &TFun{Params: []TParam{{WO, chanT(x)}, {"で", &TFun{Params: []TParam{{WO, x}}, Result: act(y)}}}, Result: act(NUM)}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		x := newTVar()
 		need(c, a, WO, chanT(x), line, "通路処理する")
@@ -422,7 +422,7 @@ func init() {
 	simple("待機時間設定する", []TParam{{WO, NUM}, {"で", NUM}}, act(NUM))
 	prim("逆順にする", []partReq{req(WO)}, func() Type {
 		x := newTVar()
-		return &TFun{[]TParam{{WO, x}}, x}
+		return &TFun{Params: []TParam{{WO, x}}, Result: x}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		c.needKind(a.must(WO), []string{"文字列", "リスト"}, line, "「逆順にする」の「を」は文字列かリスト")
 		return a.must(WO)
@@ -431,7 +431,7 @@ func init() {
 		n := name
 		prim(n, []partReq{req("から"), req(WO)}, func() Type {
 			s := newTVar()
-			return &TFun{[]TParam{{"から", s}, {WO, NUM}}, s}
+			return &TFun{Params: []TParam{{"から", s}, {WO, NUM}}, Result: s}
 		}, func(c *Checker, a typedArgs, line Pos) Type {
 			c.needKind(a.must("から"), []string{"文字列", "リスト"}, line, "「"+n+"」の「から」は文字列かリスト")
 			need(c, a, WO, NUM, line, n)
@@ -443,7 +443,7 @@ func init() {
 	}
 	prim("番目取得する", []partReq{req("から"), req(WO)}, func() Type {
 		e := newTVar()
-		return &TFun{[]TParam{{"から", lst(e)}, {WO, NUM}}, e}
+		return &TFun{Params: []TParam{{"から", lst(e)}, {WO, NUM}}, Result: e}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		need(c, a, WO, NUM, line, "番目取得する")
 		it := newTVar()
@@ -452,7 +452,7 @@ func init() {
 	})
 	prim("含有である", []partReq{req(GA), req(WO)}, func() Type {
 		e := newTVar()
-		return &TFun{[]TParam{{GA, lst(e)}, {WO, e}}, BOOL}
+		return &TFun{Params: []TParam{{GA, lst(e)}, {WO, e}}, Result: BOOL}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		item(c, a.must(GA), a.must(WO), line, "含有である", "が")
 		return BOOL
