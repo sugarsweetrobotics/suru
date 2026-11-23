@@ -2423,7 +2423,8 @@ BI(m_tostr) {
 BI(m_len) { return mk_int(need_bytes(a[0], "「バイト長にする」の「を」", pos)->n, pos); }
 BI(m_addr) {
     V v = need_num(a[0], pos);
-    if (!IS_INT(v) || INT_VAL(v) < 0) fail(pos, "「%s」は番地にできません(0 以上の整数が必要です)", plain(v).s);
+    /* 負の数は2の補数の番地にする(-1 は (void *)-1。SQLITE_TRANSIENT や MAP_FAILED など) */
+    if (!IS_INT(v)) fail(pos, "「%s」は番地にできません(整数が必要です)", plain(v).s);
     return rt_ffi_from_ptr((void *)(intptr_t)INT_VAL(v));
 }
 /* 直列化: 値をバイト列にする(プロセスどうしで値を渡すため)。

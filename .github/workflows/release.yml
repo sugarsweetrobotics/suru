@@ -40,6 +40,8 @@ jobs:
           else
             echo "version=$(python3 -c 'import re;print(re.search(r"__version__ = \"(.+?)\"", open("suru.py", encoding="utf-8").read()).group(1))')" >> "$GITHUB_OUTPUT"
           fi
+      - name: SQLite を入れる(examples/sqlite.suru をリンクするため)
+        run: sudo apt-get install -y libsqlite3-dev
       - name: テスト
         run: |
           pip install pytest

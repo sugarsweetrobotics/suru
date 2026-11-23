@@ -3552,7 +3552,7 @@ STD_PRIMITIVES = [
     Builtin("文字列にする", [(WO, True)], lambda it, a, line: _decode(a[WO], line)),
     Builtin("バイト長にする", [(WO, True)], lambda it, a, line: len(_bytes(a[WO], "「バイト長にする」の「を」", line))),
     Builtin("番地にする", [(WO, True)], lambda it, a, line: Address(_addr_num(a[WO], line))),
-    Builtin("番地数値にする", [(WO, True)], lambda it, a, line: _addr(a[WO], "「番地数値にする」の「を」", line).value),
+    Builtin("番地数値にする", [(WO, True)], lambda it, a, line: _signed_addr(_addr(a[WO], "「番地数値にする」の「を」", line).value)),
     Builtin("直列化する", [(WO, True)], lambda it, a, line: _serialize(a[WO], line)),
     Builtin("復元する", [(WO, True)], lambda it, a, line: _deserialize(it, a[WO], line)),
     Builtin("固定直列化する", [(WO, True), ("で", True)], lambda it, a, line: _fixed_serialize(a[WO], a["で"], line)),
@@ -3609,11 +3609,17 @@ def _decode(v: Any, line: int) -> str:
         raise SuruError("バイト列が UTF-8 の文字列ではありません", line) from None
 
 
+def _signed_addr(n: int) -> int:
+    """番地を C の intptr_t と同じ符号つきの数にする(コンパイルしたものと同じ値)"""
+    return n - (1 << 64) if n >= 1 << 63 else n
+
+
 def _addr_num(v: Any, line: int) -> int:
     n = _num(v, line)
-    if not isinstance(n, int) or not 0 <= n <= MAX_COMPILED_INT:
-        raise SuruError(f"「{format_value(v)}」は番地にできません(0 以上の整数が必要です)", line)
-    return n
+    if not isinstance(n, int) or not MIN_COMPILED_INT <= n <= MAX_COMPILED_INT:
+        raise SuruError(f"「{format_value(v)}」は番地にできません(整数が必要です)", line)
+    # 負の数は C と同じく2の補数の番地にする(-1 は (void *)-1。SQLITE_TRANSIENT や MAP_FAILED など)
+    return n & 0xFFFFFFFFFFFFFFFF
 
 
 def _peek(p: Any, n: Any, line: int) -> Action:

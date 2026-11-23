@@ -813,6 +813,25 @@ r とは 「/suru-例」 を （0 と 0.0 の 点） で 固定領域作成し�
 （7 と 2.5 の 点） を r へ 固定領域書込する
 ```
 
+### SQLite
+
+1. **`「SQLite」 を 読み込んで 使う` で SQLite のデータベースを使う。** `lib/SQLite.suru` は libsqlite3 を外部の関数として呼びます(macOS には初めから入っています。Linux では `libsqlite3-dev` などを入れます)。名前はどれも `SQL` か `SQLite` で始まります。どれも動作です。例は `examples/sqlite.suru`。
+
+```
+db とは 「店.db」 を SQLite開封した 結果
+db に 「CREATE TABLE 品 (名前 TEXT, 値段 REAL)」 を SQLite実行する
+db に 「INSERT INTO 品 VALUES (?, ?)」 を （（「りんご」 の SQL文字列） と （120 の SQL数）） で SQLite差込実行する
+行群 とは db に 「SELECT 名前 FROM 品 WHERE 値段 < ?」 を （（200 の SQL数） を 空 に 挿入する） で SQLite差込問合した 結果
+db を SQLite閉鎖する
+```
+
+2. **開く・閉じる。** `道 を SQLite開封する` はファイルのデータベースを開き(なければ作る)、接続(`SQLite接続`)を結果にします。`「:memory:」` ならメモリの中だけのデータベースです。`db を SQLite閉鎖する` で閉じます。
+3. **値は選択肢のある型 `SQL値`。** `SQL無`(NULL)、`42 の SQL数`(整数なら INTEGER、小数なら REAL として入れる)、`「a」 の SQL文字列`(TEXT)、`b の SQLバイト列`(BLOB)です。読んだ値もこの型で、パターンマッチで取り出せます。`v を SQL値文字列にする` は表示のための文字列(`SQL無` は「NULL」)です。
+4. **実行する・問い合わせる。** `db に 文 を SQLite実行する` は結果の行のない SQL を実行して、変わった行の数を結果にします(「;」で区切って何文でも書けます)。`db に 文 を SQLite問合する` は結果の行のリストで、1行は `SQL値` のリスト(列の順)です。`db に 文 を SQLite列名取得する` は列の名前のリスト、`db を SQLite最終行番号取得する` は最後に入れた行の rowid です。トランザクションは `「BEGIN」`・`「COMMIT」` を SQLite実行する で書きます。
+5. **値は「?」に入れる。** `SQLite差込実行する`・`SQLite差込問合する` は、文の「?」に値群(`SQL値` のリスト)を前から順に入れます。SQLite が値として受け取るので、文字列に引用符が入っていても SQL を壊しません。人の入力を SQL に使うときは、文字列を `+` でつながずに、こちらを使います。
+6. **失敗は実行時エラー。** 「SQLite で『SELEC 1』を実行するのに失敗しました(near "SELEC": syntax error)」のように、SQLite の理由を付けた実行時エラーになります(`試行する` で受け止められます)。失敗しても、準備した文は片付けます。
+7. **負の数も番地にできる。** C の `(void *)-1` のような印(SQLite の `SQLITE_TRANSIENT` など)を渡すため、`-1 を 番地にする` を2の補数の番地にしました。`番地数値にする` はインタプリタでも符号つきの数(`-1`)を結果にします。
+
 ## ライセンス
 
 - 本体(`suru.py`・`suru_check.py`・`suru_compile.py`、Go 版の `compiler/`・`cmd/`): [GPL-3.0-or-later](LICENSE)
