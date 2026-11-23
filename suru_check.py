@@ -1924,6 +1924,7 @@ def _chan_prim(name: str, params: Any, result: Any) -> None:
 
 
 _chan_prim("通路作成する", lambda x: [("で", NUM)], lambda x: act(_chan(x)))
+_chan_prim("プロセス間通路作成する", lambda x: [], lambda x: act(_chan(x)))
 _chan_prim("通路送信する", lambda x: [(WO, x), ("へ", _chan(x))], lambda x: act(x))
 _chan_prim("通路受信する", lambda x: [("から", _chan(x))], lambda x: act(x))
 _chan_prim("通路閉鎖する", lambda x: [(WO, _chan(x))], lambda x: act(_chan(x)))
