@@ -178,6 +178,49 @@ HTTP_PARALLEL = """「HTTP」 を 読み込む
 PORT を 案内すること で HTTP内の動作並行待受する
 """
 
+# 本当の並列: 4つのスレッドが同じ箱を更新し、通路で作ったばかりのリストを渡し、その間に確保しない計算も動く
+RACE = """「スレッド」 を 読み込んで 使う
+「標準」 を 読み込んで 使う
+数 を 加一する は 数
+x を 加一する とは x + 1
+数 を フィボナッチにする は 数
+n を フィボナッチにする とは もし n < 2 ならば n そうでなければ （n - 1 を フィボナッチにする） + （n - 2 を フィボナッチにする）
+数 を 文字列作成する は 文字列 の リスト
+n を 文字列作成する とは （1 から n を 範囲にする） の それぞれ を 文字列化する
+数 の 箱 を 数 で 箱増加続けする は 数 の 動作
+b を n で 箱増加続けする とは もし n = 0 ならば 0 を 結果にする そうでなければ b を n で 箱増加一回する
+数 の 箱 を 数 で 箱増加一回する は 数 の 動作
+b を n で 箱増加一回する とは 手順
+  b を 加一すること で 箱更新する
+  （20 を 文字列作成する） の 長さ を 結果にする
+  b を n - 1 で 箱増加続けする
+文字列 の リスト の 通路 へ 数 を 生産する は 文字列 の リスト の 通路 の 動作
+c へ n を 生産する とは もし n = 0 ならば c を 通路閉鎖する そうでなければ c へ n を 一つ生産する
+文字列 の リスト の 通路 へ 数 を 一つ生産する は 文字列 の リスト の 通路 の 動作
+c へ n を 一つ生産する とは 手順
+  （30 を 文字列作成する） を c へ 通路送信する
+  c へ n - 1 を 生産する
+文字列 の リスト を 確認する は 数 の 動作
+xs を 確認する とは もし （xs を 「,」 で 結合する） の 長さ が 80 ならば 0 を 結果にする そうでなければ 「壊れた」 を 失敗する
+主 とは 手順
+  b とは 0 で 箱作成した 結果
+  f とは （22 を フィボナッチにして 結果にする） を 並行開始した 結果
+  （（b を N で 箱増加続けする） と （b を N で 箱増加続けする） と （b を N で 箱増加続けする） と （b を N で 箱増加続けする）） を 並行実行する
+  b を 箱読取してから 表示する
+  c とは 4 で 通路作成した 結果
+  p とは （c へ N を 生産する） を 並行開始した 結果
+  c を 確認すること で 通路処理してから 表示する
+  f を 合流してから 表示する
+主
+"""
+
+# 並列写像が本当に並列に計算する(確保しない計算)
+SPEED = """「スレッド」 を 読み込んで 使う
+数 を フィボナッチにする は 数
+n を フィボナッチにする とは もし n < 2 ならば n そうでなければ （n - 1 を フィボナッチにする） + （n - 2 を フィボナッチにする）
+（32 と 32 と 32 と 32） を フィボナッチにすること で MAPして 表示する
+"""
+
 KINDS = ["interp"] + (["binary"] if suru_compile.find_cc() is not None else [])
 
 
@@ -286,3 +329,29 @@ def test_HTTPは接続ごとに並行に答える(tmp_path, kind):
         assert p.poll() is None
     finally:
         p.kill()
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_同時に動くスレッドとGC(tmp_path, kind):
+    n = 300 if kind == "interp" else 3000
+    env = dict(os.environ, SURU_GC_MIN="0")
+    r = subprocess.run(build(RACE.replace("N", str(n)), tmp_path, kind), capture_output=True, text=True, timeout=300, env=env)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == f"{4 * n}\n{n}\n17711\n"
+
+
+@pytest.mark.skipif("binary" not in KINDS or (os.cpu_count() or 1) < 2, reason="clang と2つ以上のコアが必要")
+def test_並列写像は速くなる(tmp_path):
+    def best(src: str, d: pathlib.Path) -> float:
+        cmd = build(src, d, "binary")
+        times = []
+        for _ in range(3):
+            t = time.monotonic()
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            times.append(time.monotonic() - t)
+            assert r.stdout == "（2178309 と 2178309 と 2178309 と 2178309）\n", r.stderr
+        return min(times)
+
+    seq = best(SPEED.replace("を フィボナッチにすること で MAPして", "の それぞれ を フィボナッチにして"), tmp_path / "seq")
+    par = best(SPEED.replace("MAPして", "並列写像して"), tmp_path / "par")
+    assert par < seq * 0.75, (seq, par)
