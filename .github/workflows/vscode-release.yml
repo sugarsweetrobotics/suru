@@ -3,7 +3,8 @@
 #   1. 版を調べて、suru-ls を同梱した .vsix を作る
 #   2. GitHub Releases に置く
 #   3. VS Code Marketplace に公開する(Trusted Publishing。トークンは要りません)
-#   4. Open VSX にも公開する(シークレット OVSX_PAT があるときだけ)
+#   4. Open VSX にも公開する(リポジトリの変数 OPEN_VSX が true のときだけ。Trusted Publishing。
+#      初めの1回だけはトークン OVSX_PAT で出す)
 # 手で動かす(workflow_dispatch)ときは 1 だけを行い、何も公開しません。
 # 準備と手順は docs/リリース.md にあります。
 name: VS Code 拡張のリリース
@@ -78,12 +79,15 @@ jobs:
       # Marketplace の publisher に登録した Trusted Publishing(GitHub の OIDC)で公開する
       - name: VS Code Marketplace
         run: npx --yes @vscode/vsce@latest publish --oidc --packagePath *.vsix
+      # Open VSX の Trusted Publishing は、拡張が一度公開されてからでないと登録できない。
+      # なので初めの1回だけ OVSX_PAT で出し、登録したらシークレットを消す(あると PAT が優先される)
       - name: Open VSX
+        if: vars.OPEN_VSX == 'true'
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
-          if [ -z "$OVSX_PAT" ]; then
-            echo "OVSX_PAT がないので、Open VSX には公開しません"
-            exit 0
+          if [ -n "$OVSX_PAT" ]; then
+            npx --yes ovsx@latest publish *.vsix -p "$OVSX_PAT"
+          else
+            npx --yes ovsx@latest publish *.vsix --trusted-publishing
           fi
-          npx --yes ovsx publish *.vsix -p "$OVSX_PAT"
