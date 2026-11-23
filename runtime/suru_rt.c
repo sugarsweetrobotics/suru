@@ -71,7 +71,7 @@ typedef struct Fn {
 } Fn;
 enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_SENDB, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
        A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_FIFO_NEW, A_CH_FIFO_OPEN, A_CH_FIFO_DEL, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
-       A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY, A_INPUT_OPT, A_RECVB };
+       A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY, A_INPUT_OPT, A_RECVB, A_TIMEOUT };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
@@ -1605,7 +1605,7 @@ static V act_run(Act *a) {
         }
         return mk_str(line, n);
     }
-    case A_LISTEN: case A_ACCEPT: case A_CONNECT: case A_RECVLINE: case A_RECV: case A_RECVB: case A_SEND: case A_SENDB: case A_CLOSE:
+    case A_LISTEN: case A_ACCEPT: case A_CONNECT: case A_RECVLINE: case A_RECV: case A_RECVB: case A_SEND: case A_SENDB: case A_CLOSE: case A_TIMEOUT:
         return net_run(a);
     case A_TRY: {
         TryFrame f;
@@ -2467,6 +2467,7 @@ static V net_run(Act *a) {
         }
         if (!s.in) net_fail(a);
         FILE *in = s.in; /* 待つ間は、表(socks)に触らない */
+        clearerr(in);    /* 前の時間切れの印を消して、続きから読む */
         Buf b = {0};
         world_release();
         if (a->kind == A_RECVLINE) {
@@ -2521,6 +2522,15 @@ static V net_run(Act *a) {
         if (off < n) net_fail(a);
         return mk_int(n, pos);
     }
+    case A_TIMEOUT: { /* 接続 を 秒 で 待機時間設定する(0 なら待ち続ける) */
+        V v = need_num(a->b, pos);
+        double sec = IS_INT(v) ? (double)INT_VAL(v) : AS(Flt, v)->d;
+        if (!(sec >= 0)) fail(pos, "「%s」は待つ秒数ではありません(0 以上の数です)", plain(v).s);
+        int fd = sock_get(a->a, "接続", pos).fd;
+        struct timeval tv = {(time_t)sec, (suseconds_t)((sec - floor(sec)) * 1e6)};
+        if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) < 0 || setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) < 0) net_fail(a);
+        return a->a;
+    }
     case A_CLOSE: {
         pthread_mutex_lock(&sock_mu);
         int64_t k = sock_find(a->a);
@@ -2569,6 +2579,7 @@ BI(n_recvb) { return mk_net(A_RECVB, "バイト列受信する", a[0], a[1], pos
 BI(n_send) { return mk_net(A_SEND, "送信する", a[0], a[1], pos); }  /* を, へ */
 BI(n_sendb) { return mk_net(A_SENDB, "バイト列送信する", a[0], a[1], pos); }  /* を, へ */
 BI(n_close) { return mk_net(A_CLOSE, "切断する", a[0], 0, pos); }
+BI(n_timeout) { return mk_net(A_TIMEOUT, "待機時間設定する", a[0], a[1], pos); } /* を, で */
 
 static const int32_t P1_DE[] = {P_DE}, P2_DE_WO[] = {P_DE, P_WO}, P1_WO[] = {P_WO}, P2_WO_NI[] = {P_WO, P_NI}, P2_KARA_WO[] = {P_KARA, P_WO},
                      P2_WO_DE[] = {P_WO, P_DE}, P2_KARA_DE[] = {P_KARA, P_DE}, P3_WO_KARA_DE[] = {P_WO, P_KARA, P_DE},
@@ -2663,6 +2674,36 @@ BI(m_tostr) {
     return mk_str((const char *)b->d, b->n);
 }
 BI(m_len) { return mk_int(need_bytes(a[0], "「バイト長にする」の「を」", pos)->n, pos); }
+/* ビット演算(整数を2の補数の並びとして扱う。インタプリタと同じ) */
+BI(m_band) { return mk_int(need_int(a[0], "「ビット積にする」の「を」", pos) & need_int(a[1], "「ビット積にする」の「で」", pos), pos); }
+BI(m_bor) { return mk_int(need_int(a[0], "「ビット和にする」の「を」", pos) | need_int(a[1], "「ビット和にする」の「で」", pos), pos); }
+BI(m_bxor) { return mk_int(need_int(a[0], "「排他的論理和にする」の「を」", pos) ^ need_int(a[1], "「排他的論理和にする」の「で」", pos), pos); }
+static int64_t shift_count(V v, const char *name, int32_t pos) {
+    char what[64];
+    snprintf(what, sizeof what, "「%s」の「で」", name);
+    int64_t n = need_int(v, what, pos);
+    if (n < 0 || n > 63) fail(pos, "「%s」の「で」は 0 から 63 までです(「%lld」が渡されました)", name, (long long)n);
+    return n;
+}
+BI(m_shl) {
+    int64_t x = need_int(a[0], "「左シフトする」の「を」", pos), n = shift_count(a[1], "左シフトする", pos);
+    /* はみ出すときは「整数が大きすぎます」(インタプリタは大きな整数のまま) */
+    if (x != 0 && (n >= 62 || x > (INT_MAX62 >> n) || x < (INT_MIN62 >> n)))
+        fail(pos, "整数が大きすぎます(コンパイルしたプログラムの整数は ±%lld までです)", (long long)INT_MAX62);
+    return mk_int((int64_t)((uint64_t)x << n), pos);
+}
+BI(m_shr) {
+    int64_t x = need_int(a[0], "「右シフトする」の「を」", pos), n = shift_count(a[1], "右シフトする", pos);
+    return mk_int(x >> n, pos); /* 負の数は符号を保つ(インタプリタと同じ) */
+}
+BI(m_bytes_xor) { /* b を 鍵 で バイト列排他和にする: 鍵は繰り返して使う */
+    Bytes *b = need_bytes(a[0], "「バイト列排他和にする」の「を」", pos);
+    Bytes *k = need_bytes(a[1], "「バイト列排他和にする」の「で」", pos);
+    if (k->n == 0) fail(pos, "「バイト列排他和にする」の「で」(鍵)が空のバイト列です");
+    Bytes *o = AS(Bytes, mk_bytes(b->d, b->n));
+    for (int64_t i = 0; i < b->n; i++) o->d[i] ^= k->d[i % k->n];
+    return (V)(intptr_t)o;
+}
 BI(m_addr) {
     V v = need_num(a[0], pos);
     /* 負の数は2の補数の番地にする(-1 は (void *)-1。SQLITE_TRANSIENT や MAP_FAILED など) */
@@ -3639,6 +3680,12 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"失敗する", 1, P1_WO, NULL, m_fail},
     {"引数取得する", 0, NULL, NULL, m_args},
     {"終了する", 1, P1_WO, NULL, m_exit},
+    {"ビット積にする", 2, P2_WO_DE, NULL, m_band},
+    {"ビット和にする", 2, P2_WO_DE, NULL, m_bor},
+    {"排他的論理和にする", 2, P2_WO_DE, NULL, m_bxor},
+    {"左シフトする", 2, P2_WO_DE, NULL, m_shl},
+    {"右シフトする", 2, P2_WO_DE, NULL, m_shr},
+    {"バイト列排他和にする", 2, P2_WO_DE, NULL, m_bytes_xor},
     /* 「基本」の組み込み */
     {"中断する", 1, P1_WO, NULL, m_abort},
     {"失敗説明する", 2, P2_WO_DE, NULL, f_explain},
@@ -3670,6 +3717,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"箱書込する", 2, P2_WO_HE, NULL, x_set},
     /* 「通信」の組み込み */
     {"待受開始する", 1, P1_WO, NULL, n_listen},
+    {"待機時間設定する", 2, P2_WO_DE, NULL, n_timeout},
     {"接続受付する", 1, P1_KARA, NULL, n_accept},
     {"接続する", 2, P2_NI_DE, NULL, n_connect},
     {"行受信する", 1, P1_KARA, NULL, n_recvline},

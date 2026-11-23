@@ -217,6 +217,10 @@ func init() {
 	simple("バイト長にする", []TParam{{WO, bytesT}}, NUM)
 	simple("番地にする", []TParam{{WO, NUM}}, addr)
 	simple("番地数値にする", []TParam{{WO, addr}}, NUM)
+	for _, n := range []string{"ビット積にする", "ビット和にする", "排他的論理和にする", "左シフトする", "右シフトする"} {
+		simple(n, []TParam{{WO, NUM}, {"で", NUM}}, NUM)
+	}
+	simple("バイト列排他和にする", []TParam{{WO, bytesT}, {"で", bytesT}}, bytesT)
 	prim("直列化する", []partReq{req(WO)}, func() Type {
 		return &TFun{[]TParam{{WO, newTVar()}}, bytesT}
 	}, func(c *Checker, a typedArgs, line Pos) Type { return bytesT })
@@ -415,6 +419,7 @@ func init() {
 		return act(NUM)
 	})
 	simple("切断する", []TParam{{WO, NUM}}, act(NUM))
+	simple("待機時間設定する", []TParam{{WO, NUM}, {"で", NUM}}, act(NUM))
 	prim("逆順にする", []partReq{req(WO)}, func() Type {
 		x := newTVar()
 		return &TFun{[]TParam{{WO, x}}, x}
