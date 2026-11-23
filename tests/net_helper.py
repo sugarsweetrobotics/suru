@@ -26,6 +26,50 @@ SERVER = """「標準」 を 読み込んで 使う
 REQUESTS = [("こんにちは", "日本"), ("2番目", ""), ("three", "abc" * 1000)]
 
 
+# こちらからつなぐお客さん。1行送り、相手が閉じるまでの行を表示する
+CLIENT = """「標準」 を 読み込んで 使う
+「通信」 を 読み込む
+
+接続 を 全部表示する とは 手順
+  行 とは 接続 から 通信内の行受信した 結果
+  もし 行 が 「」 ならば 接続 を 通信内の切断する そうでなければ 行 を 接続 で 表示続けする
+
+行 を 接続 で 表示続けする とは 手順
+  行 を 空白除去して 表示する
+  接続 を 全部表示する
+
+始めする とは 手順
+  接続 とは 「localhost」 に PORT で 通信内の接続した 結果
+  「こんにちは」 + 改行 を 接続 へ 通信内の送信する
+  接続 を 全部表示する
+始めする
+"""
+
+
+def answer_once(port: int) -> "threading.Thread":
+    """1回だけ答えるサーバーを別スレッドで始める(受け取った行を返し、2行目を足して閉じる)"""
+    import threading
+
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", port))
+    s.listen()
+
+    def serve() -> None:
+        with s:
+            c, _ = s.accept()
+            with c, c.makefile("rb") as f:
+                line = f.readline()
+                c.sendall(b"got:" + line + "二行目\n".encode("utf-8"))
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    return t
+
+
+CLIENT_OUT = ["got:こんにちは", "二行目"]
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
