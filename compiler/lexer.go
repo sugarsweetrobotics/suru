@@ -751,7 +751,7 @@ func splitHiragana(text string, line Pos, afterName, afterValue bool) ([]string,
 	unknown, rest := string(rs[start:end]), string(rs[end:])
 	if afterName && start == 0 {
 		return nil, errAt(line, "名前にひらがな「"+unknown+"」が混ざっています。ひらがなを含む名前は "+
-			NameOpen+"割る数に"+NameClose+"する のように"+NameOpen+NameClose+"で囲んでください")
+			NameOpen+"割った数に"+NameClose+"する のように"+NameOpen+NameClose+"で囲んでください")
 	}
 	if hasAnyPrefix(rest, callForms...) {
 		return nil, hiraganaFunctionError(unknown, line)
