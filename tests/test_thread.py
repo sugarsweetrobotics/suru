@@ -166,6 +166,18 @@ w で 今 に 最大 を 枠内計数する とは w で （今 で 最大 を �
 主
 """
 
+
+# 接続ごとにスレッドで答える HTTP サーバー。/slow は 1 秒待ってから答える
+HTTP_PARALLEL = """「HTTP」 を 読み込む
+「時間」 を 読み込む
+
+要求 を 案内する とは 手順
+  もし 要求 の 道 が 「/slow」 ならば 1 を 時間内の待機する そうでなければ 0 を 結果にする
+  （「道は」 + 要求 の 道） を HTTP内の本文応答して 結果にする
+
+PORT を 案内すること で HTTP内の動作並行待受する
+"""
+
 KINDS = ["interp"] + (["binary"] if suru_compile.find_cc() is not None else [])
 
 
@@ -243,3 +255,34 @@ def test_ロックと枠と箱(tmp_path, kind):
     assert r.returncode == 0, r.stderr
     assert r.stdout == "300\n4\nもう一度持てた\n重ねて持てた\n2\n"
     assert r.stderr == "エラー: 39行目 17文字目: わざと\n"
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_HTTPは接続ごとに並行に答える(tmp_path, kind):
+    import socket
+    import threading
+
+    sys.path.insert(0, str(ROOT / "tests"))
+    import net_helper as N
+
+    port = N.free_port()
+    p = subprocess.Popen(build(HTTP_PARALLEL.replace("PORT", str(port)), tmp_path, kind),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    try:
+        N.wait_http(port)
+        idle = socket.create_connection(("127.0.0.1", port))  # つないだまま何も送らない相手がいても
+        slow: dict = {}
+        th = threading.Thread(target=lambda: slow.update(r=N.http(port, "/slow")))
+        th.start()
+        time.sleep(0.2)
+        t = time.monotonic()
+        assert N.http(port, "/fast")[::2] == (200, "道は/fast")  # 遅い要求や待っている相手を待たない
+        assert time.monotonic() - t < 0.5
+        th.join()
+        assert slow["r"][::2] == (200, "道は/slow")
+        for i in range(200 if kind == "interp" else 2000):
+            assert N.http(port, f"/{i}")[::2] == (200, f"道は/{i}")
+        idle.close()
+        assert p.poll() is None
+    finally:
+        p.kill()
