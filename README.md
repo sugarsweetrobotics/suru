@@ -793,6 +793,15 @@ c を （p を 受け取って p の 横 を 表示する を 返すこと） �
 3. **pkg-config が無ければ確かめない。** 「pkg-config が無いので、…確かめずに進みます」と知らせて進み、足りなければリンクのところでエラーになります。pkg-config の命令は `PKG_CONFIG` で変えられます。
 4. **外部の関数の短い名前は、pkg-config のフォルダからも探す。** `外部の「pcre2-8」` は、OS の普通の探し方で見つからなければ、pkg-config の `libpcre2-8` か `pcre2-8` の `libdir` から探します。Homebrew の `/opt/homebrew/lib` のように、リンカーや dlopen が普通は探さないフォルダにあるライブラリのためです。インタプリタ(ctypes)はそのファイルを開き、コンパイラ(Python 版・Go 版)は `-L` と `-Wl,-rpath` を付けます(`/usr/lib` などの普通のフォルダなら付けません)。kumu の外でも同じです。
 
+### 外部の関数の引数の並び
+
+1. **`外部の「名前」（a と 0 と b）` で、C に渡す引数を並べて書く。** 助詞は6つなので、定義の引数は6つまでですが、C の関数には括弧の中に書いた順に、いくつでも渡せます。括弧の中には定義の引数の名前か整数を `と` でつなぎ、整数は `int64_t` として渡します(使わない文脈の番地の NULL は `0`、`PCRE2_ZERO_TERMINATED` のような `(size_t)-1` は `-1`)。定義の引数は全部、少なくとも1回は書きます。インタプリタ・Python 版と Go 版のコンパイラで同じです。
+
+```
+番地 を 番地 で 数 に 数 から 整数 へ 番地 より 照合呼出する は 整数 の 動作
+符号 を 対象 で 長さ に 開始 から 選択 へ 一致 より 照合呼出する とは 外部の「pcre2_match_8」（符号 と 対象 と 長さ と 開始 と 選択 と 一致 と 0）
+```
+
 ### リリースと配布の方法
 
 1. **4つの方法で配る。** PyPI(`suru-lang`)、GitHub Releases(OS ごとの `suruc`・`suru-ls`・`kumu`)、Homebrew の tap(`suru-lang/homebrew-suru`)、VS Code Marketplace(拡張)です。どれも GitHub Actions がタグから作って公開します。手順と、初めに用意するもの(PyPI の Trusted Publishing、Marketplace の publisher の Trusted Publishing など)は [docs/リリース.md](docs/リリース.md) にあります。

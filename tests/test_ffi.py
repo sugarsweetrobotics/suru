@@ -315,3 +315,52 @@ def test_短い名前はpkg_configのフォルダからも探す(tmp_path, monke
         r = compiled(src, str(tmp_path))
         assert r.returncode == 0, r.stderr
         assert r.stdout == "42\n"
+
+
+SEVEN_C = r"""
+#include <stdint.h>
+int64_t seven(int64_t a, const char *b, int64_t c, int64_t d, int e, void *f, void *g) {
+  return a * 1000000 + (int64_t)b[0] * 1000 + c * 100 + d * 10 + e + (f ? 7000000000 : 0) + (g ? 90000000000 : 0);
+}
+int64_t sub3(int64_t a, int64_t b, int64_t c) { return a - b - c; }
+"""
+
+SEVEN = """外部の「./libseven.so」 を 読み込む
+「標準」 を 読み込んで 使う
+数 を 文字列 で 数 に 数 から 整数 へ 番地 より 七呼出する は 数
+a を b で c に d から e へ f より 七呼出する とは 外部の「seven」（a と b と c と d と e と f と 0）
+数 を 数 で 逆引算する は 数
+a を b で 逆引算する とは 外部の「sub3」（b と a と -1）
+1 を 「A」 で 2 に 3 から 4 へ （0 を 番地にする） より 七呼出する
+1 を 「A」 で 2 に 3 から 4 へ （5 を 番地にする） より 七呼出する
+10 を 3 で 逆引算する
+"""
+
+
+@pytest.fixture
+def sevendir(tmp_path):
+    cc = shutil.which("cc") or shutil.which("clang")
+    (tmp_path / "s.c").write_text(SEVEN_C, encoding="utf-8")
+    subprocess.run([cc, "-shared", "-fPIC", "-o", str(tmp_path / "libseven.so"), str(tmp_path / "s.c")], check=True)
+    return tmp_path
+
+
+@needs_cc
+def test_C_に渡す引数を並べて書く(sevendir):
+    # 助詞は6つなので、7つ以上の引数や定数の引数(NULL など)は「（a と 0 と b）」で並べる
+    suru._FFI_LIBS.clear()
+    want = "1065234\n7001065234\n-6\n"
+    assert interpreted(SEVEN, str(sevendir)) == want
+    if suru_compile.find_cc() is not None:
+        r = compiled(SEVEN, str(sevendir))
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == want
+
+
+def test_C_に渡す引数の並びのまちがい():
+    head = "数 を 数 で 引算する は 数\n"
+    assert "「c」は「引算する」の引数ではありません" in err(head + "a を b で 引算する とは 外部の「sub3」（a と c）\n")
+    assert "引数「b」を C に渡していません" in err(head + "a を b で 引算する とは 外部の「sub3」（a と 0）\n")
+    assert "引数の名前か整数を「と」でつないで" in err(head + "a を b で 引算する とは 外部の「sub3」（a と 「x」 と b）\n")
+    assert "引数の名前か整数を「と」でつないで" in err(head + "a を b で 引算する とは 外部の「sub3」（a と 1.5 と b）\n")
+    assert "引数の名前か整数を「と」でつないで" in err(head + "a を b で 引算する とは 外部の「sub3」（a b）\n")

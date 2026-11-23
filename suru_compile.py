@@ -636,7 +636,11 @@ class Compiler:
                 self.link_libs.append(lib)
         ret = FFI_IR[ext.result]
         if not ext.pointer:
-            decl = f"declare {ret} @{ext.symbol}({', '.join(FFI_IR[t] for t in ext.params)})"
+            if ext.cargs:
+                cts = ["i64" if k == "定数" else FFI_IR[ext.params[v]] for k, v in ext.cargs]
+            else:
+                cts = [FFI_IR[t] for t in ext.params]
+            decl = f"declare {ret} @{ext.symbol}({', '.join(cts)})"
             if self.ffi_decls.setdefault(ext.symbol, decl) != decl:
                 raise S.SuruError(f"外部の関数「{ext.symbol}」が違う型で2回宣言されています", ext.line)
         fname = self.cstr(name)
@@ -651,6 +655,8 @@ class Compiler:
                     continue
                 c = fg.call(FFI_IR[t], f"@rt_ffi_{t}", f"i64 {v}, ptr {fname}, i32 {PART_IDS[p]}, i32 %pos")
                 args.append(f"{FFI_IR[t]} {c}")
+            if ext.cargs:
+                args = [f"i64 {v}" if k == "定数" else args[v] for k, v in ext.cargs]
             fg.call("void", "@rt_ffi_pre", "")
             r = fg.call(ret, fn, ", ".join(args))
             fg.call("void", "@rt_ffi_post", "")

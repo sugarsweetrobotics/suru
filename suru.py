@@ -1085,6 +1085,9 @@ class Extern:
     result: str = ""
     action: bool = False
     pointer: str = ""  # 「外部の（f）」なら、関数の番地を持つ引数の名前(C には渡さない)
+    # 「外部の「f」（a と 0 と b）」なら、C に渡す引数の並び: ("引数", 定義の引数の番号) か ("定数", 整数)。
+    # 読んだときは ("名前", 名前) で、_attach_externs が番号にする。空なら定義の引数の順
+    cargs: list = field(default_factory=list)
 
 
 @dataclass
@@ -2196,6 +2199,16 @@ def parse_statement(node: Node) -> Any:
         if sym.startswith(("rt_", "suru_")):
             raise SuruError(f"「{sym}」は「する」の実行時が使う名前なので、外部の関数にできません", after_t[1].line)
         return Define(name, params, Extern(sym, after_t[1].line), is_function, node.line.number)
+    if (len(after_t) >= 5 and after_t[0].kind == "WORD" and after_t[0].value == KW_EXTERN and not after_t[0].quoted
+            and after_t[1].kind == "STR" and after_t[2].kind == "LP" and after_t[-1].kind == "RP" and not node.children):
+        # 「… とは 外部の「pcre2_match_8」（c と s と n と o と 0 と md と 0）」: C に渡す引数を並べて書く
+        sym = after_t[1].value
+        if not sym.isascii() or not (sym[:1].isalpha() or sym[:1] == "_") or not all(c.isalnum() or c == "_" for c in sym):
+            raise SuruError(f"「{sym}」は C の関数の名前ではありません", after_t[1].line)
+        if sym.startswith(("rt_", "suru_")):
+            raise SuruError(f"「{sym}」は「する」の実行時が使う名前なので、外部の関数にできません", after_t[1].line)
+        return Define(name, params, Extern(sym, after_t[1].line, cargs=_parse_extern_args(after_t[3:-1], after_t[2])),
+                      is_function, node.line.number)
     if (len(after_t) == 4 and after_t[0].kind == "WORD" and after_t[0].value == KW_EXTERN and not after_t[0].quoted
             and after_t[1].kind == "LP" and after_t[2].kind == "WORD" and after_t[3].kind == "RP" and not node.children):
         # 「x を f で 呼ぶ とは 外部の（f）」: 引数 f の番地にある C の関数を呼ぶ
@@ -2664,6 +2677,27 @@ def _ffi_type(te: Any, sig: TypeSig, what: str) -> str:
     raise SuruError(f"外部の関数「{sig.name}」の{what}には {'・'.join(names)} のどれかの型を書いてください", sig.line)
 
 
+def _parse_extern_args(inner: list, lp: Token) -> list:
+    """「（a と 0 と b）」の中: 引数の名前か整数を「と」でつないだもの"""
+    def bad(t: Token) -> SuruError:
+        return SuruError("外部の関数の引数の並びには、引数の名前か整数を「と」でつないで書きます(「（a と 0 と b）」)", t.line)
+    if not inner:
+        raise bad(lp)
+    out: list = []
+    for i, t in enumerate(inner):
+        if i % 2 == 1:
+            if not (t.kind == "KW" and t.value == KW_TO) or i == len(inner) - 1:
+                raise bad(t)
+            continue
+        if t.kind == "WORD" and not t.quoted and t.value != KW_EXTERN:
+            out.append(("名前", t.value, t.line))
+        elif t.kind == "NUM" and type(t.value) is int and INT64_MIN <= t.value <= INT64_MAX:
+            out.append(("定数", t.value, t.line))
+        else:
+            raise bad(t)
+    return out
+
+
 def _attach_externs(statements: list) -> None:
     """外部の関数の定義に、同じファイルのライブラリと型の宣言(C の型)を付ける"""
     libs = [s.path for s in statements if isinstance(s, ExternLib)]
@@ -2683,6 +2717,20 @@ def _attach_externs(statements: list) -> None:
             if not isinstance(pat, str):
                 raise SuruError(f"外部の関数「{d.name}」の引数は名前だけで書いてください", d.line)
         ext.params = [_ffi_type(types[p], sig, f"「{p}」") for p, _ in d.params]
+        if ext.cargs:
+            names = [x for _, x in d.params]
+            cargs = []
+            for kind, v, line in ext.cargs:
+                if kind == "名前":
+                    if v not in names:
+                        raise SuruError(f"「{v}」は「{d.name}」の引数ではありません", line)
+                    cargs.append(("引数", names.index(v)))
+                else:
+                    cargs.append(("定数", v))
+            for i, x in enumerate(names):
+                if ("引数", i) not in cargs:
+                    raise SuruError(f"外部の関数「{d.name}」の引数「{x}」を C に渡していません(「（…）」の中に書きます)", d.line)
+            ext.cargs = cargs
         if ext.pointer:
             names = [x for _, x in d.params]
             if ext.pointer not in names:
@@ -4433,11 +4481,16 @@ def extern_builtin(d: Define) -> Builtin:
             return _ffi_result(ext.result, f(*args), d.name, line)
         if not cfn:
             f = _ffi_symbol(ext, line)
-            f.argtypes = [_ffi_ctype(t) for t in ext.params]
+            if ext.cargs:
+                f.argtypes = [ctypes.c_int64 if k == "定数" else _ffi_ctype(ext.params[v]) for k, v in ext.cargs]
+            else:
+                f.argtypes = [_ffi_ctype(t) for t in ext.params]
             f.restype = _ffi_ctype(ext.result)
             cfn.append(f)
 
         args = [_ffi_arg(t, a[p], d.name, p, line) for t, p in zip(ext.params, parts)]
+        if ext.cargs:
+            args = [v if k == "定数" else args[v] for k, v in ext.cargs]
         ctypes.set_errno(0)
         return _ffi_result(ext.result, cfn[0](*args), d.name, line)
 
