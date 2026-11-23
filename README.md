@@ -16,8 +16,8 @@ python3 -m pytest tests               # テスト
 | 方法 | 入れ方 | 入るもの |
 |---|---|---|
 | pip | `pip install suru-lang` | `suru` |
-| Homebrew(macOS・Linux) | `brew install sugarsweetrobotics/suru/suru` | `suru`・`suruc`・`suru-ls` |
-| バイナリ | [GitHub Releases](https://github.com/sugarsweetrobotics/suru/releases) の `suru-版-OS-CPU.tar.gz` | `suruc`・`suru-ls` |
+| Homebrew(macOS・Linux) | `brew install suru-lang/suru/suru` | `suru`・`suruc`・`suru-ls` |
+| バイナリ | [GitHub Releases](https://github.com/suru-lang/suru/releases) の `suru-版-OS-CPU.tar.gz` | `suruc`・`suru-ls` |
 | VS Code | 拡張機能ビューで「する」を検索 | 拡張(`suru-ls` を同梱) |
 
 バイナリを作る(`suru --翻訳`、`suruc`)には、どの方法でも手元に clang が要ります。macOS では `xcode-select --install`、Ubuntu などでは `sudo apt install clang` で入ります。Windows 用は `suru-ls` だけです(作ったプログラムの実行時ライブラリが POSIX 向けなので、WSL を使ってください)。
@@ -25,7 +25,7 @@ python3 -m pytest tests               # テスト
 ### pip で入れる
 
 ```sh
-pip install suru-lang   # 最新のリポジトリからなら pip install git+https://github.com/sugarsweetrobotics/suru(取ってきたフォルダで pip install . も可)
+pip install suru-lang   # 最新のリポジトリからなら pip install git+https://github.com/suru-lang/suru(取ってきたフォルダで pip install . も可)
 suru examples/basic.suru          # python3 suru.py と同じ(--検査・--検査なし・--翻訳 も使えます)
 suru --version
 ```
@@ -37,7 +37,7 @@ suru --version
 `--翻訳` と同じことを、Go で書いたコンパイラ `suruc` でもできます。出す LLVM IR は Python 版と一字一句同じで、IR を作るまでが 14〜35 倍ほど速くなります(Go 1.23 以降が必要です)。
 
 ```sh
-go install github.com/sugarsweetrobotics/suru/cmd/suruc@latest   # または、取ってきたフォルダで go build ./cmd/suruc
+go install github.com/suru-lang/suru/cmd/suruc@latest   # または、取ってきたフォルダで go build ./cmd/suruc
 suruc examples/basic.suru          # バイナリ examples/basic を作る(clang が必要)
 suruc -O0 examples/basic.suru      # clang の最適化を弱めて、もっと速く作る(-O0 〜 -O3。既定は -O2)
 suruc --ll examples/basic.suru     # LLVM IR だけを出す
@@ -672,7 +672,7 @@ x を f で 番地余弦にする とは 外部の（f）
 
 ### リリースと配布の方法
 
-1. **4つの方法で配る。** PyPI(`suru-lang`)、GitHub Releases(OS ごとの `suruc`・`suru-ls`)、Homebrew の tap(`sugarsweetrobotics/homebrew-suru`)、VS Code Marketplace(拡張)です。どれも GitHub Actions がタグから作って公開します。手順と、初めに用意するもの(PyPI の Trusted Publishing、Marketplace の publisher など)は [docs/リリース.md](docs/リリース.md) にあります。
+1. **4つの方法で配る。** PyPI(`suru-lang`)、GitHub Releases(OS ごとの `suruc`・`suru-ls`)、Homebrew の tap(`suru-lang/homebrew-suru`)、VS Code Marketplace(拡張)です。どれも GitHub Actions がタグから作って公開します。手順と、初めに用意するもの(PyPI の Trusted Publishing、Marketplace の publisher など)は [docs/リリース.md](docs/リリース.md) にあります。
 
 2. **PyPI の名前は `suru-lang`。** `suru` はほかの人が使っていたので、パッケージの名前だけを変えました。入るコマンドとモジュールの名前は `suru` のままです。
 

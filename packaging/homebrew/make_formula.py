@@ -6,7 +6,7 @@
     python3 packaging/homebrew/make_formula.py [--repo 持ち主/suru] 0.1.0 <ソースの tar.gz の sha256> > suru.rb
 
 ソースは GitHub がタグから作る https://github.com/持ち主/suru/archive/refs/tags/v版.tar.gz。
---repo を省くと、環境変数 GITHUB_REPOSITORY か sugarsweetrobotics/suru を使う。
+--repo を省くと、環境変数 GITHUB_REPOSITORY か suru-lang/suru を使う。
 formula は Go 版の suruc・suru-ls をソースからビルドし、Python 版の suru も入れる。
 """
 import os
@@ -60,7 +60,7 @@ end
 
 
 def main(argv):
-    repo = os.environ.get("GITHUB_REPOSITORY") or "sugarsweetrobotics/suru"
+    repo = os.environ.get("GITHUB_REPOSITORY") or "suru-lang/suru"
     if len(argv) >= 3 and argv[1] == "--repo":
         repo = argv[2]
         argv = argv[:1] + argv[3:]

@@ -1,4 +1,4 @@
-module github.com/sugarsweetrobotics/suru
+module github.com/suru-lang/suru
 
 go 1.23.0
 

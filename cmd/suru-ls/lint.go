@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	suru "github.com/sugarsweetrobotics/suru"
-	"github.com/sugarsweetrobotics/suru/cmd/internal/native"
-	"github.com/sugarsweetrobotics/suru/compiler"
+	suru "github.com/suru-lang/suru"
+	"github.com/suru-lang/suru/cmd/internal/native"
+	"github.com/suru-lang/suru/compiler"
 )
 
 // 点検(lib/点検.suru、する で書いた linter)をバイナリにして、知らせを「警告」として出す。

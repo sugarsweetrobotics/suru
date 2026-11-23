@@ -19,7 +19,7 @@
 
 ## 入れ方
 
-1. 「する」本体を入れます: `pip install suru-lang` か `brew install sugarsweetrobotics/suru/suru`(`suru` コマンドが使えるようになります。リポジトリからなら一番上で `pip install .`)。
+1. 「する」本体を入れます: `pip install suru-lang` か `brew install suru-lang/suru/suru`(`suru` コマンドが使えるようになります。リポジトリからなら一番上で `pip install .`)。
    入れなくても、リポジトリのフォルダーを VS Code で開けば、一番上の `suru.py` を `python3` で動かします。
 2. 拡張を入れます。拡張機能ビューで「する」を検索して入れるか、`suru-0.1.0.vsix` があれば、VS Code の拡張機能ビューの「…」→「VSIX からのインストール…」で選びます(コマンドなら `code --install-extension suru-0.1.0.vsix`)。
 
@@ -32,7 +32,7 @@ npm install
 npx @vscode/vsce package
 ```
 
-言語サーバーだけを入れるなら `go install github.com/sugarsweetrobotics/suru/cmd/suru-ls@latest` です(拡張は `~/go/bin/suru-ls` も探します)。
+言語サーバーだけを入れるなら `go install github.com/suru-lang/suru/cmd/suru-ls@latest` です(拡張は `~/go/bin/suru-ls` も探します)。
 
 開発中は、このフォルダーを VS Code で開いて F5 を押すと、拡張を入れた VS Code が別の窓で開きます。
 

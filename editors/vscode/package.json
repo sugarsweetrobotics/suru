@@ -3,16 +3,16 @@
   "displayName": "する",
   "description": "日本語の関数型プログラミング言語「する」の色分け・書きながらの型の検査・型のホバー・定義へ移動・補完・名前の変更・実行",
   "version": "0.4.0",
-  "publisher": "sugarsweetrobotics",
+  "publisher": "suru-lang",
   "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "https://github.com/sugarsweetrobotics/suru",
+    "url": "https://github.com/suru-lang/suru",
     "directory": "editors/vscode"
   },
-  "homepage": "https://github.com/sugarsweetrobotics/suru/tree/main/editors/vscode",
+  "homepage": "https://github.com/suru-lang/suru/tree/main/editors/vscode",
   "bugs": {
-    "url": "https://github.com/sugarsweetrobotics/suru/issues"
+    "url": "https://github.com/suru-lang/suru/issues"
   },
   "engines": {
     "vscode": "^1.82.0"

@@ -25,8 +25,8 @@ import (
 	"sync"
 	"unicode/utf16"
 
-	suru "github.com/sugarsweetrobotics/suru"
-	"github.com/sugarsweetrobotics/suru/compiler"
+	suru "github.com/suru-lang/suru"
+	"github.com/suru-lang/suru/compiler"
 )
 
 // version はリリースのときに -ldflags "-X main.version=…" で書きかえる

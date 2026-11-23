@@ -27,9 +27,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/sugarsweetrobotics/suru"
-Repository = "https://github.com/sugarsweetrobotics/suru"
-Issues = "https://github.com/sugarsweetrobotics/suru/issues"
+Homepage = "https://github.com/suru-lang/suru"
+Repository = "https://github.com/suru-lang/suru"
+Issues = "https://github.com/suru-lang/suru/issues"
 
 [project.scripts]
 suru = "suru:cli"
