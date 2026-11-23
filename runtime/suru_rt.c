@@ -23,6 +23,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netdb.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <sys/file.h>
@@ -68,7 +69,7 @@ typedef struct Fn {
     struct Trait *trait;    /* FK_TRAIT */
     int32_t wo, wo_list;
 } Fn;
-enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
+enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
        A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_FIFO_NEW, A_CH_FIFO_OPEN, A_CH_FIFO_DEL, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
        A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
@@ -1568,7 +1569,7 @@ static V act_run(Act *a) {
         if (n > 0 && line[n - 1] == '\r') n--;
         return mk_str(line, n);
     }
-    case A_LISTEN: case A_ACCEPT: case A_RECVLINE: case A_RECV: case A_SEND: case A_CLOSE:
+    case A_LISTEN: case A_ACCEPT: case A_CONNECT: case A_RECVLINE: case A_RECV: case A_SEND: case A_CLOSE:
         return net_run(a);
     case A_TRY: {
         TryFrame f;
@@ -2360,6 +2361,43 @@ static V net_run(Act *a) {
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
         return mk_int(sock_add(fd), pos);
     }
+    case A_CONNECT: {
+        Str *host = need_str(a->a, "「接続する」の「に」", pos);
+        V v = need_num(a->b, pos);
+        int64_t port = IS_INT(v) ? INT_VAL(v) : -1;
+        if (port < 0 || port > 65535) fail(pos, "「%s」はポートの番号ではありません", plain(v).s);
+        signal(SIGPIPE, SIG_IGN); /* 相手が切れても止まらず、送信のエラーにする */
+        char hs[256], ps[8];
+        if (host->n >= (int64_t)sizeof hs) fail(pos, "「%s」はホストの名前として長すぎます", plain(a->a).s);
+        memcpy(hs, host->s, (size_t)host->n);
+        hs[host->n] = 0;
+        snprintf(ps, sizeof ps, "%d", (int)port);
+        fflush(stdout);
+        struct addrinfo hints = {0}, *res = NULL;
+        hints.ai_family = AF_UNSPEC;
+        hints.ai_socktype = SOCK_STREAM;
+        world_release(); /* 名前を引く間とつなぐ間は、表(socks)に触らない */
+        int g = getaddrinfo(hs, ps, &hints, &res), fd = -1, e = 0;
+        if (g == 0) {
+            for (struct addrinfo *r = res; r; r = r->ai_next) {
+                fd = socket(r->ai_family, r->ai_socktype, r->ai_protocol);
+                if (fd < 0) { e = errno; continue; }
+                int c;
+                do c = connect(fd, r->ai_addr, r->ai_addrlen); while (c < 0 && errno == EINTR);
+                if (c == 0) break;
+                e = errno;
+                close(fd);
+                fd = -1;
+            }
+            freeaddrinfo(res);
+        }
+        world_acquire();
+        if (g != 0) fail(pos, "「接続する」で通信に失敗しました(%s)", gai_strerror(g));
+        errno = e;
+        if (fd < 0) net_fail(a);
+        /* 応答を待つ時間は区切らない(LLM のように最初の応答まで長くかかる相手もいるため) */
+        return mk_int(sock_add(fd), pos);
+    }
     case A_RECVLINE: case A_RECV: {
         Sock s = sock_get2(a->a, "接続", 1, pos);
         fflush(stdout);
@@ -2445,6 +2483,7 @@ BI(s_try) { /* を, で(「で」を省くと成否を返す) */
 }
 BI(n_listen) { return mk_net(A_LISTEN, "待受開始する", a[0], 0, pos); }
 BI(n_accept) { return mk_net(A_ACCEPT, "接続受付する", a[0], 0, pos); }
+BI(n_connect) { return mk_net(A_CONNECT, "接続する", a[0], a[1], pos); } /* に, で */
 BI(n_recvline) { return mk_net(A_RECVLINE, "行受信する", a[0], 0, pos); }
 BI(n_recv) { return mk_net(A_RECV, "受信する", a[0], a[1], pos); }  /* から, を */
 BI(n_send) { return mk_net(A_SEND, "送信する", a[0], a[1], pos); }  /* を, へ */
@@ -2452,7 +2491,7 @@ BI(n_close) { return mk_net(A_CLOSE, "切断する", a[0], 0, pos); }
 
 static const int32_t P1_DE[] = {P_DE}, P2_DE_WO[] = {P_DE, P_WO}, P1_WO[] = {P_WO}, P2_WO_NI[] = {P_WO, P_NI}, P2_KARA_WO[] = {P_KARA, P_WO},
                      P2_WO_DE[] = {P_WO, P_DE}, P2_KARA_DE[] = {P_KARA, P_DE}, P3_WO_KARA_DE[] = {P_WO, P_KARA, P_DE},
-                     P2_GA_WO[] = {P_GA, P_WO}, P1_KARA[] = {P_KARA}, P2_WO_HE[] = {P_WO, P_HE}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P2_GA_DE[] = {P_GA, P_DE};
+                     P2_GA_WO[] = {P_GA, P_WO}, P1_KARA[] = {P_KARA}, P2_WO_HE[] = {P_WO, P_HE}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P2_GA_DE[] = {P_GA, P_DE}, P2_NI_DE[] = {P_NI, P_DE};
 static const uint8_t R_OPT1[] = {0}, R_1_OPT[] = {1, 0};
 
 typedef struct { const char *name; int32_t n; const int32_t *parts; const uint8_t *req; Code code; } BuiltinDef;
@@ -3547,6 +3586,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     /* 「通信」の組み込み */
     {"待受開始する", 1, P1_WO, NULL, n_listen},
     {"接続受付する", 1, P1_KARA, NULL, n_accept},
+    {"接続する", 2, P2_NI_DE, NULL, n_connect},
     {"行受信する", 1, P1_KARA, NULL, n_recvline},
     {"受信する", 2, P2_KARA_WO, NULL, n_recv},
     {"送信する", 2, P2_WO_HE, NULL, n_send},

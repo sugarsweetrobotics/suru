@@ -1215,6 +1215,26 @@ def test_通信のサーバーに答えてもらう():
     assert not t.is_alive() and not errors
 
 
+def test_通信でこちらからつなぐ():
+    from net_helper import CLIENT, CLIENT_OUT, answer_once, free_port
+
+    port = free_port()
+    t = answer_once(port)
+    out: list = []
+    Interpreter(out=out.append).run(CLIENT.replace("PORT", str(port)))
+    t.join(10)
+    assert out == CLIENT_OUT
+
+
+def test_つなげない相手はエラー():
+    from net_helper import free_port
+
+    with pytest.raises(SuruError, match="「接続する」で通信に失敗しました"):
+        run(f"「通信」 を 読み込む\n「127.0.0.1」 に {free_port()} で 通信内の接続する\n")
+    with pytest.raises(SuruError, match="「接続する」で通信に失敗しました"):
+        run("「通信」 を 読み込む\n「no-such-host.invalid」 に 80 で 通信内の接続する\n")
+
+
 # --- HTTP ---------------------------------------------------------------------
 
 HTTP_PURE = "「HTTP」 を 読み込む\n"
