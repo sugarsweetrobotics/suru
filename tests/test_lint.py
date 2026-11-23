@@ -113,6 +113,42 @@ wとは、4。
 （x + y + z + w） を 表示する
 """
 
+# 段階3(構文木を使う規則)。型.suru の形と型も使って読む。型の宣言があるライブラリなので、ほかの知らせは出ない
+SYNTAX = """「型」 を 読み込んで 使う
+数 を 判定する は 真偽
+n を 判定する とは もし n > 1 ならば 真 そうでなければ 偽
+数 を 逆判定する は 真偽
+n を 逆判定する とは もし n > 1 ならば 偽 そうでなければ 真
+真偽 を 確認する は 真偽
+b を 確認する とは b = 真 かつ b != 偽 かつ b = 偽
+真偽 を 場確認する は 数
+b を 場確認する とは もし b が 真 ならば 1 そうでなければ 2
+数 を 同枝する は 数
+n を 同枝する とは もし n > 0 ならば n + 1 そうでなければ n + 1
+数 を 場同枝する は 数
+n を 場同枝する とは もし n が 3 ならば 1 そうでなければ 1
+数 を 自比較する は 真偽
+n を 自比較する とは n = n または （もし n が n ならば 真 そうでなければ n < n）
+数 を 括弧する は 数
+n を 括弧する とは （n） + （（n を 二倍する）） + （n + 1） * 2 + （横 は （n） で 縦 は 2 の 点） の 横
+"""
+
+SYNTAX_OUT = """\
+syntax.suru:3:13: 冗長な真偽: 真か偽を返すだけの『もし』は、条件をそのまま書けます
+syntax.suru:5:14: 冗長な真偽: 偽か真を返すだけの『もし』は、条件を『= 偽』と比べる式にできます
+syntax.suru:7:15: 冗長な真偽: 『= 真』や『!= 偽』は付けなくても同じです
+syntax.suru:7:24: 冗長な真偽: 『= 真』や『!= 偽』は付けなくても同じです
+syntax.suru:9:14: 冗長な真偽: 『もし x が 真 ならば』は『もし x ならば』と同じです
+syntax.suru:11:13: 同じ枝: 『もし』のどちらの枝も同じ式です
+syntax.suru:13:14: 同じ枝: 『もし』のどちらの枝も同じ式です
+syntax.suru:15:16: 自分との比較: 同じ式どうしを比べているので、結果はいつも同じです
+syntax.suru:15:25: 自分との比較: 同じ式どうしを比べているので、結果はいつも同じです
+syntax.suru:15:50: 自分との比較: 同じ式どうしを比べているので、結果はいつも同じです
+syntax.suru:17:13: 不要な括弧: この括弧は外しても読み方が変わりません
+syntax.suru:17:19: 不要な括弧: この括弧は外しても読み方が変わりません
+syntax.suru:17:53: 不要な括弧: この括弧は外しても読み方が変わりません
+"""
+
 KINDS = ["interp"] + (["binary"] if suru_compile.find_cc() is not None else [])
 
 
@@ -152,6 +188,19 @@ def test_定義と使用(kind, tmp_path):
     assert r.stdout == DEFS_OUT + (
         "lib.suru:2:5: 型の宣言なし: 「三倍する」に型の宣言がありません(『数 を 三倍する は 数』のように書きます)\n"
         "mixed.suru:3:1: 書き方の混在: このファイルは空白の書き方が3文、句読点の書き方が2文あります。空白の書き方にそろえると読みやすくなります\n")
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_構文木の規則(kind, tmp_path):
+    (tmp_path / "型.suru").write_text(TYPES, encoding="utf-8")
+    (tmp_path / "syntax.suru").write_text(SYNTAX, encoding="utf-8")
+    r = run_lint(kind, tmp_path, "syntax.suru")
+    assert r.returncode == 1, r.stderr
+    assert r.stdout == SYNTAX_OUT
+    # 読めないプログラムでは構文木の規則を調べない(エラーは実行したときに出る)
+    (tmp_path / "broken.suru").write_text("x とは もし 1 = 1 ならば （2）\n", encoding="utf-8")
+    r = run_lint(kind, tmp_path, "broken.suru")
+    assert "不要な括弧" not in r.stdout and "自分との比較" not in r.stdout
 
 
 def test_例とライブラリは知らせなし(tmp_path):
