@@ -775,7 +775,7 @@ c を （p を 受け取って p の 横 を 表示する を 返すこと） �
 
 ### リリースと配布の方法
 
-1. **4つの方法で配る。** PyPI(`suru-lang`)、GitHub Releases(OS ごとの `suruc`・`suru-ls`・`kumu`)、Homebrew の tap(`suru-lang/homebrew-suru`)、VS Code Marketplace(拡張)です。どれも GitHub Actions がタグから作って公開します。手順と、初めに用意するもの(PyPI の Trusted Publishing、Marketplace の publisher など)は [docs/リリース.md](docs/リリース.md) にあります。
+1. **4つの方法で配る。** PyPI(`suru-lang`)、GitHub Releases(OS ごとの `suruc`・`suru-ls`・`kumu`)、Homebrew の tap(`suru-lang/homebrew-suru`)、VS Code Marketplace(拡張)です。どれも GitHub Actions がタグから作って公開します。手順と、初めに用意するもの(PyPI の Trusted Publishing、Marketplace の publisher の Trusted Publishing など)は [docs/リリース.md](docs/リリース.md) にあります。
 
 2. **PyPI の名前は `suru-lang`。** `suru` はほかの人が使っていたので、パッケージの名前だけを変えました。入るコマンドとモジュールの名前は `suru` のままです。
 
