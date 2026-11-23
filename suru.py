@@ -1116,9 +1116,12 @@ class ParseContext:
         self.types: dict[str, list] = dict(types or {})  # 型 → [形]
         self.base_dir = base_dir  # 「「数学」 を 読み込む」で探すフォルダ
         self.modules: dict[str, Any] = dict(modules or {})  # 読み込んだファイル(絶対パス → Module。読み込み中は None)
+        self.packages: dict[str, str] | None = None  # プロジェクトの依存(名前 → フォルダ)。None なら初めて読み込むときに探す
 
     def copy(self) -> "ParseContext":
-        return ParseContext(self.ctors, self.types, self.base_dir, self.modules)
+        c = ParseContext(self.ctors, self.types, self.base_dir, self.modules)
+        c.packages = self.packages
+        return c
 
     def add(self, td: TypeDef) -> None:
         if td.name in self.types or td.name in BUILTIN_TYPES:
@@ -2697,11 +2700,71 @@ def _attach_externs(statements: list) -> None:
         seen[ext.symbol] = d.name
 
 
+PROJECT_CONFIG = "組" + SOURCE_SUFFIX  # プロジェクトの設定(kumu)
+PROJECT_LOCK = "組.lock"  # 依存を固めたファイル(kumu が書く)
+
+
+def kumu_home() -> str:
+    """kumu が取ってきたものを置くフォルダ($KUMU_HOME か ~/.kumu)"""
+    return os.environ.get("KUMU_HOME") or os.path.join(os.path.expanduser("~"), ".kumu")
+
+
+def package_dir(root: str, src: str, version: str) -> str:
+    """依存の中身を置くフォルダ(compiler/packages.go の PackageDir と同じ)"""
+    if src.startswith(".") or os.path.isabs(src):
+        return os.path.normpath(os.path.join(root, src))
+    key = src
+    if "://" in key:
+        scheme, rest = key.split("://", 1)
+        key = scheme + "/" + rest.lstrip("/")
+    key = key.replace(":", "_")
+    if key.endswith(".git"):
+        key = key[:-4]
+    return os.path.join(kumu_home(), "依存", *key.split("/")[:-1], key.split("/")[-1] + "@" + version)
+
+
+def find_packages(base_dir: str) -> dict[str, str]:
+    """base_dir から上へ 組.suru を探し、隣の 組.lock に書いた依存を返す(名前 → フォルダ)"""
+    d = os.path.abspath(base_dir)
+    while True:
+        if os.path.exists(os.path.join(d, PROJECT_CONFIG)):
+            out = {}
+            try:
+                with open(os.path.join(d, PROJECT_LOCK), encoding="utf-8") as f:
+                    lines = f.read().splitlines()
+            except OSError:
+                return out
+            for line in lines:
+                fields = line.split("\t")
+                if line and not line.startswith("#") and len(fields) >= 3:
+                    out[fields[0]] = package_dir(d, fields[1], fields[2])
+            return out
+        parent = os.path.dirname(d)
+        if parent == d:
+            return {}
+        d = parent
+
+
+def package_path(name: str, ctx: ParseContext, line: int) -> str | None:
+    """読み込む名前「X」「X/部品」が依存のものなら、そのファイルのパス"""
+    first, _, rest = name.removesuffix(SOURCE_SUFFIX).partition("/")
+    folder = (ctx.packages or {}).get(first)
+    if folder is None:
+        return None
+    if not os.path.isdir(folder):
+        raise SuruError(f"依存の「{first}」がまだ取ってきてありません(kumu 作る か kumu 取得 で取ってきます)", line)
+    return os.path.abspath(os.path.join(folder, *(rest or first).split("/")) + SOURCE_SUFFIX)
+
+
 def load_module(name: str, ctx: ParseContext, line: int) -> Module:
-    """ファイル「name.suru」を読んで解析する。同じファイルは一度だけ読む"""
+    """ファイル「name.suru」を読んで解析する。同じファイルは一度だけ読む。
+    探す順は、読み込むファイルのフォルダ → プロジェクトの依存 → 標準の lib"""
+    if ctx.packages is None:
+        ctx.packages = find_packages(ctx.base_dir)
     path = os.path.abspath(os.path.join(ctx.base_dir, name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX))
     if not os.path.exists(path):
-        path = os.path.abspath(os.path.join(LIB_DIR, name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX))
+        path = package_path(name, ctx, line) or os.path.abspath(
+            os.path.join(LIB_DIR, name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX))
     stem = os.path.splitext(os.path.basename(path))[0]
     if not stem or _is_all_hiragana(stem) or any(_is_hiragana(c) for c in stem) or any(c in stem for c in " 　「」『』（）()、。"):
         raise SuruError(f"「{stem}」はファイルの名前に使えません(名前と同じく漢字・カタカナ・英字で書いてください)", line)
@@ -2717,6 +2780,7 @@ def load_module(name: str, ctx: ParseContext, line: int) -> Module:
     ctx.modules[path] = None
     sub = ParseContext(ctx.ctors, ctx.types, os.path.dirname(path))
     sub.modules = ctx.modules
+    sub.packages = ctx.packages
     try:
         program = parse_program(source, sub)
         for s in program:

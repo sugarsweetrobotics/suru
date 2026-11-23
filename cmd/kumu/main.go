@@ -36,6 +36,10 @@ const usage = `使い方: kumu <命令> [オプション]
   初期化      今のフォルダに雛形を作る(init)
   作る        出力/ にバイナリを作る(build)
   実行        作って実行する。-- の後ろはプログラムへの引数(run)
+  追加 場所   依存を足す。場所@版 か、版なしなら一番新しいタグ(add)
+  削除 名前   依存を外す。名前か場所で書く(remove)
+  更新 [名前] 依存を一番新しいタグにする。名前がなければ全部(update)
+  取得        依存を取ってきて 組.lock を書く(fetch)
   版          kumu の版を出す(version)
   助け        この案内を出す(help)
 
@@ -50,6 +54,10 @@ var commands = map[string]string{
 	"初期化": "初期化", "init": "初期化",
 	"作る": "作る", "build": "作る",
 	"実行": "実行", "run": "実行",
+	"追加": "追加", "add": "追加",
+	"削除": "削除", "remove": "削除",
+	"更新": "更新", "update": "更新",
+	"取得": "取得", "fetch": "取得",
 	"版": "版", "version": "版", "--版": "版", "--version": "版",
 	"助け": "助け", "help": "助け", "-h": "助け", "--help": "助け",
 }
@@ -104,6 +112,8 @@ func (k *kumu) run(args []string) int {
 		}
 		fmt.Fprintf(k.stderr, "「%s」を作りました\n", filepath.Base(abs))
 		return 0
+	case "追加", "削除", "更新", "取得":
+		return k.deps(cmd, rest)
 	}
 	// 作る・実行
 	opt, check := "-O2", true
@@ -127,6 +137,9 @@ func (k *kumu) run(args []string) int {
 	}
 	p, err := FindProject(k.dir)
 	if err != nil {
+		return k.fail(err)
+	}
+	if _, err := Resolve(p, k.stderr); err != nil {
 		return k.fail(err)
 	}
 	exe, err := k.build(p, opt, check)

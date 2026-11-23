@@ -133,6 +133,8 @@ type ParseContext struct {
 	BaseDir string
 	Modules map[string]*Module // 絶対パス → Module(読み込み中は nil)
 	Loading map[string]bool
+	// Packages はプロジェクトの依存(名前 → Package)。nil なら、初めて読み込むときに BaseDir から探す
+	Packages map[string]Package
 }
 
 func NewParseContext(baseDir string) *ParseContext {
@@ -2482,8 +2484,13 @@ func loadModule(name string, ctx *ParseContext, line Pos) *Module {
 	} else {
 		path = absPath(filepath.Join(ctx.BaseDir, file))
 	}
+	if ctx.Packages == nil && !strings.HasPrefix(ctx.BaseDir, embeddedLibPrefix) {
+		ctx.Packages = FindPackages(ctx.BaseDir)
+	}
 	if !exists(path) {
-		if LibDir != "" {
+		if p, ok := packagePath(name, ctx, line); ok {
+			path = p
+		} else if LibDir != "" {
 			path = absPath(filepath.Join(LibDir, file))
 		} else {
 			path = embeddedLibPrefix + filepath.Clean(file)
@@ -2505,7 +2512,7 @@ func loadModule(name string, ctx *ParseContext, line Pos) *Module {
 		raise(line, "ファイル「"+file+"」が見つかりません")
 	}
 	ctx.Loading[path] = true
-	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Modules: ctx.Modules, Loading: ctx.Loading}
+	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages}
 	var program []Node
 	err := try(func() {
 		program = ParseProgram(source, sub)
