@@ -25,6 +25,8 @@ type Project struct {
 	Name    string // 名前(作るバイナリの名前にもなる)
 	Version string // 版
 	Entry   string // 入口のファイルの名前(.suru なし)
+	Deps    []Dep  // 依存(書いた順)
+	depLine int    // 「依存 とは …」の行(なければ 0)
 }
 
 // EntryPath は入口のファイルのパス
@@ -33,7 +35,7 @@ func (p *Project) EntryPath() string {
 }
 
 // configKeys は 組.suru に書ける項目(書く順)
-var configKeys = []string{"名前", "版", "入口"}
+var configKeys = []string{"名前", "版", "入口", "依存"}
 
 // ParseConfig は 組.suru の中身を読む。する の定義「名前 とは 「…」」だけを書ける
 func ParseConfig(source, root string) (*Project, error) {
@@ -57,6 +59,14 @@ func ParseConfig(source, root string) (*Project, error) {
 			return nil, configError(&compiler.SuruError{Message: fmt.Sprintf("「%s」が2回書かれています", d.Name), Line: pos}, source)
 		}
 		seen[d.Name] = true
+		if d.Name == "依存" {
+			deps, err := parseDeps(d)
+			if err != nil {
+				return nil, configError(&compiler.SuruError{Message: err.Error(), Line: pos}, source)
+			}
+			p.Deps, p.depLine = deps, pos.Line
+			continue
+		}
 		s, ok := d.Body.(*compiler.Str)
 		if !ok || len(d.Params) > 0 || d.IsFunction {
 			return nil, configError(&compiler.SuruError{Message: fmt.Sprintf("「%s」には 「…」 の文字列を書きます", d.Name), Line: pos}, source)
@@ -172,5 +182,116 @@ func CreateProject(dir, name string, fresh bool) error {
 			return err
 		}
 	}
+	return nil
+}
+
+// Dep は 組.suru の依存の1つ。「場所@版」か、フォルダのパス「../部品集」
+type Dep struct {
+	Source  string // github.com/someone/部品集、https://…、file://…、../部品集
+	Version string // 「1.2.0」(フォルダのパスなら空)
+}
+
+func (d Dep) String() string {
+	if d.Version == "" {
+		return d.Source
+	}
+	return d.Source + "@" + d.Version
+}
+
+// ParseDep は「場所@版」を読む
+func ParseDep(spec string) (Dep, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return Dep{}, errors.New("依存が空です")
+	}
+	if compiler.IsLocalSource(spec) {
+		return Dep{Source: filepath.ToSlash(spec)}, nil
+	}
+	i := strings.LastIndex(spec, "@")
+	if i <= 0 || i == len(spec)-1 {
+		return Dep{}, fmt.Errorf("依存「%s」に版がありません(「%s@1.0.0」のように書きます。kumu 追加 なら一番新しい版を選びます)", spec, spec)
+	}
+	src, ver := spec[:i], strings.TrimPrefix(spec[i+1:], "v")
+	if strings.ContainsAny(src, " \t") {
+		return Dep{}, fmt.Errorf("依存「%s」の場所に空白は使えません", spec)
+	}
+	return Dep{Source: strings.TrimSuffix(src, "/"), Version: ver}, nil
+}
+
+func parseDeps(d *compiler.Define) ([]Dep, error) {
+	var items []compiler.Node
+	switch b := d.Body.(type) {
+	case *compiler.Str:
+		items = []compiler.Node{b}
+	case *compiler.ListLit:
+		items = b.Items
+	default:
+		return nil, errors.New("「依存」には 「場所@版」 の文字列か、それを と でつないだものを書きます")
+	}
+	var out []Dep
+	seen := map[string]bool{}
+	for _, it := range items {
+		s, ok := it.(*compiler.Str)
+		if !ok || len(d.Params) > 0 || d.IsFunction {
+			return nil, errors.New("「依存」には 「場所@版」 の文字列か、それを と でつないだものを書きます")
+		}
+		dep, err := ParseDep(s.Value)
+		if err != nil {
+			return nil, err
+		}
+		if seen[dep.Source] {
+			return nil, fmt.Errorf("依存「%s」が2回書かれています", dep.Source)
+		}
+		seen[dep.Source] = true
+		out = append(out, dep)
+	}
+	return out, nil
+}
+
+// depsLine は 組.suru に書く「依存 とは …」の行
+func depsLine(deps []Dep) string {
+	var parts []string
+	for _, d := range deps {
+		parts = append(parts, "「"+d.String()+"」")
+	}
+	return "依存 とは " + strings.Join(parts, " と ")
+}
+
+// WriteDeps は 組.suru の「依存 とは …」を書きかえる(なければ終わりに足す)
+func (p *Project) WriteDeps(deps []Dep) error {
+	path := filepath.Join(p.Root, ConfigName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(compiler.NormalizeNewlines(string(data)), "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	var out []string
+	if p.depLine == 0 {
+		if len(deps) == 0 {
+			return nil
+		}
+		out = append(lines, depsLine(deps))
+	} else {
+		start := p.depLine - 1
+		end := start + 1 // 字下げした続きの行も「依存」のもの
+		for end < len(lines) && (strings.HasPrefix(lines[end], " ") || strings.HasPrefix(lines[end], "\t") || strings.HasPrefix(lines[end], "　")) {
+			end++
+		}
+		out = append(append(append([]string{}, lines[:start]...), depsLine(deps)), lines[end:]...)
+		if len(deps) == 0 {
+			out = append(append([]string{}, lines[:start]...), lines[end:]...)
+		}
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(out, "\n")+"\n"), 0o644); err != nil {
+		return err
+	}
+	np, err := ParseConfig(strings.Join(out, "\n")+"\n", p.Root)
+	if err != nil {
+		return err
+	}
+	*p = *np
 	return nil
 }
