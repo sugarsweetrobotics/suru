@@ -1963,6 +1963,25 @@ def _t_abort(c, a, line):
     return TVar()
 
 
+def _result_t(a: Any, e: Any) -> TCon:
+    return TCon("成否", (a, e))
+
+
+@prim("失敗説明する", {WO: True, "で": True},
+      lambda: (lambda a, e: TFun([(WO, _result_t(a, e)), ("で", STR)], _result_t(a, e)))(TVar(), TVar()))
+def _t_explain(c, a, line):
+    r = _result_t(TVar(), TVar())
+    _need(c, a, WO, r, line, "失敗説明する")
+    _need(c, a, "で", STR, line, "失敗説明する")
+    return r
+
+
+@prim("失敗詳細にする", {WO: True}, lambda: TFun([(WO, _result_t(TVar(), TVar()))], STR))
+def _t_detail(c, a, line):
+    _need(c, a, WO, _result_t(TVar(), TVar()), line, "失敗詳細にする")
+    return STR
+
+
 @prim("試行する", {WO: True, "で": False}, lambda: (lambda x: TFun([(WO, act(x)), ("で", act(x))], act(x)))(TVar()))
 def _t_try(c, a, line):
     x = TVar()

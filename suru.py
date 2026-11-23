@@ -871,6 +871,7 @@ class Run:
     call: Any
     line: int
     unwrap: bool = False
+    fn: str = ""  # 「した 中身」を書いた関数の名前(失敗の経路に使う)
 
 
 @dataclass
@@ -2601,7 +2602,9 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
             statements.insert(0, prelude)
         _check_open_imports(statements)
         _attach_externs(statements)
-        return attach_provisos(statements)
+        statements = attach_provisos(statements)
+        name_unwraps([s for s in statements if not isinstance(s, (Import, ExternLib))])
+        return statements
     finally:
         _CTX = saved
 
@@ -2973,6 +2976,9 @@ class Record:
     type_name: str
     fields: tuple
     values: tuple
+    # 失敗の値だけが持つ、見えない覚え: 「した 中身」で返した場所と、「失敗説明する」の説明(比べるときは見ない)
+    trace: tuple = field(default=(), compare=False)
+    notes: tuple = field(default=(), compare=False)
 
     def get(self, name: str) -> Any:
         return self.values[self.fields.index(name)]
@@ -3285,7 +3291,7 @@ PRELUDE_NONE = "無"
 PRELUDE_TRY = "試行する"
 PRELUDE_TYPES = ("成否", "有無")
 PRELUDE_WORDS = frozenset(("成否", "有無", "成功", "失敗", "有"))
-PRELUDE_CALLS = frozenset(("成否にする", "有無にする", "中断する"))  # 取出する は性質の関数なので入れない
+PRELUDE_CALLS = frozenset(("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする"))  # 取出する は性質の関数なので入れない
 
 
 def _int(v: Any, what: str, line: int | None) -> int:
@@ -3716,6 +3722,8 @@ def _abort(it: Any, a: dict, line: int) -> Any:
 
 PRELUDE_PRIMITIVES = [
     Builtin("中断する", [(WO, True)], _abort),
+    Builtin("失敗説明する", [(WO, True), ("で", True)], lambda it, a, line: _explain(it, a, line)),
+    Builtin("失敗詳細にする", [(WO, True)], lambda it, a, line: _detail(it, a, line)),
 ]
 
 
@@ -4547,10 +4555,45 @@ def is_top_unwrap_do(s: Any) -> bool:
 
 
 def check_top_failure(v: Any) -> None:
-    """一番外の手順の結果が失敗なら、その理由のエラーで終わる(Rust の main が Err を返したとき)"""
-    if isinstance(v, Record) and v.type_name == "成否" and v.ctor == "失敗":
-        r = v.values[0]
-        raise SuruError(r if isinstance(r, str) else format_value(r))
+    """一番外の手順の結果が失敗なら、その詳細のエラーで終わる(Rust の main が Err を返したとき)"""
+    if is_failure(v):
+        raise SuruError(failure_detail(v))
+
+
+def is_failure(v: Any) -> bool:
+    return isinstance(v, Record) and v.type_name == "成否" and v.ctor == "失敗"
+
+
+def add_trace(v: Any, run: Run) -> Any:
+    """「した 中身」で失敗を返した場所(行と関数の名前)を、失敗の値の見えない経路に足す"""
+    if not is_failure(v):
+        return v
+    return Record(v.ctor, v.type_name, v.fields, v.values, v.trace + (f"{int(run.line)}行目 {run.fn}",), v.notes)
+
+
+def failure_detail(v: Any) -> str:
+    """失敗の詳細: 説明(外側から)、理由、経路(内側から)"""
+    r = v.values[0]
+    why = r if isinstance(r, str) else format_value(r)
+    lines = [n + "のに失敗しました" for n in reversed(v.notes)] + [why]
+    out = lines[0] + "".join("\n  原因: " + x for x in lines[1:])
+    if v.trace:
+        out += "\n  経路:" + "".join("\n    " + t for t in v.trace)
+    return out
+
+
+def _explain(it: Any, a: dict, line: int) -> Any:
+    v, note = a[WO], _str(a["で"], "「失敗説明する」の「で」", line)
+    if not is_failure(v):
+        return v
+    return Record(v.ctor, v.type_name, v.fields, v.values, v.trace, v.notes + (note,))
+
+
+def _detail(it: Any, a: dict, line: int) -> str:
+    v = a[WO]
+    if not is_failure(v):
+        raise SuruError(f"「失敗詳細にする」の「を」は失敗の値でなければなりません(「{format_value(v)}」が渡されました)", line)
+    return failure_detail(v)
 
 
 class EarlyExit(Exception):
@@ -4575,6 +4618,30 @@ def unwrap_value(v: Any, call: Any, line: Any) -> tuple[bool, Any]:
         if v.ctor in FAILURE_SHAPES:
             return False, v
     raise SuruError(f"「{_call_name(call)}した 中身」: 「{format_value(v)}」は成否でも有無でもありません", line)
+
+
+TOP_FN = "一番外"  # 関数の外の「した 中身」の経路の名前
+LAMBDA_FN = "無名関数"
+
+
+def name_unwraps(node: Any, fn: str = TOP_FN) -> None:
+    """「した 中身」に、それを書いた一番内側の関数の名前を付ける(失敗の経路に使う)"""
+    if isinstance(node, Define):
+        if node.is_function:
+            fn = node.name.split("\0")[-1]
+    elif isinstance(node, Lambda):
+        fn = LAMBDA_FN
+    elif isinstance(node, Run):
+        node.fn = fn
+    if isinstance(node, (list, tuple)):
+        for x in node:
+            name_unwraps(x, fn)
+    elif isinstance(node, dict):
+        for x in node.values():
+            name_unwraps(x, fn)
+    elif hasattr(node, "__dataclass_fields__") and not isinstance(node, (Module, Token)):
+        for f in node.__dataclass_fields__:
+            name_unwraps(getattr(node, f), fn)
 
 
 def has_pure_unwrap(node: Any) -> bool:
@@ -4795,7 +4862,7 @@ class Interpreter:
             def k_unwrap(v: Any) -> Any:
                 ok, x = unwrap_value(v, r.call, r.line)
                 if not ok:
-                    return Pure(x)  # 手順はここで終わり、失敗(無)を結果にする
+                    return Pure(add_trace(x, r))  # 手順はここで終わり、失敗(無)を結果にする
                 local = Env(env)
                 local.vars[_run_key(r)] = x
                 return self.run_do(stmts, i, local, line)
@@ -5017,7 +5084,7 @@ class Interpreter:
             if node.unwrap:
                 ok, x = unwrap_value(self.eval(node.call, env), node.call, node.line)
                 if not ok:
-                    raise EarlyExit(x, node.line)
+                    raise EarlyExit(add_trace(x, node), node.line)
                 return x
             raise SuruError(
                 "「した 結果」は手順の文の中で使ってください(関数の本体や条件分岐の枝の中では、そこを「手順（…）」で囲みます)",

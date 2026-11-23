@@ -176,7 +176,7 @@ def test_した中身(tmp_path):
 
 def test_手順の中のした中身(tmp_path):
     for r in run_both(IO_UNWRAP, tmp_path):
-        assert (r.returncode, r.stdout, r.stderr) == (1, IO_UNWRAP_OUT, "エラー: 0 では割れません\n")
+        assert (r.returncode, r.stdout, r.stderr) == (1, IO_UNWRAP_OUT, "エラー: 0 では割れません\n  経路:\n    15行目 一番外\n")
 
 
 @pytest.mark.parametrize("src, msg", [
@@ -231,7 +231,8 @@ TRY_OUT = """（理由 は 「ファイル『無い.txt』を開くのに失敗�
 def test_でを省いた試行するは成否を返す(tmp_path):
     for r in run_both(TRY, tmp_path):
         assert (r.returncode, r.stdout) == (1, TRY_OUT)
-        assert r.stderr == "エラー: 9行目 8文字目: a\nエラー: ファイル『無い.txt』を開くのに失敗しました(No such file or directory)\n"
+        assert r.stderr == ("エラー: 9行目 8文字目: a\nエラー: ファイル『無い.txt』を開くのに失敗しました(No such file or directory)\n"
+                             "  経路:\n    4行目 本文読取する\n    10行目 一番外\n")
 
 
 def test_でを省いた試行するの型():
@@ -243,3 +244,70 @@ def test_でを省いた試行するの型():
 def test_でのある試行するは基本を読み込まない():
     prog = suru.parse_program("「標準」 を 読み込んで 使う\n（1 を 表示する） を （2 を 表示する） で 試行する\n")
     assert not any(isinstance(s, suru.Import) and s.auto for s in prog)
+
+
+# --- 段階4: 失敗の連鎖の表示 ----------------------------------------------------
+
+CHAIN = """n を 範囲確認する とは
+  もし n < 1 または n > 65535 ならば 「番号は 1〜65535 です」 の 失敗
+  そうでなければ n の 成功
+s を 番号読取する とは （s を 数値にする） を 範囲確認する
+s を 設定読込する とは （s を 番号読取した 中身） の 成功
+s を 起動準備する とは （（s を 設定読込する） を 「設定を読む」 で 失敗説明した 中身） の 成功
+（「70000」 を 起動準備する） を 失敗詳細にする
+「70000」 を 起動準備する
+（「70000」 を 起動準備する） が （「番号は 1〜65535 です」 の 失敗）
+（「80」 を 起動準備する）
+（（「80」 を 起動準備する） を 「使わない」 で 失敗説明する）
+s を 手順読込する とは 手順
+  「読みます」 を 表示する
+  p とは s を 設定読込した 中身
+  （p の 成功） を 結果にする
+手順（rとは、「0」を手順読込した結果。（rを失敗詳細にする）を表示する）。
+手順（xとは、「70000」を起動準備した中身。xを表示する）。
+「ここには来ない」 を 表示する
+"""
+
+CHAIN_OUT = """設定を読むのに失敗しました
+  原因: 番号は 1〜65535 です
+  経路:
+    5行目 設定読込する
+    6行目 起動準備する
+（理由 は 「番号は 1〜65535 です」 の 失敗）
+真
+（値 は 80 の 成功）
+（値 は 80 の 成功）
+読みます
+番号は 1〜65535 です
+  経路:
+    5行目 設定読込する
+    14行目 手順読込する
+"""
+
+CHAIN_ERR = """エラー: 設定を読むのに失敗しました
+  原因: 番号は 1〜65535 です
+  経路:
+    5行目 設定読込する
+    6行目 起動準備する
+    17行目 一番外
+"""
+
+
+def test_失敗の連鎖(tmp_path):
+    for r in run_both(CHAIN, tmp_path):
+        assert (r.returncode, r.stdout, r.stderr) == (1, CHAIN_OUT, CHAIN_ERR)
+
+
+def test_失敗詳細にするは失敗だけ(tmp_path):
+    for r in run_both("（3 の 成功） を 失敗詳細にする\n", tmp_path):
+        assert r.returncode == 1
+        assert "「失敗詳細にする」の「を」は失敗の値でなければなりません" in r.stderr
+
+
+def test_失敗説明するの型():
+    suru_check.check("r は （数 と 文字列） の 成否\nr とは （1 の 成功） を 「読む」 で 失敗説明する\n"
+                     "s は 文字列\ns とは r を 失敗詳細にする\n")
+    with pytest.raises(suru.SuruError):
+        suru_check.check("（1 の 成功） を 3 で 失敗説明する\n")
+    with pytest.raises(suru.SuruError):
+        suru_check.check("3 を 失敗詳細にする\n")

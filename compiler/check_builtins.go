@@ -264,6 +264,22 @@ func init() {
 		need(c, a, WO, STR, line, "中断する")
 		return newTVar()
 	})
+	resultT := func(a, e Type) Type { return &TCon{"成否", []Type{a, e}} }
+	prim("失敗説明する", []partReq{req(WO), req("で")}, func() Type {
+		r := resultT(newTVar(), newTVar())
+		return &TFun{[]TParam{{WO, r}, {"で", STR}}, r}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		r := resultT(newTVar(), newTVar())
+		need(c, a, WO, r, line, "失敗説明する")
+		need(c, a, "で", STR, line, "失敗説明する")
+		return r
+	})
+	prim("失敗詳細にする", []partReq{req(WO)}, func() Type {
+		return &TFun{[]TParam{{WO, resultT(newTVar(), newTVar())}}, STR}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		need(c, a, WO, resultT(newTVar(), newTVar()), line, "失敗詳細にする")
+		return STR
+	})
 	prim("試行する", []partReq{req(WO), opt("で")}, func() Type {
 		x := newTVar()
 		return &TFun{[]TParam{{WO, act(x)}, {"で", act(x)}}, act(x)}

@@ -614,7 +614,7 @@ func (p *ExprParser) pipeline(piped Node, hasPiped bool) Node {
 				if hasPiped {
 					args = mergePiped(args, piped, WO)
 				}
-				value = &Run{&Call{t.S, args, t.Line}, t.Line, res.S == Content}
+				value = &Run{&Call{t.S, args, t.Line}, t.Line, res.S == Content, ""}
 				args, piped, hasPiped = nil, nil, false
 			} else if t.Kind == "CALL" && t.Form != Koto {
 				break
@@ -2176,14 +2176,50 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 	}
 	checkOpenImports(statements)
 	attachExterns(statements)
-	return attachProvisos(statements)
+	statements = attachProvisos(statements)
+	for _, st := range statements {
+		switch st.(type) {
+		case *Import, *ExternLib:
+		default:
+			nameUnwraps(st, topFn)
+		}
+	}
+	return statements
+}
+
+// 関数の外と無名関数の「した 中身」の経路の名前
+const (
+	topFn    = "一番外"
+	lambdaFn = "無名関数"
+)
+
+// nameUnwraps は「した 中身」に、それを書いた一番内側の関数の名前を付ける(失敗の経路に使う)
+func nameUnwraps(node Node, fn string) {
+	switch n := node.(type) {
+	case nil:
+		return
+	case *Import, *Module:
+		return
+	case *Define:
+		if n.IsFunction {
+			parts := strings.Split(n.Name, "\x00")
+			fn = parts[len(parts)-1]
+		}
+	case *Lambda:
+		fn = lambdaFn
+	case *Run:
+		n.Fn = fn
+	}
+	for _, ch := range node.Children() {
+		nameUnwraps(ch, fn)
+	}
 }
 
 // 基本(成否・有無)は、その名前を書いたファイルが自動で「読み込んで 使う」
 const PreludeName = "基本"
 
 var preludeWords = setOf("成否", "有無", "成功", "失敗", "有")
-var preludeCalls = setOf("成否にする", "有無にする", "中断する") // 取出する は性質の関数なので入れない
+var preludeCalls = setOf("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする") // 取出する は性質の関数なので入れない
 
 func hasPreludeImport(imports map[*LNode]Node) bool {
 	for _, i := range imports {
