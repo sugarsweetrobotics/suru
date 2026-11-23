@@ -215,6 +215,15 @@ func init() {
 	simple("バイト長にする", []TParam{{WO, bytesT}}, NUM)
 	simple("番地にする", []TParam{{WO, NUM}}, addr)
 	simple("番地数値にする", []TParam{{WO, addr}}, NUM)
+	prim("直列化する", []partReq{req(WO)}, func() Type {
+		return &TFun{[]TParam{{WO, newTVar()}}, bytesT}
+	}, func(c *Checker, a typedArgs, line Pos) Type { return bytesT })
+	prim("復元する", []partReq{req(WO)}, func() Type {
+		return &TFun{[]TParam{{WO, bytesT}}, newTVar()}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		need(c, a, WO, bytesT, line, "復元する")
+		return newTVar()
+	})
 	simple("バイト列取得する", []TParam{{"から", addr}, {WO, NUM}}, act(bytesT))
 	simple("書込する", []TParam{{WO, bytesT}, {"へ", addr}}, act(NUM))
 	simple("エラー番号取得する", nil, act(NUM))

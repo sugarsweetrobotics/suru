@@ -2312,6 +2312,153 @@ BI(m_addr) {
     if (!IS_INT(v) || INT_VAL(v) < 0) fail(pos, "「%s」は番地にできません(0 以上の整数が必要です)", plain(v).s);
     return rt_ffi_from_ptr((void *)(intptr_t)INT_VAL(v));
 }
+/* 直列化: 値をバイト列にする(プロセスどうしで値を渡すため)。
+   形式は「SURU」+ 版(1)の後に値が1つ。数は小さい順の8バイト、長さは4バイト。
+   i 整数 / f 小数 / b 真偽(1バイト) / s 文字列 / y バイト列 / l リスト(個数と中身) / r 組(形の名前、フィールドの数、名前と値) */
+static void ser_u32(Buf *b, uint32_t n) {
+    uint8_t d[4] = {n & 255, (n >> 8) & 255, (n >> 16) & 255, (n >> 24) & 255};
+    buf_add(b, (const char *)d, 4);
+}
+static void ser_u64(Buf *b, uint64_t n) {
+    uint8_t d[8];
+    for (int i = 0; i < 8; i++) d[i] = (n >> (8 * i)) & 255;
+    buf_add(b, (const char *)d, 8);
+}
+static void ser_text(Buf *b, const char *s, int64_t n) { ser_u32(b, (uint32_t)n); buf_add(b, s, (size_t)n); }
+static void ser_value(Buf *b, V v, int depth, int32_t pos) {
+    v = rt_force(v);
+    if (depth > 10000) fail(pos, "入れ子が深すぎて直列化できません");
+    switch (TAG(v)) {
+    case T_INT: buf_add(b, "i", 1); ser_u64(b, (uint64_t)INT_VAL(v)); return;
+    case T_FLT: {
+        uint64_t u;
+        memcpy(&u, &AS(Flt, v)->d, 8);
+        buf_add(b, "f", 1);
+        ser_u64(b, u);
+        return;
+    }
+    case T_BOOL: buf_add(b, AS(Bool, v)->b ? "b\1" : "b\0", 2); return;
+    case T_STR: buf_add(b, "s", 1); ser_text(b, AS(Str, v)->s, AS(Str, v)->n); return;
+    case T_BYTES: buf_add(b, "y", 1); ser_text(b, (const char *)AS(Bytes, v)->d, AS(Bytes, v)->n); return;
+    case T_LIST: {
+        List *l = AS(List, v);
+        buf_add(b, "l", 1);
+        ser_u32(b, (uint32_t)l->n);
+        for (int64_t i = 0; i < l->n; i++) ser_value(b, l->it[i], depth + 1, pos);
+        return;
+    }
+    case T_REC: {
+        Rec *r = AS(Rec, v);
+        buf_add(b, "r", 1);
+        ser_text(b, r->c->name, strlen(r->c->name));
+        ser_u32(b, (uint32_t)r->c->n);
+        for (int i = 0; i < r->c->n; i++) {
+            ser_text(b, r->c->fields[i], strlen(r->c->fields[i]));
+            ser_value(b, r->v[i], depth + 1, pos);
+        }
+        return;
+    }
+    default:
+        fail(pos, "「%s」は直列化できません(関数・動作・番地はほかのプロセスへ渡せません)", plain(v).s);
+    }
+}
+BI(m_serialize) {
+    Buf b = {0};
+    buf_add(&b, "SURU\1", 5);
+    ser_value(&b, a[0], 0, pos);
+    V r = mk_bytes(b.s, (int64_t)b.n);
+    free(b.s);
+    return r;
+}
+typedef struct { const uint8_t *d; int64_t n, i; int32_t pos; } Deser;
+__attribute__((noreturn)) static void deser_bad(Deser *z) { fail(z->pos, "バイト列が直列化した値ではありません(%lld バイト目)", (long long)z->i); }
+static const uint8_t *deser_take(Deser *z, int64_t k) {
+    if (k < 0 || z->i + k > z->n) deser_bad(z);
+    const uint8_t *p = z->d + z->i;
+    z->i += k;
+    return p;
+}
+static uint32_t deser_u32(Deser *z) {
+    const uint8_t *p = deser_take(z, 4);
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+static uint64_t deser_u64(Deser *z) {
+    const uint8_t *p = deser_take(z, 8);
+    uint64_t u = 0;
+    for (int i = 7; i >= 0; i--) u = (u << 8) | p[i];
+    return u;
+}
+static V deser_value(Deser *z, int depth) {
+    if (depth > 10000) fail(z->pos, "入れ子が深すぎて復元できません");
+    uint8_t t = *deser_take(z, 1);
+    switch (t) {
+    case 'i': return mk_int((int64_t)deser_u64(z), z->pos);
+    case 'f': {
+        uint64_t u = deser_u64(z);
+        double d;
+        memcpy(&d, &u, 8);
+        return rt_float(d);
+    }
+    case 'b': {
+        uint8_t x = *deser_take(z, 1);
+        if (x > 1) deser_bad(z);
+        return rt_bool(x);
+    }
+    case 's': {
+        uint32_t k = deser_u32(z);
+        const uint8_t *p = deser_take(z, k);
+        if (!utf8_valid(p, k)) fail(z->pos, "復元した文字列が UTF-8 ではありません");
+        return mk_str((const char *)p, k);
+    }
+    case 'y': {
+        uint32_t k = deser_u32(z);
+        return mk_bytes(deser_take(z, k), k);
+    }
+    case 'l': {
+        uint32_t k = deser_u32(z);
+        if (k == 0) return V_EMPTY;
+        if (k > (uint64_t)(z->n - z->i)) deser_bad(z); /* 中身は1つ1バイト以上 */
+        List *l = new_list(k);
+        for (uint32_t j = 0; j < k; j++) l->it[j] = deser_value(z, depth + 1);
+        return (V)(intptr_t)l;
+    }
+    case 'r': {
+        uint32_t k = deser_u32(z);
+        const uint8_t *p = deser_take(z, k);
+        char name[256];
+        if (k >= sizeof name) deser_bad(z);
+        memcpy(name, p, k);
+        name[k] = 0;
+        Ctor *c = find_ctor(name);
+        if (!c) fail(z->pos, "形「%s」はこのプログラムにないので復元できません", name);
+        uint32_t nf = deser_u32(z);
+        if ((int32_t)nf != c->n) fail(z->pos, "形「%s」のフィールドの数が違うので復元できません(このプログラムでは%d個、バイト列では%u個)", name, c->n, nf);
+        if (nf == 0) return c->nullary;
+        Rec *r = rt_alloc(sizeof(Rec) + nf * sizeof(V));
+        r->tag = T_REC;
+        r->c = c;
+        for (uint32_t j = 0; j < nf; j++) {
+            uint32_t fk = deser_u32(z);
+            const uint8_t *fp = deser_take(z, fk);
+            if (strlen(c->fields[j]) != fk || memcmp(c->fields[j], fp, fk) != 0)
+                fail(z->pos, "形「%s」のフィールドが違うので復元できません(%d番目は、このプログラムでは「%s」)", name, (int)j + 1, c->fields[j]);
+            r->v[j] = deser_value(z, depth + 1);
+        }
+        return (V)(intptr_t)r;
+    }
+    default: deser_bad(z);
+    }
+}
+BI(m_deserialize) {
+    Bytes *b = need_bytes(a[0], "「復元する」の「を」", pos);
+    Deser z = {b->d, b->n, 0, pos};
+    const uint8_t *h = deser_take(&z, 5);
+    if (memcmp(h, "SURU", 4) != 0) deser_bad(&z);
+    if (h[4] != 1) fail(pos, "直列化の版(%d)に対応していません", h[4]);
+    V v = deser_value(&z, 0);
+    if (z.i != z.n) deser_bad(&z);
+    return v;
+}
 BI(m_addrnum) { return mk_int((int64_t)(intptr_t)need_addr(a[0], "「番地数値にする」の「を」", pos)->p, pos); }
 static V mk_act_pos(int kind, const char *name, V x, V y, int32_t pos) {
     Act *act = AS(Act, mk_act(kind, name, x, y));
@@ -2699,6 +2846,8 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"バイト長にする", 1, P1_WO, NULL, m_len},
     {"番地にする", 1, P1_WO, NULL, m_addr},
     {"番地数値にする", 1, P1_WO, NULL, m_addrnum},
+    {"直列化する", 1, P1_WO, NULL, m_serialize},
+    {"復元する", 1, P1_WO, NULL, m_deserialize},
     {"バイト列取得する", 2, P2_KARA_WO, NULL, m_peek},
     {"書込する", 2, P2_WO_HE, NULL, m_poke},
     {"エラー番号取得する", 0, NULL, NULL, m_errno},
