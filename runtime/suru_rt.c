@@ -151,6 +151,7 @@ typedef struct SThread {
     uintptr_t cell;               /* 結果を書くところ(ThreadCell) */
     int (*wready)(void *);        /* 通路や合流で待っている間: 待つのを終えてよいか(NULL なら待っていない) */
     void *warg;
+    pthread_cond_t wcv;           /* 待っている間、ここで起こされる */
     GcBlk *avail[2][GC_NCLASS];   /* このスレッドだけが確保に使うブロック([atomic][大きさ]) */
     size_t since;                 /* まだ gc_since に足していない確保量 */
     struct SThread *next;
@@ -163,7 +164,6 @@ static int world_multi;                 /* 2つ目のスレッドを作ったら
 static pthread_mutex_t world_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t world_stop_cv = PTHREAD_COND_INITIALIZER;   /* 動いているスレッドが減った(GC が待つ) */
 static pthread_cond_t world_resume_cv = PTHREAD_COND_INITIALIZER; /* GC が終わった */
-static pthread_cond_t world_change_cv = PTHREAD_COND_INITIALIZER; /* 通路や合流の状態が変わった */
 static pthread_mutex_t alloc_mu = PTHREAD_MUTEX_INITIALIZER;      /* 領域の表と、共有の空きブロック */
 int32_t rt_gc_stop;                     /* GC が止まってほしいとき 1(IR の安全点が読む) */
 static int world_running = 1;           /* 動いているスレッドの数(world_mu) */
@@ -240,7 +240,7 @@ static void world_atfork_child(void) {
     pthread_mutex_init(&sock_mu, NULL);
     pthread_cond_init(&world_stop_cv, NULL);
     pthread_cond_init(&world_resume_cv, NULL);
-    pthread_cond_init(&world_change_cv, NULL);
+    pthread_cond_init(&self_thread->wcv, NULL);
     rt_gc_stop = 0;
     world_multi = 0; /* 戻ったところの world_acquire は何もしない */
     world_running = 1;
@@ -2638,9 +2638,11 @@ static V mem_run(Act *a) {
 
 /* スレッドの結果を書くところ(GC の領域。合流する動作と、動いているスレッドの両方から見える) */
 typedef struct { int64_t state; V result; char *msg; int32_t pos; } ThreadCell; /* state: 0 動いている、1 終わった、2 エラー */
-/* 通路や合流の状態を変えたら、world_mu を持って呼ぶ(待っているスレッドを起こす) */
+/* 通路や合流の状態を変えたら、world_mu を持って呼ぶ。待っているスレッドのうち、先に進めるようになったものだけを起こす */
 static void world_changed(void) {
-    if (world_multi) pthread_cond_broadcast(&world_change_cv);
+    if (!world_multi) return;
+    for (SThread *t = threads; t; t = t->next)
+        if (t->wready && t != self_thread && t->wready(t->warg)) pthread_cond_signal(&t->wcv);
 }
 
 /* world_mu を持って呼び、ready(arg) が真になるまで(外に出て)待つ。持ったまま戻るので、続けて状態を変えられる。
@@ -2661,7 +2663,7 @@ static void world_wait(int (*ready)(void *), void *arg, int32_t pos) {
         world_save(me);
         world_running--;
         pthread_cond_signal(&world_stop_cv);
-        while (!ready(arg)) pthread_cond_wait(&world_change_cv, &world_mu);
+        while (!ready(arg)) pthread_cond_wait(&me->wcv, &world_mu);
         while (__atomic_load_n(&rt_gc_stop, __ATOMIC_RELAXED)) pthread_cond_wait(&world_resume_cv, &world_mu);
         world_running++;
         me->wready = NULL;
@@ -2734,6 +2736,7 @@ static void *thread_main(void *arg) {
     __atomic_store_n(&c->state, state, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&world_mu);
     thread_finish(t);
+    pthread_cond_destroy(&t->wcv);
     free(t);
     return NULL;
 }
@@ -2750,6 +2753,7 @@ static ThreadCell *thread_start(V (*run)(V), V arg, int quiet, int32_t pos) {
     st->t = t;
     st->run = run;
     st->quiet = quiet;
+    pthread_cond_init(&t->wcv, NULL);
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, THREAD_STACK);
@@ -2772,6 +2776,7 @@ static ThreadCell *thread_start(V (*run)(V), V arg, int quiet, int32_t pos) {
         while (*pp != t) pp = &(*pp)->next;
         *pp = t->next;
         pthread_mutex_unlock(&world_mu);
+        pthread_cond_destroy(&t->wcv);
         free(t);
         free(st);
         fail(pos, "スレッドを始められませんでした(%s)", strerror(e));
@@ -3306,6 +3311,7 @@ static void *run_main(void *arg) {
 
 int main(int argc, char **argv) {
     gc_init();
+    pthread_cond_init(&main_thread.wcv, NULL);
     prog_argc = argc;
     prog_argv = argv;
     source_text = suru_source;

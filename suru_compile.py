@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -166,13 +167,25 @@ class Scope:
         return None
 
 
-# 関数の入口の安全点(Go 版の safepoint と同じ)
+# 関数の入口の安全点(Go 版の safepoint と同じ)。する のコードを呼ばない関数(葉)には置かない
 SAFEPOINT = """  %sp = load atomic i32, ptr @rt_gc_stop monotonic, align 4
   %spc = icmp ne i32 %sp, 0
   br i1 %spc, label %sp.wait, label %b0
 sp.wait:
   call void @rt_safepoint()
   br label %b0"""
+
+# 呼んでも する のコードに戻らない実行時の関数(これだけを呼ぶ関数は再帰の輪に入らないので、安全点が要らない。
+# 確保は rt_alloc の中で安全点を見る)。Go 版の leafSafe と同じ
+LEAF_SAFE = frozenset("""@rt_alloc @rt_bool @rt_float @rt_str @rt_list @rt_make_fn @rt_lazy @rt_binop @rt_neg @rt_truthy
+@rt_truth @rt_pred_check @rt_eq @rt_field @rt_field_result @rt_prop @rt_each_check @rt_is_list_len @rt_list_at
+@rt_is_ctor @rt_rec_at @rt_named_get @rt_no_match @rt_fail @rt_construct @rt_update @rt_global_cached
+@llvm.sadd.with.overflow.i64 @llvm.ssub.with.overflow.i64 @llvm.smul.with.overflow.i64""".split())
+CALL_RE = re.compile(r"\bcall [^@%]*([@%][^(\s]*)\(")
+
+
+def is_leaf(lines: list[str]) -> bool:
+    return all(m.group(1) in LEAF_SAFE for line in lines for m in CALL_RE.finditer(line))
 
 
 class FnGen:
@@ -262,7 +275,8 @@ class FnGen:
             frame.append(f"  %fr = alloca i64, i32 {self.nslots}")
         frame.append("  store ptr %up, ptr %fr")
         # 安全点: GC がほかのスレッドを止めたいとき(rt_gc_stop が 1)は、ここで止まる
-        return "\n".join([f"{header} {{", "entry:"] + self.entry + frame + [SAFEPOINT] + self.lines + ["}"])
+        enter = "  br label %b0" if is_leaf(self.lines) else SAFEPOINT
+        return "\n".join([f"{header} {{", "entry:"] + self.entry + frame + [enter] + self.lines + ["}"])
 
 
 # --- コンパイラ ------------------------------------------------------------
