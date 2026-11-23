@@ -224,6 +224,24 @@ func init() {
 		need(c, a, WO, bytesT, line, "復元する")
 		return newTVar()
 	})
+	prim("固定直列化する", []partReq{req(WO), req("で")}, func() Type {
+		x := newTVar()
+		return &TFun{[]TParam{{WO, x}, {"で", x}}, bytesT}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		x := newTVar()
+		need(c, a, WO, x, line, "固定直列化する")
+		need(c, a, "で", x, line, "固定直列化する")
+		return bytesT
+	})
+	prim("固定復元する", []partReq{req(WO), req("で")}, func() Type {
+		x := newTVar()
+		return &TFun{[]TParam{{WO, bytesT}, {"で", x}}, x}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		x := newTVar()
+		need(c, a, WO, bytesT, line, "固定復元する")
+		need(c, a, "で", x, line, "固定復元する")
+		return x
+	})
 	simple("バイト列取得する", []TParam{{"から", addr}, {WO, NUM}}, act(bytesT))
 	simple("書込する", []TParam{{WO, bytesT}, {"へ", addr}}, act(NUM))
 	simple("エラー番号取得する", nil, act(NUM))

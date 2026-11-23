@@ -2576,6 +2576,94 @@ BI(m_deserialize) {
     Bytes *b = need_bytes(a[0], "「復元する」の「を」", pos);
     return deser_all(b->d, b->n, pos);
 }
+/* 固定の形: 見本の組の葉のフィールドを、どれも 8 バイト(整数は int64_t、小数は double、真偽は int64_t の 0 か 1)で
+ * 並べる。入れ子の組は平らにする(C の構造体と同じ並び)。suru.py の _fixed_kinds と同じ */
+static int64_t fixed_count(V s, int depth, int32_t pos) {
+    s = rt_force(s);
+    if (depth > 100) fail(pos, "入れ子が深すぎて固定の形にできません");
+    switch (TAG(s)) {
+    case T_INT: case T_FLT: case T_BOOL: return 1;
+    case T_REC: {
+        Rec *r = AS(Rec, s);
+        int64_t n = 0;
+        if (r->c->n > 0) {
+            for (int i = 0; i < r->c->n; i++) n += fixed_count(r->v[i], depth + 1, pos);
+            return n;
+        }
+    } /* fallthrough */
+    default: fail(pos, "「%s」は固定の形にできません(できるのは、数と真偽だけでできた組です)", plain(s).s);
+    }
+}
+static int64_t fixed_size(V s, int32_t pos) {
+    s = rt_force(s);
+    if (TAG(s) != T_REC || AS(Rec, s)->c->n == 0) fail(pos, "固定の形の見本は組でなければなりません(「%s」が渡されました)", plain(s).s);
+    return fixed_count(s, 0, pos) * 8;
+}
+static void fixed_put(uint8_t **p, V x, V s, int32_t pos) {
+    x = rt_force(x);
+    s = rt_force(s);
+    uint64_t u;
+    switch (TAG(s)) {
+    case T_REC: {
+        Rec *rs = AS(Rec, s);
+        if (TAG(x) != T_REC || AS(Rec, x)->c != rs->c) fail(pos, "「%s」は見本と形が違います(見本は「%s」)", plain(x).s, rs->c->name);
+        for (int i = 0; i < rs->c->n; i++) fixed_put(p, AS(Rec, x)->v[i], rs->v[i], pos);
+        return;
+    }
+    case T_BOOL:
+        if (TAG(x) != T_BOOL) fail(pos, "「%s」は見本と違って真偽ではありません", plain(x).s);
+        u = AS(Bool, x)->b ? 1 : 0;
+        break;
+    case T_INT:
+        if (TAG(x) != T_INT) fail(pos, "「%s」は見本と違って整数ではありません", plain(x).s);
+        u = (uint64_t)INT_VAL(x);
+        break;
+    default: { /* T_FLT */
+        double d;
+        if (TAG(x) == T_INT) d = (double)INT_VAL(x);
+        else if (TAG(x) == T_FLT) d = AS(Flt, x)->d;
+        else fail(pos, "「%s」は見本と違って数ではありません", plain(x).s);
+        memcpy(&u, &d, 8);
+    }
+    }
+    for (int i = 0; i < 8; i++) (*p)[i] = (uint8_t)(u >> (8 * i));
+    *p += 8;
+}
+static V fixed_get(const uint8_t **p, V s, int32_t pos) {
+    s = rt_force(s);
+    if (TAG(s) == T_REC) {
+        Rec *rs = AS(Rec, s);
+        Rec *r = rt_alloc(sizeof(Rec) + rs->c->n * sizeof(V));
+        r->tag = T_REC;
+        r->c = rs->c;
+        for (int i = 0; i < rs->c->n; i++) r->v[i] = fixed_get(p, rs->v[i], pos);
+        return (V)(intptr_t)r;
+    }
+    uint64_t u = 0;
+    for (int i = 7; i >= 0; i--) u = (u << 8) | (*p)[i];
+    *p += 8;
+    if (TAG(s) == T_BOOL) return u ? V_TRUE : V_FALSE;
+    if (TAG(s) == T_INT) return mk_int((int64_t)u, pos);
+    double d;
+    memcpy(&d, &u, 8);
+    return rt_float(d);
+}
+BI(m_fixed_ser) { /* を, で */
+    int64_t n = fixed_size(a[1], pos);
+    uint8_t *d = malloc((size_t)n), *p = d;
+    if (!d) fail(pos, "メモリが足りません");
+    fixed_put(&p, a[0], a[1], pos); /* 失敗したら d は残るが、すぐ終わるのでよしとする */
+    V r = mk_bytes((const char *)d, n);
+    free(d);
+    return r;
+}
+BI(m_fixed_de) { /* を, で */
+    Bytes *b = need_bytes(a[0], "「固定復元する」の「を」", pos);
+    int64_t n = fixed_size(a[1], pos);
+    if (b->n != n) fail(pos, "バイト列の長さが見本の形と違います(形は %lld バイト、バイト列は %lld バイト)", (long long)n, (long long)b->n);
+    const uint8_t *p = b->d;
+    return fixed_get(&p, a[1], pos);
+}
 BI(m_addrnum) { return mk_int((int64_t)(intptr_t)need_addr(a[0], "「番地数値にする」の「を」", pos)->p, pos); }
 static V mk_act_pos(int kind, const char *name, V x, V y, int32_t pos) {
     Act *act = AS(Act, mk_act(kind, name, x, y));
@@ -3251,6 +3339,8 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"番地数値にする", 1, P1_WO, NULL, m_addrnum},
     {"直列化する", 1, P1_WO, NULL, m_serialize},
     {"復元する", 1, P1_WO, NULL, m_deserialize},
+    {"固定直列化する", 2, P2_WO_DE, NULL, m_fixed_ser},
+    {"固定復元する", 2, P2_WO_DE, NULL, m_fixed_de},
     {"バイト列取得する", 2, P2_KARA_WO, NULL, m_peek},
     {"書込する", 2, P2_WO_HE, NULL, m_poke},
     {"エラー番号取得する", 0, NULL, NULL, m_errno},

@@ -3366,6 +3366,82 @@ def _deserialize(it: "Interpreter", v: Any, line: int) -> Any:
     return r
 
 
+def _fixed_kinds(sample: Any, line: int) -> list:
+    """固定の形: 見本の組を、葉のフィールドの並び(「i」整数・「f」小数・「b」真偽、どれも 8 バイト)にする。
+    入れ子の組は平らにする(C の構造体と同じ並び)。runtime/suru_rt.c の fixed_kinds と同じ"""
+    out: list = []
+
+    def walk(x: Any, depth: int) -> None:
+        if depth > 100:
+            raise SuruError("入れ子が深すぎて固定の形にできません", line)
+        if x is True or x is False:
+            out.append("b")
+        elif isinstance(x, int):
+            out.append("i")
+        elif isinstance(x, float):
+            out.append("f")
+        elif isinstance(x, Record) and x.fields:
+            for y in x.values:
+                walk(y, depth + 1)
+        else:
+            raise SuruError(f"「{format_value(x)}」は固定の形にできません(できるのは、数と真偽だけでできた組です)", line)
+
+    if not (isinstance(sample, Record) and sample.fields):
+        raise SuruError(f"固定の形の見本は組でなければなりません(「{format_value(sample)}」が渡されました)", line)
+    walk(sample, 0)
+    return out
+
+
+def _fixed_serialize(v: Any, sample: Any, line: int) -> bytes:
+    out = bytearray()
+    _fixed_kinds(sample, line)
+
+    def put(x: Any, s: Any) -> None:
+        if isinstance(s, Record):
+            if not isinstance(x, Record) or x.ctor != s.ctor:
+                raise SuruError(f"「{format_value(x)}」は見本と形が違います(見本は「{s.ctor}」)", line)
+            for y, t in zip(x.values, s.values):
+                put(y, t)
+        elif s is True or s is False:
+            if x is not True and x is not False:
+                raise SuruError(f"「{format_value(x)}」は見本と違って真偽ではありません", line)
+            out.extend((1 if x else 0).to_bytes(8, "little"))
+        elif isinstance(s, int):
+            if x is True or x is False or not isinstance(x, int):
+                raise SuruError(f"「{format_value(x)}」は見本と違って整数ではありません", line)
+            if not -(1 << 63) <= x < (1 << 63):
+                raise SuruError(f"「{format_value(x)}」は大きすぎて固定の形にできません(±2の63乗までです)", line)
+            out.extend(x.to_bytes(8, "little", signed=True))
+        else:
+            if x is True or x is False or not isinstance(x, (int, float)):
+                raise SuruError(f"「{format_value(x)}」は見本と違って数ではありません", line)
+            out.extend(struct.pack("<d", float(x)))
+
+    put(v, sample)
+    return bytes(out)
+
+
+def _fixed_deserialize(v: Any, sample: Any, line: int) -> Any:
+    d = _bytes(v, "「固定復元する」の「を」", line)
+    n = len(_fixed_kinds(sample, line)) * 8
+    if len(d) != n:
+        raise SuruError(f"バイト列の長さが見本の形と違います(形は {n} バイト、バイト列は {len(d)} バイト)", line)
+    pos = [0]
+
+    def get(s: Any) -> Any:
+        if isinstance(s, Record):
+            return Record(s.ctor, s.type_name, s.fields, tuple(get(t) for t in s.values))
+        b = d[pos[0]:pos[0] + 8]
+        pos[0] += 8
+        if s is True or s is False:
+            return int.from_bytes(b, "little") != 0
+        if isinstance(s, int):
+            return int.from_bytes(b, "little", signed=True)
+        return struct.unpack("<d", b)[0]
+
+    return get(sample)
+
+
 # 標準.suru の中と、読み込んだ側の「標準内の…」でだけ使える組み込み(する では書けないもの)
 STD_PRIMITIVES = [
     Builtin("切捨する", [(WO, True)], _floor),
@@ -3399,6 +3475,8 @@ STD_PRIMITIVES = [
     Builtin("番地数値にする", [(WO, True)], lambda it, a, line: _addr(a[WO], "「番地数値にする」の「を」", line).value),
     Builtin("直列化する", [(WO, True)], lambda it, a, line: _serialize(a[WO], line)),
     Builtin("復元する", [(WO, True)], lambda it, a, line: _deserialize(it, a[WO], line)),
+    Builtin("固定直列化する", [(WO, True), ("で", True)], lambda it, a, line: _fixed_serialize(a[WO], a["で"], line)),
+    Builtin("固定復元する", [(WO, True), ("で", True)], lambda it, a, line: _fixed_deserialize(a[WO], a["で"], line)),
     Builtin("バイト列取得する", [("から", True), (WO, True)], lambda it, a, line: _peek(a["から"], a[WO], line)),
     Builtin("書込する", [(WO, True), ("へ", True)], lambda it, a, line: _poke(a[WO], a["へ"], line)),
     Builtin("エラー番号取得する", [], lambda it, a, line: Action("エラー番号取得する", lambda it2: _errno())),
