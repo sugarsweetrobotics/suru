@@ -3899,6 +3899,20 @@ def _listen(net: _Net, a: dict, line: int) -> int:
     return net.add(sock)
 
 
+def _connect(net: _Net, a: dict, line: int) -> int:
+    import socket
+    host = _str(a["に"], "「接続する」の「に」", line)
+    port = _num(a["で"], line)
+    if not isinstance(port, int) or not 0 <= port <= 65535:
+        raise SuruError(f"「{format_value(a['で'])}」はポートの番号ではありません", line)
+    try:
+        sock = socket.create_connection((host, port))
+    except socket.gaierror as e:
+        raise SuruError(f"「接続する」で通信に失敗しました({e.strerror or e})", line) from None
+    # 応答を待つ時間は区切らない(LLM のように最初の応答まで長くかかる相手もいるため)
+    return net.add(sock)
+
+
 def _accept(net: _Net, a: dict, line: int) -> int:
     conn, _ = net.get(a["から"], "待受口", line).accept()
     conn.settimeout(NET_TIMEOUT)  # 何も送ってこない相手で止まらないように
@@ -3943,6 +3957,7 @@ def _close(net: _Net, a: dict, line: int) -> int:
 NET_PRIMITIVES = [
     Builtin("待受開始する", [(WO, True)], _net_action("待受開始する", _listen)),
     Builtin("接続受付する", [("から", True)], _net_action("接続受付する", _accept)),
+    Builtin("接続する", [("に", True), ("で", True)], _net_action("接続する", _connect)),
     Builtin("行受信する", [("から", True)], _net_action("行受信する", _recv_line)),
     Builtin("受信する", [("から", True), (WO, True)], _net_action("受信する", _recv)),
     Builtin("送信する", [(WO, True), ("へ", True)], _net_action("送信する", _send)),

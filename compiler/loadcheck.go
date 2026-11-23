@@ -36,7 +36,7 @@ var stdPrimitives = []builtinInfo{
 
 // 通信.suru の中と「通信内の…」でだけ使える組み込み
 var netPrimitives = []builtinInfo{
-	{"待受開始する", nil}, {"接続受付する", nil}, {"行受信する", nil}, {"受信する", nil},
+	{"待受開始する", nil}, {"接続受付する", nil}, {"接続する", nil}, {"行受信する", nil}, {"受信する", nil},
 	{"送信する", nil}, {"バイト列送信する", nil}, {"切断する", nil},
 }
 

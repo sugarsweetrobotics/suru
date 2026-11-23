@@ -2013,6 +2013,7 @@ def _t_try(c, a, line):
 # 通信(「通信」の組み込み)。待受口と接続は番号
 _simple("待受開始する", [(WO, NUM)], act(NUM))
 _simple("接続受付する", [("から", NUM)], act(NUM))
+_simple("接続する", [("に", STR), ("で", NUM)], act(NUM))
 _simple("行受信する", [("から", NUM)], act(STR))
 _simple("受信する", [("から", NUM), (WO, NUM)], act(STR))
 _simple("送信する", [(WO, STR), ("へ", NUM)], act(NUM))

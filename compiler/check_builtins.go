@@ -313,6 +313,7 @@ func init() {
 	// 通信(「通信」の組み込み)。待受口と接続は番号
 	simple("待受開始する", []TParam{{WO, NUM}}, act(NUM))
 	simple("接続受付する", []TParam{{"から", NUM}}, act(NUM))
+	simple("接続する", []TParam{{"に", STR}, {"で", NUM}}, act(NUM))
 	simple("行受信する", []TParam{{"から", NUM}}, act(STR))
 	simple("受信する", []TParam{{"から", NUM}, {WO, NUM}}, act(STR))
 	simple("送信する", []TParam{{WO, STR}, {"へ", NUM}}, act(NUM))

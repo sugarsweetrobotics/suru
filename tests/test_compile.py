@@ -238,6 +238,18 @@ def test_通信のサーバーをコンパイルして答えてもらう(tmp_pat
         p.kill()
 
 
+def test_通信でこちらからつなぐのをコンパイルする(tmp_path):
+    from net_helper import CLIENT, CLIENT_OUT, answer_once, free_port
+
+    port = free_port()
+    t = answer_once(port)
+    r = compiled(CLIENT.replace("PORT", str(port)), tmp_path)
+    t.join(10)
+    assert r.returncode == 0 and r.stdout.splitlines() == CLIENT_OUT
+    bad = compiled(f"「通信」 を 読み込む\n「127.0.0.1」 に {free_port()} で 通信内の接続する\n", tmp_path)
+    assert bad.returncode == 1 and "「接続する」で通信に失敗しました" in bad.stderr
+
+
 @pytest.mark.parametrize("which", ["HTTP_SERVER", "HTTP_ACTION_SERVER"])
 def test_HTTPのサーバーをコンパイルして答えてもらう(which, tmp_path):
     import net_helper as N
