@@ -2219,7 +2219,7 @@ func nameUnwraps(node Node, fn string) {
 const PreludeName = "基本"
 
 var preludeWords = setOf("成否", "有無", "成功", "失敗", "有")
-var preludeCalls = setOf("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する") // 取出する は性質の関数なので入れない
+var preludeCalls = setOf("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する", "試算する") // 取出する は性質の関数なので入れない
 
 func hasPreludeImport(imports map[*LNode]Node) bool {
 	for _, i := range imports {

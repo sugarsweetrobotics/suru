@@ -3291,7 +3291,7 @@ PRELUDE_NONE = "無"
 PRELUDE_TRY = "試行する"
 PRELUDE_TYPES = ("成否", "有無")
 PRELUDE_WORDS = frozenset(("成否", "有無", "成功", "失敗", "有"))
-PRELUDE_CALLS = frozenset(("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する"))  # 取出する は性質の関数なので入れない
+PRELUDE_CALLS = frozenset(("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する", "試算する"))  # 取出する は性質の関数なので入れない
 
 
 def _int(v: Any, what: str, line: int | None) -> int:
@@ -3731,6 +3731,7 @@ PRELUDE_PRIMITIVES = [
     Builtin("失敗説明する", [(WO, True), ("で", True)], lambda it, a, line: _explain(it, a, line)),
     Builtin("失敗詳細にする", [(WO, True)], lambda it, a, line: _detail(it, a, line)),
     Builtin("数値確認する", [(WO, True)], lambda it, a, line: _number_check(it, a, line)),
+    Builtin("試算する", [(WO, True)], lambda it, a, line: _calc_try(it, a, line)),
 ]
 
 
@@ -3756,7 +3757,7 @@ def _try(m: Any, alt: Any, line: int) -> Any:
             try:
                 return Record("成功", "成否", ("値",), (it.perform(m),))
             except SuruError as e:
-                return Record("失敗", "成否", ("理由",), (e.message,))
+                return caught_failure(e)
             except RecursionError:
                 return Record("失敗", "成否", ("理由",), ("再帰が深すぎます",))
 
@@ -4578,6 +4579,15 @@ def add_trace(v: Any, run: Run) -> Any:
     return Record(v.ctor, v.type_name, v.fields, v.values, v.trace + (f"{int(run.line)}行目 {run.fn}",), v.notes)
 
 
+ERROR_SITE = "(ここで実行時エラー)"
+
+
+def caught_failure(e: "SuruError") -> Record:
+    """「試行する」(で を省く)・「試算する」で受け止めた実行時エラーを失敗にする。起きた場所を経路の先頭に入れる"""
+    trace = (_where(e.line) + ERROR_SITE,) if e.line else ()
+    return Record("失敗", "成否", ("理由",), (e.message,), trace)
+
+
 def failure_detail(v: Any) -> str:
     """失敗の詳細: 説明(外側から)、理由、経路(内側から)"""
     r = v.values[0]
@@ -4604,6 +4614,19 @@ def _number_check(it: Any, a: dict, line: int) -> Any:
         return Record("失敗", "成否", ("理由",), (e.message,))
 
 
+def _calc_try(it: Any, a: dict, line: int) -> Any:
+    """「f を 試算する」: 引数を全部渡した関数の値 f を呼び、成功なら 値 の 成功、実行時エラーなら エラーの文 の 失敗"""
+    f = a[WO]
+    if not isinstance(f, FUNCTION_TYPES):
+        raise SuruError(f"「試算する」の「を」は関数の値でなければなりません(「{format_value(f)}」が渡されました)", line)
+    try:
+        return Record("成功", "成否", ("値",), (it.call(f, {}, line),))
+    except SuruError as e:
+        return caught_failure(e)
+    except RecursionError:
+        return Record("失敗", "成否", ("理由",), ("再帰が深すぎます",))
+
+
 def _detail(it: Any, a: dict, line: int) -> str:
     v = a[WO]
     if not is_failure(v):
@@ -4626,7 +4649,16 @@ def _call_name(call: Any) -> str:
 
 
 def unwrap_value(v: Any, call: Any, line: Any) -> tuple[bool, Any]:
-    """「した 中身」: 成功(有)なら (真, 中の値)、失敗(無)なら (偽, その値)"""
+    """「した 中身」: 成功(有)なら (真, 中の値)、失敗(無)なら (偽, その値)。
+    「xs の それぞれ を f した 中身」のリストは、全部が成功なら (真, 値のリスト)、そうでなければ (偽, 最初の失敗)"""
+    if isinstance(v, tuple):
+        out = []
+        for e in v:
+            ok, x = unwrap_value(e, call, line)
+            if not ok:
+                return False, x
+            out.append(x)
+        return True, tuple(out)
     if isinstance(v, Record) and v.type_name in UNWRAP_TYPES:
         if v.ctor in SUCCESS_SHAPES:
             return True, v.values[0]

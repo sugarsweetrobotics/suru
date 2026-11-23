@@ -49,7 +49,7 @@ var threadPrimitives = []builtinInfo{
 }
 
 // 基本.suru の中と「基本内の…」(自動で読み込んだときは前置きなしでも)で使える組み込み
-var preludePrimitives = []builtinInfo{{"中断する", nil}, {"失敗説明する", nil}, {"失敗詳細にする", nil}, {"数値確認する", nil}}
+var preludePrimitives = []builtinInfo{{"中断する", nil}, {"失敗説明する", nil}, {"失敗詳細にする", nil}, {"数値確認する", nil}, {"試算する", nil}}
 
 // libPrimitives は lib/ のファイルごとの組み込み(suru.py の LIB_PRIMITIVES)
 // (同梱のものでも、LibDir(SURU_LIB)のフォルダから読んだものでも)

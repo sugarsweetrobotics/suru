@@ -616,6 +616,7 @@ typedef struct TryFrame { jmp_buf jb; struct TryFrame *prev; int quiet; } TryFra
 static _Thread_local TryFrame *try_top;
 static _Thread_local char *fail_last_msg;
 static _Thread_local int32_t fail_last_pos;
+static V caught_failure(void); /* 受け止めた実行時エラーの失敗(後で定義) */
 
 __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
     fflush(stdout);
@@ -1579,10 +1580,7 @@ static V act_run(Act *a) {
             try_top = f.prev;
             return a->b ? r : rt_construct("成功", 1, &r, 0);
         }
-        if (!a->b) {
-            V why = rt_str(fail_last_msg, (int64_t)strlen(fail_last_msg));
-            return rt_construct("失敗", 1, &why, 0);
-        }
+        if (!a->b) return caught_failure();
         return perform(a->b); /* fail_msg が try_top を戻している */
     }
     case A_RUNALL: {
@@ -1747,8 +1745,18 @@ static V with_trace(V v, V trace, V notes) {
     o->v[n + 1] = notes;
     return (V)(intptr_t)o;
 }
+static int is_success(V v) {
+    if (TAG(v) != T_REC) return 0;
+    Ctor *c = AS(Rec, v)->c;
+    return (!strcmp(c->type, "成否") && !strcmp(c->name, "成功")) || (!strcmp(c->type, "有無") && !strcmp(c->name, "有"));
+}
 /* 「した 中身」で失敗を返した場所(行と関数の名前)を、失敗の値の見えない経路に足す */
 V rt_trace(V v, const char *fn, int32_t pos) {
+    if (TAG(v) == T_LIST) { /* 「それぞれ … した 中身」: 最初の失敗(無) */
+        List *l = AS(List, v);
+        for (int64_t i = 0; i < l->n; i++)
+            if (!is_success(l->it[i])) { v = l->it[i]; break; }
+    }
     if (!is_failure(v)) return v;
     char buf[64];
     int k = snprintf(buf, sizeof buf, "%d行目 ", pos & 0xfffff);
@@ -1758,6 +1766,17 @@ V rt_trace(V v, const char *fn, int32_t pos) {
     V e = mk_str(b.s, (int64_t)b.n);
     free(b.s);
     return with_trace(v, list_push(fail_trace(v), e), fail_notes(v));
+}
+/* 「試行する」(で を省く)・「試算する」で受け止めた実行時エラーの失敗。起きた場所を経路の先頭に入れる */
+static V caught_failure(void) {
+    V why = rt_str(fail_last_msg, (int64_t)strlen(fail_last_msg));
+    V f = rt_construct("失敗", 1, &why, 0);
+    int line = fail_last_pos & 0xfffff, col = (fail_last_pos >> 20) & 0x7ff;
+    if (!line) return f;
+    char buf[96];
+    int k = col ? snprintf(buf, sizeof buf, "%d行目 %d文字目(ここで実行時エラー)", line, col)
+                : snprintf(buf, sizeof buf, "%d行目(ここで実行時エラー)", line);
+    return with_trace(f, list_push(V_EMPTY, mk_str(buf, k)), V_EMPTY);
 }
 /* 失敗の詳細: 説明(外側から)、理由、経路(内側から) */
 static char *failure_detail(V v) {
@@ -1782,6 +1801,17 @@ static char *failure_detail(V v) {
 
 /* 「…した 中身」: 成否の成功・有無の有なら中の値、失敗・無なら 0 */
 V rt_unwrap(V v, const char *name, int32_t pos) {
+    if (TAG(v) == T_LIST) { /* 「それぞれ … した 中身」: 全部が成功なら値のリスト */
+        List *l = AS(List, v);
+        if (l->n == 0) return v;
+        List *out = new_list(l->n);
+        for (int64_t i = 0; i < l->n; i++) {
+            V x = rt_unwrap(l->it[i], name, pos);
+            if (!x) return 0;
+            out->it[i] = x;
+        }
+        return (V)(intptr_t)out;
+    }
     if (TAG(v) == T_REC) {
         Ctor *c = AS(Rec, v)->c;
         if (!strcmp(c->type, "成否") || !strcmp(c->type, "有無")) {
@@ -2808,6 +2838,19 @@ BI(m_numcheck) { /* 数にできれば 数 の 成功、できなければ エ�
     V why = rt_str(fail_last_msg, (int64_t)strlen(fail_last_msg));
     return rt_construct("失敗", 1, &why, 0);
 }
+BI(m_calc_try) { /* 引数を全部渡した関数の値を呼び、成功なら 値 の 成功、実行時エラーなら エラーの文 の 失敗 */
+    need_fn(a[0], pos);
+    TryFrame f;
+    f.prev = try_top;
+    f.quiet = 1;
+    try_top = &f;
+    if (setjmp(f.jb) == 0) {
+        V r = apply(a[0], 0, NULL, pos);
+        try_top = f.prev;
+        return rt_construct("成功", 1, &r, 0);
+    }
+    return caught_failure();
+}
 BI(m_abort) {
     fail_msg(pos, need_str(a[0], "「中断する」の「を」", pos)->s);
 }
@@ -3478,6 +3521,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"失敗説明する", 2, P2_WO_DE, NULL, f_explain},
     {"失敗詳細にする", 1, P1_WO, NULL, f_detail},
     {"数値確認する", 1, P1_WO, NULL, m_numcheck},
+    {"試算する", 1, P1_WO, NULL, m_calc_try},
     /* 「スレッド」の組み込み */
     {"並行開始する", 1, P1_WO, NULL, t_spawn},
     {"合流する", 1, P1_WO, NULL, t_join},

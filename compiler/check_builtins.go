@@ -286,6 +286,18 @@ func init() {
 		need(c, a, WO, STR, line, "数値確認する")
 		return resultT(NUM, STR)
 	})
+	prim("試算する", []partReq{req(WO)}, func() Type {
+		x := newTVar()
+		return &TFun{[]TParam{{WO, &TFun{nil, x}}}, resultT(x, STR)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		r := newTVar()
+		if t, ok := a.get(WO); ok {
+			c.unifyOr(t, &TFun{nil, r}, line, func(sa, sb string) string {
+				return "「試算する」の「を」には、引数を全部渡した関数の値(「… すること」)が必要ですが、" + sa + "が渡されています"
+			})
+		}
+		return resultT(r, STR)
+	})
 	prim("試行する", []partReq{req(WO), opt("で")}, func() Type {
 		x := newTVar()
 		return &TFun{[]TParam{{WO, act(x)}, {"で", act(x)}}, act(x)}

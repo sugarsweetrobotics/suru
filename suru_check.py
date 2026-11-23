@@ -1124,9 +1124,14 @@ class Checker:
             self.exits.pop()
         return TFun(params, result)
 
-    def unwrap_type(self, value: Any, target: Any, call: Any, line: Any) -> Any:
-        """「した 中身」: value(成否・有無)の中の値の型。失敗は target(返す先の型)として返す"""
-        name = _call_name(call)
+    def unwrap_type(self, value: Any, target: Any, call: Any, line: Any, name: str = "") -> Any:
+        """「した 中身」: value(成否・有無)の中の値の型。失敗は target(返す先の型)として返す。
+        「xs の それぞれ を f した 中身」なら value は成否(有無)のリストで、中の値のリストになる"""
+        if isinstance(call, Call) and any(isinstance(a, Each) for a in call.args.values()):
+            elem = TVar()
+            self.expect(value, lst(elem), line, "「それぞれ … した 中身」の前")
+            return lst(self.unwrap_type(elem, target, None, line, name=_call_name(call)))
+        name = name or _call_name(call)
         kind = next((t.name for t in (prune(value), prune(target)) if isinstance(t, TCon) and t.name in UNWRAP_TYPES),
                     UNWRAP_TYPES[0])
         inner = TVar()
@@ -1986,6 +1991,15 @@ def _t_detail(c, a, line):
 def _t_numcheck(c, a, line):
     _need(c, a, WO, STR, line, "数値確認する")
     return _result_t(NUM, STR)
+
+
+@prim("試算する", {WO: True}, lambda: (lambda a: TFun([(WO, TFun([], a))], _result_t(a, STR)))(TVar()))
+def _t_calc_try(c, a, line):
+    r = TVar()
+    if WO in a:
+        c.unify_or(a[WO], TFun([], r), line,
+                   lambda sa, sb: f"「試算する」の「を」には、引数を全部渡した関数の値(「… すること」)が必要ですが、{sa}が渡されています")
+    return _result_t(r, STR)
 
 
 @prim("試行する", {WO: True, "で": False}, lambda: (lambda x: TFun([(WO, act(x)), ("で", act(x))], act(x)))(TVar()))
