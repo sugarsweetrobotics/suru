@@ -25,11 +25,12 @@ import (
 	"sync"
 	"unicode/utf16"
 
-	suru "github.com/sugarsweetrobotics/suru"
-	"github.com/sugarsweetrobotics/suru/compiler"
+	suru "github.com/suru-lang/suru"
+	"github.com/suru-lang/suru/compiler"
 )
 
-const version = "0.1.0"
+// version はリリースのときに -ldflags "-X main.version=…" で書きかえる
+var version = "0.1.0"
 
 // --- JSON-RPC ---
 

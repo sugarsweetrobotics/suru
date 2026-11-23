@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/sugarsweetrobotics/suru/compiler"
+	"github.com/suru-lang/suru/compiler"
 )
 
 // ConfigName はプロジェクトの設定ファイルの名前

@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "suru"
+name = "suru-lang"
 dynamic = ["version"]
 description = "日本語の関数型プログラミング言語「する」(インタプリタ・型検査・LLVM コンパイラ)"
 readme = "README.md"
@@ -12,7 +12,14 @@ requires-python = ">=3.10"
 license = "GPL-3.0-or-later AND MIT"
 license-files = ["LICENSE", "lib/LICENSE", "runtime/LICENSE"]
 authors = [{ name = "sugarsweetrobotics" }]
+keywords = ["japanese", "programming-language", "interpreter", "compiler", "llvm"]
 classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Operating System :: POSIX",
+    "Operating System :: MacOS",
     "Programming Language :: Python :: 3",
     "Natural Language :: Japanese",
     "Topic :: Software Development :: Interpreters",
@@ -20,7 +27,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/sugarsweetrobotics/suru"
+Homepage = "https://github.com/suru-lang/suru"
+Repository = "https://github.com/suru-lang/suru"
+Issues = "https://github.com/suru-lang/suru/issues"
 
 [project.scripts]
 suru = "suru:cli"

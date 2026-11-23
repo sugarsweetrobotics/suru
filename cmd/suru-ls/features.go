@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/sugarsweetrobotics/suru/compiler"
+	"github.com/suru-lang/suru/compiler"
 )
 
 // --- 補完 ---
