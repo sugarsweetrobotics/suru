@@ -36,6 +36,7 @@ def main(argv):
             "suru.py": found("suru.py", r'^__version__ = "([^"]+)"'),
             "cmd/suruc/main.go": found("cmd/suruc/main.go", r'^var version = "([^"]+)"'),
             "cmd/suru-ls/main.go": found("cmd/suru-ls/main.go", r'^var version = "([^"]+)"'),
+            "cmd/kumu/main.go": found("cmd/kumu/main.go", r'^var version = "([^"]+)"'),
         }
     else:
         print(f"タグ {tag} は v… か vscode-v… の形にしてください", file=sys.stderr)

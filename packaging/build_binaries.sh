@@ -6,7 +6,7 @@
 #
 #   packaging/build_binaries.sh 0.1.0 dist/
 #
-# Linux と macOS は suruc と suru-ls、Windows は suru-ls だけです
+# Linux と macOS は suruc・suru-ls・kumu、Windows は suru-ls だけです
 # (コンパイルしたプログラムが使う実行時ライブラリが POSIX 向けなので、Windows では suruc は動きません)。
 # 最後に SHA256SUMS を書きます。
 set -eu
@@ -26,7 +26,7 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 wi
   dir=$work/$name
   mkdir -p "$dir"
   exe=""
-  cmds="suruc suru-ls"
+  cmds="suruc suru-ls kumu"
   if [ "$goos" = windows ]; then
     exe=.exe
     cmds="suru-ls"

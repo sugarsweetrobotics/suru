@@ -30,6 +30,7 @@ class Suru < Formula
     ldflags = "-s -w -X main.version=#{{version}}"
     system "go", "build", *std_go_args(output: bin/"suruc", ldflags:), "./cmd/suruc"
     system "go", "build", *std_go_args(output: bin/"suru-ls", ldflags:), "./cmd/suru-ls"
+    system "go", "build", *std_go_args(output: bin/"kumu", ldflags:), "./cmd/kumu"
 
     # Python 版はリポジトリと同じ並び(suru.py の隣に lib/ と runtime/)で libexec に置く
     libexec.install "suru.py", "suru_check.py", "suru_compile.py", "lib", "runtime"
@@ -54,6 +55,7 @@ class Suru < Formula
     assert_equal "3", shell_output("#{{bin}}/suru t.suru").strip
     assert_match version.to_s, shell_output("#{{bin}}/suruc --version")
     assert_match version.to_s, shell_output("#{{bin}}/suru-ls --version")
+    assert_match version.to_s, shell_output("#{{bin}}/kumu --version")
   end
 end
 '''

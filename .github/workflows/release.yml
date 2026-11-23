@@ -1,6 +1,6 @@
 # 「する」本体のリリース: v0.1.0 のようなタグを push すると動きます。
 #   1. 版がそろっているか調べて、テストする
-#   2. PyPI 用の wheel と sdist、OS ごとの suruc・suru-ls を作る
+#   2. PyPI 用の wheel と sdist、OS ごとの suruc・suru-ls・kumu を作る
 #   3. GitHub Releases に置く
 #   4. PyPI に公開する(Trusted Publishing。トークンは要りません)
 #   5. Homebrew の tap(リポジトリの持ち主の homebrew-suru)の formula を新しくする

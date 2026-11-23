@@ -16,8 +16,8 @@ python3 -m pytest tests               # テスト
 | 方法 | 入れ方 | 入るもの |
 |---|---|---|
 | pip | `pip install suru-lang` | `suru` |
-| Homebrew(macOS・Linux) | `brew install suru-lang/suru/suru` | `suru`・`suruc`・`suru-ls` |
-| バイナリ | [GitHub Releases](https://github.com/suru-lang/suru/releases) の `suru-版-OS-CPU.tar.gz` | `suruc`・`suru-ls` |
+| Homebrew(macOS・Linux) | `brew install suru-lang/suru/suru` | `suru`・`suruc`・`suru-ls`・`kumu` |
+| バイナリ | [GitHub Releases](https://github.com/suru-lang/suru/releases) の `suru-版-OS-CPU.tar.gz` | `suruc`・`suru-ls`・`kumu` |
 | VS Code | 拡張機能ビューで「する」を検索 | 拡張(`suru-ls` を同梱) |
 
 バイナリを作る(`suru --翻訳`、`suruc`)には、どの方法でも手元に clang が要ります。macOS では `xcode-select --install`、Ubuntu などでは `sudo apt install clang` で入ります。Windows 用は `suru-ls` だけです(作ったプログラムの実行時ライブラリが POSIX 向けなので、WSL を使ってください)。
@@ -44,6 +44,27 @@ suruc --ll examples/basic.suru     # LLVM IR だけを出す
 ```
 
 `suruc` は1つの実行ファイルで、標準ライブラリと実行時ライブラリを中に持っています(`SURU_LIB` で lib/ の場所を変えられます)。
+
+### プロジェクトを組む(kumu)
+
+`kumu`(組む)は、プロジェクトの雛形作り・ビルド・実行を1つでこなす道具です(cargo のようなもの)。中に Go 版のコンパイラを持っているので、`suruc` は別に要りません(clang は必要です)。
+
+```sh
+go install github.com/suru-lang/suru/cmd/kumu@latest   # または、取ってきたフォルダで go build ./cmd/kumu
+kumu 新規 挨拶      # 挨拶/ に 組.suru・本体.suru・.gitignore を作る(new)
+cd 挨拶
+kumu 実行           # 出力/挨拶 を作って実行する(run。-- の後ろはプログラムへの引数)
+kumu 作る           # 出力/挨拶 を作るだけ(build。-O0 〜 -O3・--検査なし も使えます)
+kumu 初期化         # 今のフォルダに雛形を作る(init)
+```
+
+プロジェクトの設定は `組.suru` に する の定義で書きます。
+
+```
+名前 とは 「挨拶」
+版 とは 「0.1.0」
+入口 とは 「本体」
+```
 
 ### VS Code 拡張
 
@@ -683,17 +704,25 @@ pid とは （c を （p を 受け取って p の 横 を 表示する を 返�
 c を 通路閉鎖する
 ```
 
+### プロジェクト管理(kumu)
+
+1. **プロジェクトの道具は `kumu`(組む)。** プロジェクトを組む、依存を組み合わせる、ビルドで組み立てる、の3つの役目から名付けました。`suru` とは別のコマンドで、Go で書いた1つの実行ファイル(`cmd/kumu/`)です。中で Go 版のコンパイラを使います。
+2. **命令は日本語で、英語の別名もある。** `新規`(new)・`初期化`(init)・`作る`(build)・`実行`(run)・`版`(version)・`助け`(help)。
+3. **設定は `組.suru` に する の定義で書く。** 書けるのは `名前`(必須)・`版`(既定は「0.1.0」)・`入口`(既定は「本体」)で、どれも `… とは 「…」` の文字列です。kumu は `組.suru` を実行せずに読むだけで、定義のほかの文、知らない項目、文字列でない値、2回書いた項目はエラーです(行を付けて知らせます)。句読点の書き方(`名前とは「挨拶」。`)でも書けます。`組.suru` は、今のフォルダから上へ探します。
+4. **作ったものは `出力/名前` に置く。** 入口のファイルのフォルダが読み込みの起点になるので、プロジェクトの中のファイルは今までどおり `「部品」 を 読み込む` で使えます。`新規` は `.gitignore` に `/出力/` を書きます。LLVM IR・最適化の強さ・実行時ライブラリ・kumu の版が前と同じなら clang を呼ばずに前のバイナリを使います(`出力/.名前.stamp` に覚えます)。
+5. **`実行` は作ったバイナリに引数と入出力をそのまま渡し、終了コードもそのまま返す。** `--` の後ろは全部プログラムへの引数です。kumu の知らせ(「…を組みました」)は標準エラーに出すので、プログラムの出力と混ざりません。
+
 ### リリースと配布の方法
 
-1. **4つの方法で配る。** PyPI(`suru-lang`)、GitHub Releases(OS ごとの `suruc`・`suru-ls`)、Homebrew の tap(`suru-lang/homebrew-suru`)、VS Code Marketplace(拡張)です。どれも GitHub Actions がタグから作って公開します。手順と、初めに用意するもの(PyPI の Trusted Publishing、Marketplace の publisher など)は [docs/リリース.md](docs/リリース.md) にあります。
+1. **4つの方法で配る。** PyPI(`suru-lang`)、GitHub Releases(OS ごとの `suruc`・`suru-ls`・`kumu`)、Homebrew の tap(`suru-lang/homebrew-suru`)、VS Code Marketplace(拡張)です。どれも GitHub Actions がタグから作って公開します。手順と、初めに用意するもの(PyPI の Trusted Publishing、Marketplace の publisher など)は [docs/リリース.md](docs/リリース.md) にあります。
 
 2. **PyPI の名前は `suru-lang`。** `suru` はほかの人が使っていたので、パッケージの名前だけを変えました。入るコマンドとモジュールの名前は `suru` のままです。
 
-3. **タグは2種類。** `v0.1.0` の形のタグで本体(PyPI・GitHub Releases・Homebrew)を、`vscode-v0.4.0` の形のタグで VS Code 拡張を出します。拡張の版は本体と別に上げます。タグと `suru.py`・Go 版(`cmd/suruc`・`cmd/suru-ls`)の版が違えば、`packaging/check_version.py` が止めます。Go 版のバイナリの版は、ビルドのときに `-X main.version=…` でタグの版にします。
+3. **タグは2種類。** `v0.1.0` の形のタグで本体(PyPI・GitHub Releases・Homebrew)を、`vscode-v0.4.0` の形のタグで VS Code 拡張を出します。拡張の版は本体と別に上げます。タグと `suru.py`・Go 版(`cmd/suruc`・`cmd/suru-ls`・`cmd/kumu`)の版が違えば、`packaging/check_version.py` が止めます。Go 版のバイナリの版は、ビルドのときに `-X main.version=…` でタグの版にします。
 
 4. **Windows 用は言語サーバーだけ。** 実行時ライブラリ(`runtime/suru_rt.c`)が POSIX(pthread・ソケット・シグナルなど)を使うので、Windows では `suruc` で作ったプログラムが動きません。Windows には VS Code 拡張のための `suru-ls` だけを配ります。
 
-5. **Homebrew はソースからビルドする。** formula(`packaging/homebrew/make_formula.py` が作る)は、タグのソースから Go で `suruc`・`suru-ls` を作り、Python 版の `suru` を libexec に置いてラッパーで動かします。clang は入れず、caveats で案内します(macOS では Xcode のコマンドラインツールに入っているので)。
+5. **Homebrew はソースからビルドする。** formula(`packaging/homebrew/make_formula.py` が作る)は、タグのソースから Go で `suruc`・`suru-ls`・`kumu` を作り、Python 版の `suru` を libexec に置いてラッパーで動かします。clang は入れず、caveats で案内します(macOS では Xcode のコマンドラインツールに入っているので)。
 
 6. **持ち主の名前に頼らない。** ワークフローは tap やリリースの案内に使う持ち主の名前を GitHub から受け取ります。organization などに移したときは、`packaging/move_owner.py` が URL・Go のモジュールの道・tap・publisher をまとめて書きかえます(手順は [docs/リリース.md](docs/リリース.md) の「organization などに移すとき」)。
 
