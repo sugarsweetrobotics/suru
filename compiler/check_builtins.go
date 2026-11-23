@@ -299,6 +299,9 @@ func init() {
 	}
 	chanPrim("通路作成する", func(x Type) []TParam { return []TParam{{"で", NUM}} }, func(x Type) Type { return act(chanT(x)) })
 	chanPrim("プロセス間通路作成する", func(x Type) []TParam { return nil }, func(x Type) Type { return act(chanT(x)) })
+	chanPrim("名前つき通路作成する", func(x Type) []TParam { return []TParam{{WO, STR}} }, func(x Type) Type { return act(chanT(x)) })
+	chanPrim("名前つき通路接続する", func(x Type) []TParam { return []TParam{{WO, STR}} }, func(x Type) Type { return act(chanT(x)) })
+	simple("名前つき通路削除する", []TParam{{WO, STR}}, act(NUM))
 	chanPrim("通路送信する", func(x Type) []TParam { return []TParam{{WO, x}, {"へ", chanT(x)}} }, func(x Type) Type { return act(x) })
 	chanPrim("通路受信する", func(x Type) []TParam { return []TParam{{"から", chanT(x)}} }, func(x Type) Type { return act(x) })
 	chanPrim("通路閉鎖する", func(x Type) []TParam { return []TParam{{WO, chanT(x)}} }, func(x Type) Type { return act(chanT(x)) })
