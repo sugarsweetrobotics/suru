@@ -35,6 +35,13 @@ func TestPublish(t *testing.T) {
 	}
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("KUMU_HOME", t.TempDir())
+	// 公開はタグを付けるので、git の名前がない環境(CI など)でも動くようにする
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+		t.Setenv(k, "t")
+	}
+	for _, k := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(k, "t@example.com")
+	}
 	dir := t.TempDir()
 	k, out, errb := newKumu(dir)
 	if rc := k.run([]string{"新規", "計算"}); rc != 0 {
