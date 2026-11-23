@@ -65,7 +65,8 @@ typedef struct Fn {
     int32_t wo, wo_list;
 } Fn;
 enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
-       A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH };
+       A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
+       A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
@@ -1502,6 +1503,7 @@ static V act_run(Act *a) {
     case A_CALL: return apply1(a->a, V_EMPTY, a->pos); /* 外部の関数を呼ぶ動作 */
     case A_PEEK: case A_POKE: case A_ERRNO: case A_FAIL: case A_ARGS: case A_EXIT: return mem_run(a);
     case A_SPAWN: case A_JOIN: case A_NCPU: case A_CH_NEW: case A_CH_SEND: case A_CH_RECV: case A_CH_CLOSE: case A_CH_EACH:
+    case A_LOCK_NEW: case A_LOCKED: case A_SLOT_NEW: case A_SLOTTED: case A_BOX_NEW: case A_BOX_GET: case A_BOX_UPDATE: case A_BOX_SET:
         return thread_run(a);
     case A_CHAIN: return apply1(a->b, perform(a->a), 0); /* 続きの動作は perform のループで行う */
     case A_FMAP: return apply1(a->b, perform(a->a), 0);
@@ -2215,7 +2217,7 @@ BI(n_recv) { return mk_net(A_RECV, "受信する", a[0], a[1], pos); }  /* か�
 BI(n_send) { return mk_net(A_SEND, "送信する", a[0], a[1], pos); }  /* を, へ */
 BI(n_close) { return mk_net(A_CLOSE, "切断する", a[0], 0, pos); }
 
-static const int32_t P1_DE[] = {P_DE}, P1_WO[] = {P_WO}, P2_WO_NI[] = {P_WO, P_NI}, P2_KARA_WO[] = {P_KARA, P_WO},
+static const int32_t P1_DE[] = {P_DE}, P2_DE_WO[] = {P_DE, P_WO}, P1_WO[] = {P_WO}, P2_WO_NI[] = {P_WO, P_NI}, P2_KARA_WO[] = {P_KARA, P_WO},
                      P2_WO_DE[] = {P_WO, P_DE}, P2_KARA_DE[] = {P_KARA, P_DE}, P3_WO_KARA_DE[] = {P_WO, P_KARA, P_DE},
                      P2_GA_WO[] = {P_GA, P_WO}, P1_KARA[] = {P_KARA}, P2_WO_HE[] = {P_WO, P_HE}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P2_GA_DE[] = {P_GA, P_DE};
 static const uint8_t R_OPT1[] = {0}, R_1_OPT[] = {1, 0};
@@ -2526,25 +2528,31 @@ typedef struct {
     V *buf;
 } Chan;
 
-static Ctor *chan_ctor;
+/* lib/スレッド.suru の組(通路・ロック・枠・箱)。中身の欄は runtime のもの(GC の領域)を指す番地 */
+static V mk_handle(const char *ctor, void *p, int32_t pos) {
+    Ctor *c = find_ctor(ctor);
+    if (!c) fail(pos, "「スレッド」を読み込んでいません");
+    Rec *r = rt_alloc(sizeof(Rec) + sizeof(V));
+    r->tag = T_REC;
+    r->c = c;
+    r->v[0] = rt_ffi_from_ptr(p);
+    return (V)(intptr_t)r;
+}
+static void *need_handle(V v, const char *ctor, const char *what, int32_t pos) {
+    if (TAG(v) != T_REC || strcmp(AS(Rec, v)->c->name, ctor) != 0 || TAG(AS(Rec, v)->v[0]) != T_ADDR)
+        fail(pos, "%sは%sでなければなりません(「%s」が渡されました)", what, ctor, plain(v).s);
+    return AS(Addr, AS(Rec, v)->v[0])->p;
+}
+
 static V chan_new(int64_t cap, int32_t pos) {
-    if (!chan_ctor && !(chan_ctor = find_ctor("通路"))) fail(pos, "「スレッド」を読み込んでいません");
     Chan *ch = rt_alloc(sizeof(Chan));
     ch->kind = CH_LOCAL;
     ch->cap = cap;
     ch->size = cap > 0 ? cap : 1;
     ch->buf = rt_alloc(ch->size * sizeof(V));
-    Rec *r = rt_alloc(sizeof(Rec) + sizeof(V));
-    r->tag = T_REC;
-    r->c = chan_ctor;
-    r->v[0] = rt_ffi_from_ptr(ch);
-    return (V)(intptr_t)r;
+    return mk_handle("通路", ch, pos);
 }
-static Chan *need_chan(V v, const char *what, int32_t pos) {
-    if (TAG(v) != T_REC || strcmp(AS(Rec, v)->c->name, "通路") != 0 || TAG(AS(Rec, v)->v[0]) != T_ADDR)
-        fail(pos, "%sは通路でなければなりません(「%s」が渡されました)", what, plain(v).s);
-    return (Chan *)AS(Addr, AS(Rec, v)->v[0])->p;
-}
+static Chan *need_chan(V v, const char *what, int32_t pos) { return need_handle(v, "通路", what, pos); }
 static int64_t ld(int64_t *p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
 static int ch_can_send(void *a) { Chan *c = a; return ld(&c->closed) || (ld(&c->n) < c->size && (c->cap > 0 || ld(&c->n) == 0)); }
 static int ch_can_recv(void *a) { Chan *c = a; return ld(&c->n) > 0 || ld(&c->closed); }
@@ -2577,6 +2585,51 @@ static V chan_take(Chan *c, int32_t pos) {
     world_changed();
     return x;
 }
+
+
+/* --- ロックと枠: 持っている間だけ動作を行う。エラーで抜けても必ず手放す ---
+ * ロックは同じスレッドなら重ねて持てる(数える)。枠は同時に n 個まで(プロセスの中のセマフォ) */
+typedef struct { SThread *owner; int64_t depth; int64_t free; } Gate; /* ロックは owner/depth、枠は free(空きの数) */
+typedef struct { Gate *g; SThread *me; } GateWait;
+static int lock_ready(void *a) {
+    GateWait *w = a;
+    SThread *o = __atomic_load_n(&w->g->owner, __ATOMIC_ACQUIRE);
+    return o == NULL || o == w->me;
+}
+static int slot_ready(void *a) { return ld(&((GateWait *)a)->g->free) > 0; }
+
+/* 動作 m を行う。エラーなら leave してから同じエラーにする */
+static V run_guarded(V m, void (*leave)(Gate *), Gate *g) {
+    TryFrame f;
+    f.prev = try_top;
+    f.quiet = 1; /* 文は外の受け口で1回だけ書く */
+    try_top = &f;
+    if (setjmp(f.jb) == 0) {
+        V r = perform(m);
+        try_top = f.prev;
+        leave(g);
+        return r;
+    }
+    leave(g); /* fail_msg が try_top を戻している */
+    char *msg = fail_last_msg;
+    fail_last_msg = NULL;
+    fail_msg(fail_last_pos, msg ? msg : "エラー");
+}
+static void lock_leave(Gate *g) {
+    if (--g->depth == 0) __atomic_store_n(&g->owner, NULL, __ATOMIC_RELEASE);
+    world_changed();
+}
+static void slot_leave(Gate *g) {
+    __atomic_store_n(&g->free, g->free + 1, __ATOMIC_RELEASE);
+    world_changed();
+}
+static void need_action(V v, const char *what, int32_t pos) {
+    int t = TAG(v);
+    if (t != T_ACT && t != T_PURE) fail(pos, "%sは動作でなければなりません(「%s」が渡されました)", what, plain(v).s);
+}
+
+/* --- 箱: スレッドどうしで共有する、書き換えられる値。読むのは待たない --- */
+typedef struct { V v; } Box;
 
 static long cpu_count(void) {
     long n = sysconf(_SC_NPROCESSORS_ONLN);
@@ -2619,6 +2672,45 @@ static V thread_run(Act *a) {
         world_changed();
         return a->a;
     }
+    case A_LOCK_NEW: return mk_handle("ロック", rt_alloc(sizeof(Gate)), a->pos);
+    case A_LOCKED: {
+        Gate *g = need_handle(a->a, "ロック", "「排他実行する」の「で」", a->pos);
+        need_action(a->b, "「排他実行する」の「を」", a->pos);
+        GateWait w = {g, self_thread};
+        world_wait(lock_ready, &w, a->pos);
+        __atomic_store_n(&g->owner, self_thread, __ATOMIC_RELEASE);
+        g->depth++;
+        return run_guarded(a->b, lock_leave, g);
+    }
+    case A_SLOT_NEW: {
+        V v = need_num(a->a, a->pos);
+        int64_t n = IS_INT(v) ? INT_VAL(v) : 0;
+        if (n < 1) fail(a->pos, "「%s」は枠の数ではありません(1 以上の整数)", plain(v).s);
+        Gate *g = rt_alloc(sizeof(Gate));
+        g->free = n;
+        return mk_handle("枠", g, a->pos);
+    }
+    case A_SLOTTED: {
+        Gate *g = need_handle(a->a, "枠", "「枠内実行する」の「で」", a->pos);
+        need_action(a->b, "「枠内実行する」の「を」", a->pos);
+        GateWait w = {g, self_thread};
+        world_wait(slot_ready, &w, a->pos);
+        __atomic_store_n(&g->free, g->free - 1, __ATOMIC_RELEASE);
+        return run_guarded(a->b, slot_leave, g);
+    }
+    case A_BOX_NEW: {
+        Box *b = rt_alloc(sizeof(Box));
+        b->v = a->a;
+        return mk_handle("箱", b, a->pos);
+    }
+    case A_BOX_GET: return ((Box *)need_handle(a->a, "箱", "「箱読取する」の「を」", a->pos))->v;
+    case A_BOX_UPDATE: { /* 純粋な関数なので、実行権を持ったまま計算して置きかえる(ほかのスレッドとぶつからない) */
+        Box *b = need_handle(a->a, "箱", "「箱更新する」の「を」", a->pos);
+        V x = apply1(a->b, b->v, a->pos);
+        b->v = x;
+        return x;
+    }
+    case A_BOX_SET: ((Box *)need_handle(a->b, "箱", "「箱書込する」の「へ」", a->pos))->v = a->a; return a->a;
     case A_CH_EACH: { /* 閉じるまで、届いた値ごとに動作を行う。結果は行った数 */
         Chan *c = need_chan(a->a, "「通路処理する」の「を」", a->pos);
         int64_t k = 0;
@@ -2644,6 +2736,14 @@ BI(c_send) { return mk_act_pos(A_CH_SEND, "通路送信する", a[0], a[1], pos)
 BI(c_recv) { return mk_act_pos(A_CH_RECV, "通路受信する", a[0], 0, pos); }   /* から */
 BI(c_close) { return mk_act_pos(A_CH_CLOSE, "通路閉鎖する", a[0], 0, pos); } /* を */
 BI(c_each) { return mk_act_pos(A_CH_EACH, "通路処理する", a[0], a[1], pos); } /* を, で */
+BI(l_new) { return mk_act_pos(A_LOCK_NEW, "ロック作成する", 0, 0, pos); }
+BI(l_run) { return mk_act_pos(A_LOCKED, "排他実行する", a[0], a[1], pos); }   /* で, を */
+BI(s_new) { return mk_act_pos(A_SLOT_NEW, "枠作成する", a[0], 0, pos); }    /* で */
+BI(s_run) { return mk_act_pos(A_SLOTTED, "枠内実行する", a[0], a[1], pos); } /* で, を */
+BI(x_new) { return mk_act_pos(A_BOX_NEW, "箱作成する", a[0], 0, pos); }     /* で */
+BI(x_get) { return mk_act_pos(A_BOX_GET, "箱読取する", a[0], 0, pos); }     /* を */
+BI(x_update) { return mk_act_pos(A_BOX_UPDATE, "箱更新する", a[0], a[1], pos); } /* を, で */
+BI(x_set) { return mk_act_pos(A_BOX_SET, "箱書込する", a[0], a[1], pos); }  /* を, へ */
 BI(t_ncpu) { return mk_act_pos(A_NCPU, "コア数取得する", 0, 0, pos); }
 BI(t_pmap) { /* を, で */
     List *xs = need_list(a[0], "「並列写像する」の「を」", pos);
@@ -2715,6 +2815,14 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"通路受信する", 1, P1_KARA, NULL, c_recv},
     {"通路閉鎖する", 1, P1_WO, NULL, c_close},
     {"通路処理する", 2, P2_WO_DE, NULL, c_each},
+    {"ロック作成する", 0, NULL, NULL, l_new},
+    {"排他実行する", 2, P2_DE_WO, NULL, l_run},
+    {"枠作成する", 1, P1_DE, NULL, s_new},
+    {"枠内実行する", 2, P2_DE_WO, NULL, s_run},
+    {"箱作成する", 1, P1_DE, NULL, x_new},
+    {"箱読取する", 1, P1_WO, NULL, x_get},
+    {"箱更新する", 2, P2_WO_DE, NULL, x_update},
+    {"箱書込する", 2, P2_WO_HE, NULL, x_set},
     /* 「通信」の組み込み */
     {"待受開始する", 1, P1_WO, NULL, n_listen},
     {"接続受付する", 1, P1_KARA, NULL, n_accept},

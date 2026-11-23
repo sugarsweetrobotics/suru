@@ -1918,6 +1918,32 @@ _chan_prim("通路受信する", lambda x: [("から", _chan(x))], lambda x: act
 _chan_prim("通路閉鎖する", lambda x: [(WO, _chan(x))], lambda x: act(_chan(x)))
 
 
+LOCK, SLOT = TCon("ロック", (ADDR,)), TCon("枠", (ADDR,))  # 中身の欄はいつも番地(表示では省かれる)
+
+
+def _box(t: Any) -> TCon:
+    return TCon("箱", (t,))
+
+
+_simple("ロック作成する", [], act(LOCK))
+_simple("枠作成する", [("で", NUM)], act(SLOT))
+_chan_prim("排他実行する", lambda x: [("で", LOCK), (WO, act(x))], lambda x: act(x))
+_chan_prim("枠内実行する", lambda x: [("で", SLOT), (WO, act(x))], lambda x: act(x))
+_chan_prim("箱作成する", lambda x: [("で", x)], lambda x: act(_box(x)))
+_chan_prim("箱読取する", lambda x: [(WO, _box(x))], lambda x: act(x))
+_chan_prim("箱書込する", lambda x: [(WO, x), ("へ", _box(x))], lambda x: act(x))
+
+
+@prim("箱更新する", {WO: True, "で": True},
+      lambda: (lambda x: TFun([(WO, _box(x)), ("で", TFun([(WO, x)], x))], act(x)))(TVar()))
+def _t_box_update(c, a, line):
+    x = TVar()
+    _need(c, a, WO, _box(x), line, "箱更新する")
+    r = c.apply(a["で"], [x], line, "「箱更新する」の「で」")
+    c.expect(r, x, line, "「箱更新する」の「で」の関数の値")
+    return act(x)
+
+
 @prim("通路処理する", {WO: True, "で": True},
       lambda: (lambda x, y: TFun([(WO, _chan(x)), ("で", TFun([(WO, x)], act(y)))], act(NUM)))(TVar(), TVar()))
 def _t_chan_each(c, a, line):

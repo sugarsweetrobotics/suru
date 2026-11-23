@@ -292,6 +292,25 @@ func init() {
 	chanPrim("通路送信する", func(x Type) []TParam { return []TParam{{WO, x}, {"へ", chanT(x)}} }, func(x Type) Type { return act(x) })
 	chanPrim("通路受信する", func(x Type) []TParam { return []TParam{{"から", chanT(x)}} }, func(x Type) Type { return act(x) })
 	chanPrim("通路閉鎖する", func(x Type) []TParam { return []TParam{{WO, chanT(x)}} }, func(x Type) Type { return act(chanT(x)) })
+	lockT, slotT := &TCon{"ロック", []Type{addr}}, &TCon{"枠", []Type{addr}} // 中身の欄はいつも番地(表示では省かれる)
+	boxT := func(t Type) Type { return &TCon{"箱", []Type{t}} }
+	simple("ロック作成する", nil, act(lockT))
+	simple("枠作成する", []TParam{{"で", NUM}}, act(slotT))
+	chanPrim("排他実行する", func(x Type) []TParam { return []TParam{{"で", lockT}, {WO, act(x)}} }, func(x Type) Type { return act(x) })
+	chanPrim("枠内実行する", func(x Type) []TParam { return []TParam{{"で", slotT}, {WO, act(x)}} }, func(x Type) Type { return act(x) })
+	chanPrim("箱作成する", func(x Type) []TParam { return []TParam{{"で", x}} }, func(x Type) Type { return act(boxT(x)) })
+	chanPrim("箱読取する", func(x Type) []TParam { return []TParam{{WO, boxT(x)}} }, func(x Type) Type { return act(x) })
+	chanPrim("箱書込する", func(x Type) []TParam { return []TParam{{WO, x}, {"へ", boxT(x)}} }, func(x Type) Type { return act(x) })
+	prim("箱更新する", []partReq{req(WO), req("で")}, func() Type {
+		x := newTVar()
+		return &TFun{[]TParam{{WO, boxT(x)}, {"で", &TFun{[]TParam{{WO, x}}, x}}}, act(x)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		x := newTVar()
+		need(c, a, WO, boxT(x), line, "箱更新する")
+		r := c.apply(a.must("で"), []Type{x}, line, "「箱更新する」の「で」")
+		c.expect(r, x, line, "「箱更新する」の「で」の関数の値")
+		return act(x)
+	})
 	prim("通路処理する", []partReq{req(WO), req("で")}, func() Type {
 		x, y := newTVar(), newTVar()
 		return &TFun{[]TParam{{WO, chanT(x)}, {"で", &TFun{[]TParam{{WO, x}}, act(y)}}}, act(NUM)}

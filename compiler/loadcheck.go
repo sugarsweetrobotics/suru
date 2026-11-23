@@ -44,6 +44,8 @@ var netPrimitives = []builtinInfo{
 var threadPrimitives = []builtinInfo{
 	{"並行開始する", nil}, {"合流する", nil}, {"並列写像する", nil}, {"コア数取得する", nil},
 	{"通路作成する", nil}, {"通路送信する", nil}, {"通路受信する", nil}, {"通路閉鎖する", nil}, {"通路処理する", nil},
+	{"ロック作成する", nil}, {"排他実行する", nil}, {"枠作成する", nil}, {"枠内実行する", nil},
+	{"箱作成する", nil}, {"箱読取する", nil}, {"箱更新する", nil}, {"箱書込する", nil},
 }
 
 // libPrimitives は lib/ のファイルごとの組み込み(suru.py の LIB_PRIMITIVES)
