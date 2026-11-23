@@ -1062,6 +1062,7 @@ class Import:
     module: Module
     line: int
     open: bool = False  # 「読み込んで 使う」: 中の名前を前置きなしでも使う
+    auto: bool = False  # 書かずに自動で読み込んだ基本(成否・有無)
 
 
 @dataclass
@@ -1119,6 +1120,7 @@ class ParseContext:
         self.base_dir = base_dir  # 「「数学」 を 読み込む」で探すフォルダ
         self.modules: dict[str, Any] = dict(modules or {})  # 読み込んだファイル(絶対パス → Module。読み込み中は None)
         self.packages: dict[str, str] | None = None  # プロジェクトの依存(名前 → フォルダ)。None なら初めて読み込むときに探す
+        self.in_prelude = False  # 基本.suru そのものを読んでいる(基本を自動で読み込まない)
 
     def copy(self) -> "ParseContext":
         c = ParseContext(self.ctors, self.types, self.base_dir, self.modules)
@@ -2576,8 +2578,14 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         target = import_target(n)
         if target is not None:
             imports[id(n)] = Import(load_module(target[0], ctx, n.line.number), n.line.number, target[1])
-    if any(isinstance(i, Import) for i in imports.values()):
-        _join_in_nodes(nodes, {i.module.name for i in imports.values() if isinstance(i, Import)})
+    prelude = None
+    if not ctx.in_prelude and not any(isinstance(i, Import) and i.module.path == PRELUDE_PATH for i in imports.values()):
+        line = _prelude_line(nodes)
+        if line is not None:
+            prelude = Import(load_prelude(ctx, line), line, True, auto=True)
+    modules = {i.module.name for i in imports.values() if isinstance(i, Import)} | ({PRELUDE_NAME} if prelude else set())
+    if modules:
+        _join_in_nodes(nodes, modules)
     # 「3 と 4 の 点」を読むために、型の定義を先に集める(定義の順番は自由)
     for n in nodes:
         td = try_parse_typedef(n)
@@ -2586,11 +2594,42 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
     saved, _CTX = _CTX, ctx
     try:
         statements = [imports[id(n)] if id(n) in imports else parse_statement(n) for n in nodes]
+        if prelude is not None:
+            statements.insert(0, prelude)
         _check_open_imports(statements)
         _attach_externs(statements)
         return attach_provisos(statements)
     finally:
         _CTX = saved
+
+
+def _prelude_line(nodes: list) -> int | None:
+    """基本(成否・有無)の名前を書いた最初の行(なければ None。基本.suru そのものなら None)"""
+    if any(td is not None and td.name in PRELUDE_TYPES for td in map(try_parse_typedef, nodes)):
+        return None
+    return _prelude_word_line(nodes)
+
+
+def _prelude_word_line(nodes: list) -> int | None:
+    for n in nodes:
+        for k, t in enumerate(n.line.tokens):
+            if t.kind in ("WORD", "CALL") and not t.quoted and (
+                    t.value in PRELUDE_WORDS or t.value in PRELUDE_CALLS
+                    or t.value.startswith(PRELUDE_NAME + MODULE_SEP)
+                    # 「無」は「… は 無」なら外部の関数の型(C の void)
+                    or t.value == PRELUDE_NONE and not (k > 0 and is_kw(n.line.tokens[k - 1], KW_WA))):
+                return n.line.number
+        line = _prelude_word_line(n.children)
+        if line is not None:
+            return line
+    return None
+
+
+def load_prelude(ctx: ParseContext, line: int) -> Module:
+    """lib/基本.suru を読む(同じフォルダに 基本.suru があっても、いつも同梱のもの)"""
+    if PRELUDE_PATH in ctx.modules and ctx.modules[PRELUDE_PATH] is not None:
+        return ctx.modules[PRELUDE_PATH]
+    return _load_path(PRELUDE_PATH, PRELUDE_NAME, ctx, line, prelude=True)
 
 
 def module_names(module: Module) -> set:
@@ -2783,6 +2822,10 @@ def load_module(name: str, ctx: ParseContext, line: int) -> Module:
     if not os.path.exists(path):
         path = package_path(name, ctx, line) or os.path.abspath(
             os.path.join(LIB_DIR, name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX))
+    return _load_path(path, name, ctx, line)
+
+
+def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool = False) -> Module:
     stem = os.path.splitext(os.path.basename(path))[0]
     if not stem or _is_all_hiragana(stem) or any(_is_hiragana(c) for c in stem) or any(c in stem for c in " 　「」『』（）()、。"):
         raise SuruError(f"「{stem}」はファイルの名前に使えません(名前と同じく漢字・カタカナ・英字で書いてください)", line)
@@ -2799,6 +2842,7 @@ def load_module(name: str, ctx: ParseContext, line: int) -> Module:
     sub = ParseContext(ctx.ctors, ctx.types, os.path.dirname(path))
     sub.modules = ctx.modules
     sub.packages = ctx.packages
+    sub.in_prelude = prelude
     try:
         program = parse_program(source, sub)
         for s in program:
@@ -3228,6 +3272,13 @@ NET_NAME = "通信"
 NET_PATH = os.path.join(LIB_DIR, NET_NAME + SOURCE_SUFFIX)
 THREAD_NAME = "スレッド"
 THREAD_PATH = os.path.join(LIB_DIR, THREAD_NAME + SOURCE_SUFFIX)
+# 基本(成否・有無)は、その名前を書いたファイルが自動で「読み込んで 使う」
+PRELUDE_NAME = "基本"
+PRELUDE_PATH = os.path.join(LIB_DIR, PRELUDE_NAME + SOURCE_SUFFIX)
+PRELUDE_NONE = "無"
+PRELUDE_TYPES = ("成否", "有無")
+PRELUDE_WORDS = frozenset(("成否", "有無", "成功", "失敗", "有"))
+PRELUDE_CALLS = frozenset(("成否にする", "有無にする", "中断する"))  # 取出する は性質の関数なので入れない
 
 
 def _int(v: Any, what: str, line: int | None) -> int:
@@ -3650,6 +3701,15 @@ def _errno() -> int:
     import ctypes
 
     return ctypes.get_errno()
+
+
+def _abort(it: Any, a: dict, line: int) -> Any:
+    raise SuruError(_str(a[WO], "「中断する」の「を」", line), line)
+
+
+PRELUDE_PRIMITIVES = [
+    Builtin("中断する", [(WO, True)], _abort),
+]
 
 
 def _fail_action(v: Any, line: int) -> Action:
@@ -4413,7 +4473,8 @@ def extern_builtin(d: Define) -> Builtin:
     return Builtin(d.name, [(p, True) for p in parts], lambda it, a, line: call(a, line))
 
 # lib/ のファイルごとの組み込み(そのファイルの中と、読み込んだ側の「標準内の…」「通信内の…」で使える)
-LIB_PRIMITIVES = {STD_PATH: STD_PRIMITIVES, NET_PATH: NET_PRIMITIVES, THREAD_PATH: THREAD_PRIMITIVES}
+LIB_PRIMITIVES = {STD_PATH: STD_PRIMITIVES, NET_PATH: NET_PRIMITIVES, THREAD_PATH: THREAD_PRIMITIVES,
+                  PRELUDE_PATH: PRELUDE_PRIMITIVES}
 
 def make_global_env() -> Env:
     env = Env()

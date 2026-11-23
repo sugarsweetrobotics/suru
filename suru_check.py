@@ -1890,6 +1890,12 @@ def _t_fail(c, a, line):
     return act(TVar())
 
 
+@prim("中断する", {WO: True}, lambda: TFun([(WO, STR)], TVar()))
+def _t_abort(c, a, line):
+    _need(c, a, WO, STR, line, "中断する")
+    return TVar()
+
+
 @prim("試行する", {WO: True, "で": True}, lambda: (lambda x: TFun([(WO, act(x)), ("で", act(x))], act(x)))(TVar()))
 def _t_try(c, a, line):
     x = TVar()

@@ -349,7 +349,8 @@ FILES = sorted((ROOT / "examples").glob("*.suru")) + sorted((ROOT / "lib").glob(
 def py_program(source: str, base_dir: str) -> tuple[list[str], "suru.ParseContext"]:
     ctx = suru.ParseContext(base_dir=base_dir)
     try:
-        out = [dump(s) for s in suru.parse_program(source, ctx)]
+        # 自動で読み込む基本は 構文.suru では扱わない(書いた文だけを比べる)
+        out = [dump(s) for s in suru.parse_program(source, ctx) if not (isinstance(s, suru.Import) and s.auto)]
     except suru.SuruError:
         out = ["誤り"]
     return out, ctx

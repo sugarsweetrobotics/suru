@@ -2690,6 +2690,9 @@ BI(m_exit) {
     if (!IS_INT(n) || INT_VAL(n) < 0 || INT_VAL(n) > 255) fail(pos, "「%s」は終了コードではありません(0 から 255 までの整数です)", plain(n).s);
     return mk_act_pos(A_EXIT, "終了する", n, 0, pos);
 }
+BI(m_abort) {
+    fail_msg(pos, need_str(a[0], "「中断する」の「を」", pos)->s);
+}
 BI(m_fail) {
     need_str(a[0], "「失敗する」の「を」", pos);
     return mk_act_pos(A_FAIL, "失敗する", a[0], 0, pos);
@@ -3352,6 +3355,8 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"失敗する", 1, P1_WO, NULL, m_fail},
     {"引数取得する", 0, NULL, NULL, m_args},
     {"終了する", 1, P1_WO, NULL, m_exit},
+    /* 「基本」の組み込み */
+    {"中断する", 1, P1_WO, NULL, m_abort},
     /* 「スレッド」の組み込み */
     {"並行開始する", 1, P1_WO, NULL, t_spawn},
     {"合流する", 1, P1_WO, NULL, t_join},
