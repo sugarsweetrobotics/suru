@@ -76,6 +76,9 @@ var (
 func lst(t Type) *TCon { return &TCon{"リスト", []Type{t}} }
 func act(t Type) *TCon { return &TCon{"動作", []Type{t}} }
 
+// threadT は lib/スレッド.suru の型「甲 の スレッド」
+func threadT(t Type) *TCon { return &TCon{"スレッド", []Type{t}} }
+
 func prune(t Type) Type {
 	for {
 		v, ok := t.(*TVar)
