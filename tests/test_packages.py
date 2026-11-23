@@ -102,3 +102,45 @@ def test_Go版のコンパイラも同じに探す(project, tmp_path):
     src = (app / "本体.suru").read_text(encoding="utf-8")
     ir = suru_compile.compile_source(src, str(app), str(app / "本体.suru"), True)
     assert ir == (tmp_path / "a.ll").read_text(encoding="utf-8")
+
+
+def test_プロジェクト自身を名前で読み込める(tmp_path):
+    root = tmp_path / "計算"
+    (root / "試験").mkdir(parents=True)
+    (root / "組.suru").write_text("名前 とは 「計算」\n", encoding="utf-8")
+    (root / "計算.suru").write_text("x を 二倍する とは x * 2\n", encoding="utf-8")
+    (root / "道具.suru").write_text("x を 三倍する とは x * 3\n", encoding="utf-8")
+    (root / "試験" / "a.suru").write_text(
+        "「計算」 を 読み込む\n「計算/道具」 を 読み込む\n2 を 計算内の二倍して 表示する\n2 を 道具内の三倍して 表示する\n",
+        encoding="utf-8")
+    r = run_suru(root / "試験" / "a.suru")
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "4\n6\n"
+
+
+TEST_LIB = """「試験」 を 読み込んで 使う
+甲試験する とは 手順
+  （1 + 1） を 2 に 一致確認する
+  1 < 2 を 確認する
+  「通った」 を 表示する
+乙試験する とは 手順
+  「あ」 を 「い」 に 一致確認する
+  「ここは出ない」 を 表示する
+甲試験する
+乙試験する
+"""
+
+
+def test_試験ライブラリ(tmp_path):
+    src = tmp_path / "t.suru"
+    src.write_text(TEST_LIB, encoding="utf-8")
+    r = run_suru(src)
+    assert r.returncode == 1
+    assert r.stdout == "通った\n"
+    assert "等しくありません: 期待は い / 実際は あ" in r.stderr
+    if shutil.which("clang"):
+        import suru_compile
+        exe = tmp_path / "t"
+        assert suru_compile.main(["suru_compile", str(src), "-o", str(exe)]) == 0
+        c = subprocess.run([str(exe)], capture_output=True, text=True)
+        assert (c.returncode, c.stdout, c.stderr) == (r.returncode, r.stdout, r.stderr)

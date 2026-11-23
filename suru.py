@@ -2731,6 +2731,9 @@ def find_packages(base_dir: str) -> dict[str, str]:
     while True:
         if os.path.exists(os.path.join(d, PROJECT_CONFIG)):
             out = {}
+            name = _project_name(os.path.join(d, PROJECT_CONFIG))
+            if name:  # プロジェクト自身も、組.suru の名前で読み込める(試験/ のファイルから使う)
+                out[name] = d
             try:
                 with open(os.path.join(d, PROJECT_LOCK), encoding="utf-8") as f:
                     lines = f.read().splitlines()
@@ -2745,6 +2748,19 @@ def find_packages(base_dir: str) -> dict[str, str]:
         if parent == d:
             return {}
         d = parent
+
+
+def _project_name(path: str) -> str:
+    """組.suru の「名前 とは 「…」」(読めなければ "")"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            program = parse_program(f.read(), ParseContext())
+    except (OSError, SuruError):
+        return ""
+    for s in program:
+        if isinstance(s, Define) and s.name == "名前" and isinstance(s.body, Str):
+            return s.body.value
+    return ""
 
 
 def package_path(name: str, ctx: ParseContext, line: int) -> str | None:
