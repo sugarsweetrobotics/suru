@@ -65,7 +65,7 @@ typedef struct Fn {
     int32_t wo, wo_list;
 } Fn;
 enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
-       A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
+       A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
        A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
@@ -1586,7 +1586,7 @@ static V act_run(Act *a) {
     }
     case A_CALL: return apply1(a->a, V_EMPTY, a->pos); /* 外部の関数を呼ぶ動作 */
     case A_PEEK: case A_POKE: case A_ERRNO: case A_FAIL: case A_ARGS: case A_EXIT: return mem_run(a);
-    case A_SPAWN: case A_JOIN: case A_NCPU: case A_CH_NEW: case A_CH_SEND: case A_CH_RECV: case A_CH_CLOSE: case A_CH_EACH:
+    case A_SPAWN: case A_JOIN: case A_NCPU: case A_CH_NEW: case A_CH_PIPE: case A_CH_SEND: case A_CH_RECV: case A_CH_CLOSE: case A_CH_EACH:
     case A_LOCK_NEW: case A_LOCKED: case A_SLOT_NEW: case A_SLOTTED: case A_BOX_NEW: case A_BOX_GET: case A_BOX_UPDATE: case A_BOX_SET:
         return thread_run(a);
     case A_CHAIN: return apply1(a->b, perform(a->a), 0); /* 続きの動作は perform のループで行う */
@@ -2560,15 +2560,18 @@ static V deser_value(Deser *z, int depth) {
     default: deser_bad(z);
     }
 }
-BI(m_deserialize) {
-    Bytes *b = need_bytes(a[0], "「復元する」の「を」", pos);
-    Deser z = {b->d, b->n, 0, pos};
+static V deser_all(const uint8_t *d, int64_t n, int32_t pos) {
+    Deser z = {d, n, 0, pos};
     const uint8_t *h = deser_take(&z, 5);
     if (memcmp(h, "SURU", 4) != 0) deser_bad(&z);
     if (h[4] != 1) fail(pos, "直列化の版(%d)に対応していません", h[4]);
     V v = deser_value(&z, 0);
     if (z.i != z.n) deser_bad(&z);
     return v;
+}
+BI(m_deserialize) {
+    Bytes *b = need_bytes(a[0], "「復元する」の「を」", pos);
+    return deser_all(b->d, b->n, pos);
 }
 BI(m_addrnum) { return mk_int((int64_t)(intptr_t)need_addr(a[0], "「番地数値にする」の「を」", pos)->p, pos); }
 static V mk_act_pos(int kind, const char *name, V x, V y, int32_t pos) {
@@ -2801,9 +2804,10 @@ static V thread_wait(ThreadCell *c) {
 /* --- 通路: スレッドどうしで値を渡す列 ---
  * 「通路」の組(lib/スレッド.suru)の中身は Chan を指す番地。kind で中身の種類を分ける(今はプロセスの中の列だけ。
  * パイプなど別の種類は、同じ送る・受け取る・閉じるの口で足す) */
-enum { CH_LOCAL = 0 };
+enum { CH_LOCAL = 0, CH_PIPE = 1 };
 typedef struct {
     int64_t kind;
+    int64_t rfd, wfd;    /* CH_PIPE: パイプの読む口と書く口(閉じたら -1) */
     int64_t cap;         /* 0 なら、受け取られるまで送る側が待つ */
     int64_t closed;
     int64_t head, n, size; /* 輪の列(size = 容量。0 なら 1) */
@@ -2842,7 +2846,84 @@ static int ch_can_recv(void *a) { Chan *c = a; return ld(&c->n) > 0 || ld(&c->cl
 typedef struct { Chan *c; int64_t my; } SendWait;
 static int ch_taken(void *a) { SendWait *w = a; return ld(&w->c->taken) >= w->my; }
 
+/* --- パイプの通路: fork したプロセスどうしで値を渡す。値は直列化して、長さ(4 バイト)を前に付けて書く。
+ * 1つのプロセスでは向きは1つ: 初めて送ったら読む口を、初めて受け取ったら書く口を閉じる
+ * (書く口がすべて閉じると、受け取る側は「閉じた」と分かる) */
+static V pipe_new(int32_t pos) {
+    int fd[2];
+    if (pipe(fd) != 0) fail(pos, "パイプを作れませんでした(%s)", strerror(errno));
+    signal(SIGPIPE, SIG_IGN); /* 受け取る相手がいなくても止まらず、送信のエラーにする */
+    Chan *ch = rt_alloc(sizeof(Chan));
+    ch->kind = CH_PIPE;
+    ch->rfd = fd[0];
+    ch->wfd = fd[1];
+    return mk_handle("通路", ch, pos);
+}
+static void pipe_close_fd(int64_t *fd) {
+    if (*fd >= 0) close((int)*fd);
+    *fd = -1;
+}
+static V pipe_send(Chan *c, V x, int32_t pos) {
+    if (c->closed || c->wfd < 0) fail(pos, "閉じた通路には送れません");
+    pipe_close_fd(&c->rfd);
+    Buf b = {0};
+    buf_add(&b, "\0\0\0\0SURU\1", 9);
+    ser_value(&b, x, 0, pos);
+    uint32_t n = (uint32_t)(b.n - 4);
+    for (int i = 0; i < 4; i++) b.s[i] = (char)((n >> (8 * i)) & 255);
+    size_t off = 0;
+    while (off < b.n) {
+        world_release();
+        ssize_t k = write((int)c->wfd, b.s + off, b.n - off);
+        int e = errno;
+        world_acquire();
+        if (k < 0 && e == EINTR) continue;
+        if (k < 0) {
+            free(b.s);
+            if (e == EPIPE) fail(pos, "受け取る相手がいないので、通路に送れません");
+            fail(pos, "通路に送れませんでした(%s)", strerror(e));
+        }
+        off += (size_t)k;
+    }
+    free(b.s);
+    return x;
+}
+/* n バイト読む。初めから終わり(EOF)なら 0、途中で終わったら -1 */
+static int pipe_read_full(Chan *c, uint8_t *p, size_t n, int32_t pos) {
+    size_t off = 0;
+    while (off < n) {
+        world_release();
+        ssize_t k = read((int)c->rfd, p + off, n - off);
+        int e = errno;
+        world_acquire();
+        if (k < 0 && e == EINTR) continue;
+        if (k < 0) fail(pos, "通路から受け取れませんでした(%s)", strerror(e));
+        if (k == 0) return off == 0 ? 0 : -1;
+        off += (size_t)k;
+    }
+    return 1;
+}
+static V pipe_take(Chan *c, int32_t pos) {
+    if (c->rfd < 0) fail(pos, "この通路から受け取れません(このプロセスはこの通路に送っています)");
+    pipe_close_fd(&c->wfd);
+    uint8_t h[4];
+    int r = pipe_read_full(c, h, 4, pos);
+    if (r == 0) return 0;
+    if (r < 0) fail(pos, "通路の値が途中で切れています");
+    uint32_t n = (uint32_t)h[0] | ((uint32_t)h[1] << 8) | ((uint32_t)h[2] << 16) | ((uint32_t)h[3] << 24);
+    uint8_t *d = malloc(n ? n : 1);
+    if (!d) fail(pos, "メモリが足りません");
+    if (pipe_read_full(c, d, n, pos) != 1) {
+        free(d);
+        fail(pos, "通路の値が途中で切れています");
+    }
+    V v = deser_all(d, n, pos); /* 失敗したら d は残るが、壊れた通路なのでよしとする */
+    free(d);
+    return v;
+}
+
 static V chan_send(Chan *c, V x, int32_t pos) {
+    if (c->kind == CH_PIPE) return pipe_send(c, x, pos);
     world_lock();
     if (!c->closed) world_wait(ch_can_send, c, pos);
     if (c->closed) {
@@ -2862,6 +2943,7 @@ static V chan_send(Chan *c, V x, int32_t pos) {
 }
 /* 値を1つ取り出す。閉じていて空なら 0 */
 static V chan_take(Chan *c, int32_t pos) {
+    if (c->kind == CH_PIPE) return pipe_take(c, pos);
     world_lock();
     world_wait(ch_can_recv, c, pos);
     if (c->n == 0) {
@@ -2956,6 +3038,7 @@ static V thread_run(Act *a) {
         if (cap < 0) fail(a->pos, "「%s」は通路の容量ではありません(0 以上の整数)", plain(v).s);
         return chan_new(cap, a->pos);
     }
+    case A_CH_PIPE: return pipe_new(a->pos);
     case A_CH_SEND: return chan_send(need_chan(a->b, "「通路送信する」の「へ」", a->pos), a->a, a->pos);
     case A_CH_RECV: {
         V x = chan_take(need_chan(a->a, "「通路受信する」の「から」", a->pos), a->pos);
@@ -2965,6 +3048,7 @@ static V thread_run(Act *a) {
     case A_CH_CLOSE: {
         Chan *c = need_chan(a->a, "「通路閉鎖する」の「を」", a->pos);
         world_lock();
+        if (c->kind == CH_PIPE) pipe_close_fd(&c->wfd);
         __atomic_store_n(&c->closed, 1, __ATOMIC_RELEASE);
         world_changed();
         world_unlock();
@@ -3038,6 +3122,7 @@ BI(t_join) { /* を: スレッドの組 → 合流する動作 */
     return AS(Rec, a[0])->v[0];
 }
 BI(c_new) { return mk_act_pos(A_CH_NEW, "通路作成する", a[0], 0, pos); }    /* で */
+BI(c_pipe) { return mk_act_pos(A_CH_PIPE, "プロセス間通路作成する", 0, 0, pos); }
 BI(c_send) { return mk_act_pos(A_CH_SEND, "通路送信する", a[0], a[1], pos); } /* を, へ */
 BI(c_recv) { return mk_act_pos(A_CH_RECV, "通路受信する", a[0], 0, pos); }   /* から */
 BI(c_close) { return mk_act_pos(A_CH_CLOSE, "通路閉鎖する", a[0], 0, pos); } /* を */
@@ -3119,6 +3204,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"並列写像する", 2, P2_WO_DE, NULL, t_pmap},
     {"コア数取得する", 0, NULL, NULL, t_ncpu},
     {"通路作成する", 1, P1_DE, NULL, c_new},
+    {"プロセス間通路作成する", 0, NULL, NULL, c_pipe},
     {"通路送信する", 2, P2_WO_HE, NULL, c_send},
     {"通路受信する", 1, P1_KARA, NULL, c_recv},
     {"通路閉鎖する", 1, P1_WO, NULL, c_close},
