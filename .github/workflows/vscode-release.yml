@@ -5,7 +5,8 @@
 #   3. VS Code Marketplace に公開する(Trusted Publishing。トークンは要りません)
 #   4. Open VSX にも公開する(リポジトリの変数 OPEN_VSX が true のときだけ。Trusted Publishing。
 #      初めの1回だけはトークン OVSX_PAT で出す)
-# 手で動かす(workflow_dispatch)ときは 1 だけを行い、何も公開しません。
+# 手で動かす(workflow_dispatch)ときは、ふだんは 1 だけを行い、何も公開しません。
+# 「公開する」に印を付けて main で動かすと、package.json の版でタグ vscode-v版 を作って 2〜4 まで行います。
 # 準備と手順は docs/リリース.md にあります。
 name: VS Code 拡張のリリース
 
@@ -13,6 +14,11 @@ on:
   push:
     tags: ["vscode-v[0-9]*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "公開する(main のときだけ。package.json の版でタグを作る)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,6 +27,9 @@ jobs:
   package:
     name: .vsix を作る
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
     defaults:
       run:
         working-directory: editors/vscode
@@ -32,8 +41,33 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - if: github.ref_type == 'tag'
-        run: python3 ../../packaging/check_version.py "$GITHUB_REF_NAME"
+      - id: version
+        name: 版を調べる
+        env:
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="$GITHUB_REF_NAME"
+            publish=true
+          else
+            tag="vscode-v$(node -p 'require("./package.json").version')"
+            publish=false
+            if [ "$PUBLISH" = true ]; then
+              if [ "$GITHUB_REF" != refs/heads/main ]; then
+                echo "公開は main で動かしたときだけです(今は $GITHUB_REF_NAME)"
+                exit 1
+              fi
+              if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+                echo "タグ $tag はもうあります。package.json の版を上げてから動かしてください"
+                exit 1
+              fi
+              publish=true
+            fi
+          fi
+          python3 ../../packaging/check_version.py "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "版 ${tag#vscode-v}(公開する: $publish)" >> "$GITHUB_STEP_SUMMARY"
       - run: |
           npm ci
           ./build_server.sh
@@ -45,7 +79,7 @@ jobs:
 
   release:
     name: GitHub Releases
-    if: github.ref_type == 'tag'
+    if: needs.package.outputs.publish == 'true'
     needs: package
     runs-on: ubuntu-latest
     permissions:
@@ -56,15 +90,17 @@ jobs:
           name: vsix
       - env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.package.outputs.tag }}
         run: |
-          gh release create "$GITHUB_REF_NAME" *.vsix --repo "$GITHUB_REPOSITORY" \
-            --title "VS Code 拡張 ${GITHUB_REF_NAME#vscode-v}" \
+          # 手で動かしたときは、ここでタグも作る(--target のコミットに付く)
+          gh release create "$TAG" *.vsix --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "VS Code 拡張 ${TAG#vscode-v}" \
             --notes "「する」の VS Code 拡張です。VS Code の拡張機能ビューで「する」を検索して入れるか、この .vsix を「VSIX からのインストール…」で入れてください。"
 
   marketplace:
     name: Marketplace に公開
-    if: github.ref_type == 'tag'
-    needs: release
+    if: needs.package.outputs.publish == 'true'
+    needs: [package, release]
     runs-on: ubuntu-latest
     environment: marketplace
     permissions:
