@@ -31,9 +31,13 @@ type TParam struct {
 	T    Type
 }
 
+// TFun: 関数。Real は助詞が本物(定義・無名関数・部分適用・型の宣言のもの。組み込みの型の「を」の仮置きではない)。
+// Strict は受け取った関数を助詞を付けて呼ぶところがある(助詞もそろえる。#104)。suru_check.py の TFun と同じ
 type TFun struct {
 	Params []TParam
 	Result Type
+	Real   bool
+	Strict bool
 }
 
 func (*TVar) isType() {}
@@ -138,9 +142,10 @@ func ftv(t Type, out *varSet) *varSet {
 
 // 型がそろわないとき(Occurs は v を t にすると型が無限に続くとき)
 type mismatch struct {
-	occurs bool
-	v      *TVar
-	t      Type
+	occurs   bool
+	particle bool // 助詞を付けて呼ぶ関数の、助詞が違う
+	v        *TVar
+	t        Type
 }
 
 type restart struct{}
@@ -249,8 +254,28 @@ func unify(a, b Type) {
 			if len(af.Params) != len(bf.Params) {
 				throwMismatch()
 			}
-			for i := range af.Params {
-				unify(af.Params[i].T, bf.Params[i].T)
+			if (af.Strict || bf.Strict) && af.Real && bf.Real {
+				// 助詞を付けて呼ばれる関数は、助詞もそろえる(助詞ごとに合わせる)
+				bp := map[string]Type{}
+				for _, p := range bf.Params {
+					bp[p.Part] = p.T
+				}
+				for _, p := range af.Params {
+					if _, ok := bp[p.Part]; !ok {
+						panic(&mismatch{particle: true})
+					}
+				}
+				if len(bp) != len(af.Params) {
+					panic(&mismatch{particle: true})
+				}
+				af.Strict, bf.Strict = true, true
+				for _, p := range af.Params {
+					unify(p.T, bp[p.Part])
+				}
+			} else {
+				for i := range af.Params {
+					unify(af.Params[i].T, bf.Params[i].T)
+				}
 			}
 			unify(af.Result, bf.Result)
 			return
@@ -488,7 +513,7 @@ func substT(t Type, m map[*TVar]Type) Type {
 		for i, p := range x.Params {
 			ps[i] = TParam{p.Part, substT(p.T, m)}
 		}
-		return &TFun{ps, substT(x.Result, m)}
+		return &TFun{Params: ps, Result: substT(x.Result, m), Real: x.Real, Strict: x.Strict}
 	}
 	return t
 }

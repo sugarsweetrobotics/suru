@@ -67,6 +67,18 @@ def test_テストのプログラムで同じIRとエラー(suruc, tmp_path):
     assert not failed, f"{len(failed)} 個のプログラムで違います。最初のもの:\n{failed[0]}"
 
 
+def test_2つのファイルにある型と同じ名前の変数で同じIR(suruc, tmp_path):
+    from test_suru import TYPE_A, TYPE_B, TYPE_VARS
+
+    (tmp_path / "甲.suru").write_text(TYPE_A, encoding="utf-8")
+    (tmp_path / "乙.suru").write_text(TYPE_B, encoding="utf-8")
+    path = tmp_path / "main.suru"
+    path.write_text(TYPE_VARS, encoding="utf-8")
+    compare(path, suruc, tmp_path)
+    path.write_text(TYPE_VARS + "（5 の 応答）\n", encoding="utf-8")
+    compare(path, suruc, tmp_path)
+
+
 def test_バイナリを作って動かす(suruc, tmp_path):
     if shutil.which("clang") is None:
         pytest.skip("clang がありません")

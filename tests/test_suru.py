@@ -1482,6 +1482,29 @@ def test_型の名前はファイルごとに分かれる(tmp_path):
         _run_in(tmp_path, head + "（5 の 応答）")
 
 
+TYPE_VARS = """「甲」 を 読み込む
+「乙」 を 読み込む
+甲内の応答 に 数 を 合計する は 数
+応答 に 要求 を 合計する とは
+  本文 とは 応答 の 状態 + 要求
+  本文
+x を 試験する とは
+  応答 とは x + 1
+  応答
+ただし 要求 とは 2
+（1 と 「a」 の 甲内の応答） に 3 を 合計する
+5 を 試験する
+"""
+
+
+def test_型と同じ名前の変数は2つのファイルにあっても使える(tmp_path):
+    # 2つのファイルにある型の名前でも、変数や引数の名前にしたなら変数として読む(#105)
+    from suru_check import check
+    _files(tmp_path, 甲=TYPE_A, 乙=TYPE_B)
+    assert _run_in(tmp_path, TYPE_VARS) == ["4", "6"]
+    check(TYPE_VARS, str(tmp_path))
+
+
 def test_型の名前はファイルごとに分かれる_型の検査(tmp_path):
     from suru_check import check
     _files(tmp_path, 甲=TYPE_A, 乙=TYPE_B)
