@@ -5,7 +5,9 @@
 #   4. PyPI に公開する(Trusted Publishing。トークンは要りません)
 #   5. Homebrew の tap(リポジトリの持ち主の homebrew-suru)の formula を新しくする
 # 持ち主やリポジトリの名前はここに書かず、GitHub から受け取ります(organization に移しても直さなくてよい)。
-# 手で動かす(workflow_dispatch)ときは 1 と 2 だけを行い、何も公開しません。
+# 手で動かす(workflow_dispatch)ときは、ふだんは 1 と 2 だけを行い、何も公開しません。
+# 「公開する」に印を付けて main で動かすと、suru.py の版でタグ v版 を作って 3〜5 まで行います
+# (スマホの GitHub からでも公開できるように)。
 # 準備と手順は docs/リリース.md にあります。
 name: リリース
 
@@ -13,6 +15,11 @@ on:
   push:
     tags: ["v[0-9]*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "公開する(main のときだけ。suru.py の版でタグを作る)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -23,6 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -33,13 +42,32 @@ jobs:
           go-version-file: go.mod
       - id: version
         name: 版を調べる
+        env:
+          PUBLISH: ${{ inputs.publish }}
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then
-            python3 packaging/check_version.py "$GITHUB_REF_NAME"
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            tag="$GITHUB_REF_NAME"
+            publish=true
           else
-            echo "version=$(python3 -c 'import re;print(re.search(r"__version__ = \"(.+?)\"", open("suru.py", encoding="utf-8").read()).group(1))')" >> "$GITHUB_OUTPUT"
+            tag="v$(python3 -c 'import re;print(re.search(r"__version__ = \"(.+?)\"", open("suru.py", encoding="utf-8").read()).group(1))')"
+            publish=false
+            if [ "$PUBLISH" = true ]; then
+              if [ "$GITHUB_REF" != refs/heads/main ]; then
+                echo "公開は main で動かしたときだけです(今は $GITHUB_REF_NAME)"
+                exit 1
+              fi
+              if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+                echo "タグ $tag はもうあります。suru.py と Go 版の版を上げてから動かしてください"
+                exit 1
+              fi
+              publish=true
+            fi
           fi
+          python3 packaging/check_version.py "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "版 ${tag#v}(公開する: $publish)" >> "$GITHUB_STEP_SUMMARY"
       - name: テスト
         run: |
           pip install pytest
@@ -100,7 +128,7 @@ jobs:
 
   release:
     name: GitHub Releases
-    if: github.ref_type == 'tag'
+    if: needs.check.outputs.publish == 'true'
     needs: [check, python, binaries, smoke-macos]
     runs-on: ubuntu-latest
     permissions:
@@ -114,14 +142,15 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" assets/* \
+          # 手で動かしたときは、ここでタグも作る(--target のコミットに付く)
+          gh release create "${{ needs.check.outputs.tag }}" assets/* --target "$GITHUB_SHA" \
             --title "する ${{ needs.check.outputs.version }}" \
             --notes "$(sed "s|__REPO__|$GITHUB_REPOSITORY|g; s|__OWNER__|$GITHUB_REPOSITORY_OWNER|g" packaging/release_notes.md)"
 
   pypi:
     name: PyPI に公開
-    if: github.ref_type == 'tag'
-    needs: release
+    if: needs.check.outputs.publish == 'true'
+    needs: [check, release]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -137,7 +166,7 @@ jobs:
 
   homebrew:
     name: Homebrew の tap
-    if: github.ref_type == 'tag'
+    if: needs.check.outputs.publish == 'true'
     needs: [check, release]
     runs-on: ubuntu-latest
     environment: homebrew
