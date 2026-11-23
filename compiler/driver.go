@@ -40,3 +40,11 @@ func CompileSource(source, baseDir, path string, check bool) (ir string, err *Su
 	})
 	return
 }
+
+// ParseSource は する のプログラムを構文解析だけする(型の検査はしない)。間違いがあれば *SuruError
+func ParseSource(source, baseDir string) (program []Node, err *SuruError) {
+	err = try(func() {
+		program = ParseProgram(source, NewParseContext(baseDir))
+	})
+	return
+}
