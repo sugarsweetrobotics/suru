@@ -451,7 +451,7 @@ def _split_hiragana(text: str, line: int, after_name: bool, after_value: bool) -
     if after_name and start == 0:
         raise SuruError(
             f"名前にひらがな「{unknown}」が混ざっています。ひらがなを含む名前は "
-            f"{NAME_OPEN}割る数に{NAME_CLOSE}する のように{NAME_OPEN}{NAME_CLOSE}で囲んでください",
+            f"{NAME_OPEN}割った数に{NAME_CLOSE}する のように{NAME_OPEN}{NAME_CLOSE}で囲んでください",
             line,
         )
     if rest.startswith(CALL_FORMS):
