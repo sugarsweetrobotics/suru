@@ -591,6 +591,12 @@ static void buf_printf(Buf *b, const char *fmt, ...) {
 /* ------------------------------------------------------------------ */
 
 static const char *source_text = "";
+/* 表示する型と形の名前: 読み込んだファイルの前置き(「部品内の」)を除く */
+static const char *short_type_name(const char *name) {
+    const char *sep = "内の", *last = NULL, *p = name;
+    while ((p = strstr(p, sep)) != NULL) { last = p; p += strlen(sep); }
+    return last ? last + strlen(sep) : name;
+}
 /* 読み込んだファイル(コンパイラが作る表)。その行は、本体の行の後ろに続けて番号を振ってある */
 extern const int32_t suru_file_base[];
 extern const char *const suru_file_name[];
@@ -1046,7 +1052,7 @@ static void fmt_value(Buf *b, V v, int nested, int use_traits) {
     }
     case T_REC: {
         Rec *r = AS(Rec, v);
-        if (r->c->n == 0) { buf_cat(b, r->c->name); return; }
+        if (r->c->n == 0) { buf_cat(b, short_type_name(r->c->name)); return; }
         buf_cat(b, "（");
         for (int i = 0; i < r->c->n; i++) {
             if (i) buf_cat(b, " で ");
@@ -1055,7 +1061,7 @@ static void fmt_value(Buf *b, V v, int nested, int use_traits) {
             fmt_into(b, r->v[i], 1, use_traits);
         }
         buf_cat(b, " の ");
-        buf_cat(b, r->c->name);
+        buf_cat(b, short_type_name(r->c->name));
         buf_cat(b, "）");
         return;
     }

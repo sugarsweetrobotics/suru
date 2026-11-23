@@ -484,3 +484,14 @@ def test_読み込んだファイルの中の実行時エラーはファイル�
     (tmp_path / "部品.suru").write_text(PARTS, encoding="utf-8")
     r = compiled(PARTS_MAIN, tmp_path, str(tmp_path))
     assert r.returncode == 1 and r.stderr == PARTS_ERR + "\n"
+
+
+def test_型の名前はファイルごとに分かれる(tmp_path):
+    from test_suru import TYPE_A, TYPE_B
+
+    (tmp_path / "甲.suru").write_text(TYPE_A, encoding="utf-8")
+    (tmp_path / "乙.suru").write_text(TYPE_B, encoding="utf-8")
+    out = same("「甲」 を 読み込む\n「乙」 を 読み込む\n1 を 甲内の甲作成する\n（2 を 乙内の乙作成する） を 乙内の乙番号取得する\n"
+               "（5 の 乙内の応答）\n乙内の空応答 を 乙内の乙番号取得する\n（（3 と 「x」 の 甲内の応答） を 甲内の甲状態取得する）\n",
+               tmp_path, str(tmp_path))
+    assert out == "甲の応答 1\n2\n（番号 は 5 の 応答）\n0\n3\n"

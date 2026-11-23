@@ -139,6 +139,8 @@ type ParseContext struct {
 	Packages map[string]Package
 	// InPrelude は 基本.suru そのものを読んでいるとき(基本を自動で読み込まない)
 	InPrelude bool
+	// Qualify は読み込んだファイル(lib/ のものを除く)を解析しているときの「部品内の」。そのファイルの型と形の名前に付ける
+	Qualify string
 }
 
 func NewParseContext(baseDir string) *ParseContext {
@@ -1912,10 +1914,113 @@ func checkName(t *Token) string {
 	if !t.Quoted && isAllHiragana(t.S) {
 		panic(hiraganaNameError(t.S, t.Line))
 	}
+	if t.Qualified {
+		return t.S
+	}
 	if strings.Contains(t.S, ModuleSep) {
 		raise(t.Line, "「"+t.S+"」: 読み込んだファイルの中の名前は定義できません")
 	}
 	return t.S
+}
+
+// ShortTypeName は表示する型と形の名前: 読み込んだファイルの前置き(「部品内の」)を除く
+func ShortTypeName(name string) string {
+	if i := strings.LastIndex(name, ModuleSep); i >= 0 {
+		return name[i+len(ModuleSep):]
+	}
+	return name
+}
+
+func isLibPath(path string) bool {
+	if strings.HasPrefix(path, embeddedLibPrefix) {
+		return true
+	}
+	if LibDir == "" {
+		return false
+	}
+	lib, err1 := filepath.Abs(LibDir)
+	dir, err2 := filepath.Abs(filepath.Dir(path))
+	return err1 == nil && err2 == nil && lib == dir
+}
+
+// qualifyTypeNames: 型と形の名前は、ファイルごとに分ける(suru.py の _qualify_type_names と同じ)。
+// 読み込んだファイル(lib/ のものを除く)の型「点」は、中では「点」、外では「部品内の点」が本当の名前。
+// 外でも、ほかのファイルの型とぶつからなければ「点」と書ける。字句の名前を本当の名前に置きかえる
+func qualifyTypeNames(nodes []*LNode, ctx *ParseContext) {
+	own := map[string]string{}
+	for _, n := range nodes {
+		if td := tryParseTypedef(n); td != nil {
+			own[td.Name] = ctx.Qualify + td.Name
+			for _, c := range td.Ctors {
+				own[c.Name] = ctx.Qualify + c.Name
+			}
+		}
+	}
+	type cand struct{ canon, mod string }
+	candidates := map[string][]cand{} // 前置きなしの名前 → 本当の名前とそれを持つファイル(見つけた順)
+	full := map[string]string{}       // 「部品内の点」 → 本当の名前
+	add := func(m *Module, canon string) {
+		name := ShortTypeName(canon)
+		full[m.Name+ModuleSep+name] = canon
+		for _, c := range candidates[name] {
+			if c.canon == canon {
+				return
+			}
+		}
+		candidates[name] = append(candidates[name], cand{canon, m.Name})
+	}
+	if ctx.Order != nil {
+		for _, p := range *ctx.Order {
+			m := ctx.Modules[p]
+			if m == nil {
+				continue
+			}
+			for _, s := range m.Program {
+				if td, ok := s.(*TypeDef); ok {
+					add(m, td.Name)
+					for _, c := range td.Ctors {
+						add(m, c.Name)
+					}
+				}
+			}
+		}
+	}
+	if len(own) == 0 && len(candidates) == 0 {
+		return
+	}
+	var fix func(ns []*LNode)
+	fix = func(ns []*LNode) {
+		for _, n := range ns {
+			for i, t := range n.Line.Tokens {
+				if t.Kind != "WORD" {
+					continue
+				}
+				v := t.S
+				canon, ok := own[v]
+				if !ok {
+					if cs := candidates[v]; len(cs) > 1 {
+						names := make([]string, len(cs))
+						for k, c := range cs {
+							names[k] = "「" + c.mod + "」"
+						}
+						raise(t.Line, "「"+v+"」は"+strings.Join(names, "と")+"の両方にある型か形の名前です。「"+cs[0].mod+ModuleSep+v+"」のようにファイルの名前を付けて書いてください")
+					} else if len(cs) == 1 {
+						canon, ok = cs[0].canon, true
+					} else {
+						canon, ok = full[v]
+					}
+				}
+				if ok && (canon != v || strings.Contains(canon, ModuleSep)) {
+					nt := *t
+					nt.S = canon
+					nt.Qualified = strings.Contains(canon, ModuleSep)
+					n.Line.Tokens[i] = &nt
+				}
+			}
+			fix(n.Children)
+		}
+	}
+	fix(nodes)
 }
 
 func tryParseTypedef(node *LNode) *TypeDef {
@@ -2169,6 +2274,7 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 	if len(modNames) > 0 {
 		joinInNodes(nodes, setOf(modNames...))
 	}
+	qualifyTypeNames(nodes, ctx)
 	for _, n := range nodes {
 		if td := tryParseTypedef(n); td != nil {
 			ctx.add(td)
@@ -2812,6 +2918,9 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 		*ctx.Order = append(*ctx.Order, path)
 	}
 	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude, Order: ctx.Order}
+	if !isLibPath(path) {
+		sub.Qualify = stem + ModuleSep
+	}
 	var program []Node
 	savedFile := curPosFile
 	curPosFile = path

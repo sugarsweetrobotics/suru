@@ -182,6 +182,7 @@ class Token:
     form: str = ""  # CALL のとき "する" / "して" / "すること"
     quoted: bool = False  # 『』で囲んだ名前
     negated: bool = False  # 「…でない」
+    qualified: bool = False  # 読み込んだファイルの型か形の名前に、そのファイルの前置きを付けたもの(「部品内の点」)
 
     def __repr__(self) -> str:
         return f"{self.kind}:{self.value}{('/' + self.form) if self.form else ''}"
@@ -1145,6 +1146,8 @@ class ParseContext:
         self.modules: dict[str, Any] = dict(modules or {})  # 読み込んだファイル(絶対パス → Module。読み込み中は None)
         self.packages: dict[str, str] | None = None  # プロジェクトの依存(名前 → フォルダ)。None なら初めて読み込むときに探す
         self.in_prelude = False  # 基本.suru そのものを読んでいる(基本を自動で読み込まない)
+        # 読み込んだファイル(lib/ のものを除く)を解析しているときは「部品内の」。そのファイルの型と形の名前に付ける
+        self.qualify = ""
 
     def copy(self) -> "ParseContext":
         c = ParseContext(self.ctors, self.types, self.base_dir, self.modules)
@@ -2390,6 +2393,8 @@ def _check_name(tok: Token) -> str:
         raise SuruError(f"名前に「{tok.value}」は使えません", tok.line)
     if not tok.quoted and _is_all_hiragana(tok.value):
         raise hiragana_name_error(tok.value, tok.line)
+    if tok.qualified:
+        return tok.value
     if MODULE_SEP in tok.value:
         raise SuruError(f"「{tok.value}」: 読み込んだファイルの中の名前は定義できません", tok.line)
     return tok.value
@@ -2620,6 +2625,7 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
     modules = {i.module.name for i in imports.values() if isinstance(i, Import)} | ({PRELUDE_NAME} if prelude else set())
     if modules:
         _join_in_nodes(nodes, modules)
+    _qualify_type_names(nodes, ctx)
     # 「3 と 4 の 点」を読むために、型の定義を先に集める(定義の順番は自由)
     for n in nodes:
         td = try_parse_typedef(n)
@@ -2640,6 +2646,66 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         return statements
     finally:
         _CTX = saved
+
+
+def short_type_name(name: str) -> str:
+    """表示する型と形の名前: 読み込んだファイルの前置き(「部品内の」)を除く"""
+    return name.rpartition(MODULE_SEP)[2]
+
+
+def _is_lib_path(path: str) -> bool:
+    return os.path.dirname(os.path.abspath(path)) == os.path.abspath(LIB_DIR)
+
+
+def _qualify_type_names(nodes: list, ctx: ParseContext) -> None:
+    """型と形の名前は、ファイルごとに分ける。読み込んだファイル(lib/ のものを除く)の型「点」は、中では「点」、
+    外では「部品内の点」が本当の名前。外でも、ほかのファイルの型とぶつからなければ「点」と書ける。
+    字句の名前を本当の名前に置きかえる(ぶつかる名前を前置きなしで書いたらエラー)"""
+    own: dict[str, str] = {}
+    for n in nodes:
+        td = try_parse_typedef(n)
+        if td is not None:
+            for name in [td.name] + [c for c, _ in td.ctors]:
+                own[name] = ctx.qualify + name
+    candidates: dict[str, dict] = {}  # 前置きなしの名前 → {本当の名前: それを持つファイルの名前}
+    full: dict[str, str] = {}  # 「部品内の点」 → 本当の名前
+    for m in ctx.modules.values():
+        if m is None:
+            continue
+        for s in m.program:
+            if isinstance(s, TypeDef):
+                for canon in [s.name] + [c for c, _ in s.ctors]:
+                    name = short_type_name(canon)
+                    full[m.name + MODULE_SEP + name] = canon
+                    candidates.setdefault(name, {}).setdefault(canon, m.name)
+    short = {k: next(iter(v)) for k, v in candidates.items() if len(v) == 1}
+    owners = {k: list(v.values()) for k, v in candidates.items() if len(v) > 1}
+    if not own and not short and not full:
+        return
+
+    def fix(tokens: list) -> list:
+        out = []
+        for t in tokens:
+            if t.kind == "WORD":
+                v = t.value
+                canon = own.get(v)
+                if canon is None and v in owners:
+                    names = "と".join(f"「{x}」" for x in owners[v])
+                    raise SuruError(f"「{v}」は{names}の両方にある型か形の名前です。「{owners[v][0]}{MODULE_SEP}{v}」のように"
+                                    "ファイルの名前を付けて書いてください", t.line)
+                if canon is None:
+                    canon = short.get(v) or full.get(v)
+                if canon is not None and (canon != v or MODULE_SEP in canon):
+                    t = Token(t.kind, canon, t.line, t.form, t.quoted, t.negated, MODULE_SEP in canon)
+            out.append(t)
+        return out
+
+    def walk(ns: list) -> None:
+        for n in ns:
+            n.line.tokens = fix(n.line.tokens)
+            walk(n.children)
+
+    walk(nodes)
 
 
 def _prelude_line(nodes: list) -> int | None:
@@ -2920,6 +2986,7 @@ def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool
     sub.modules = ctx.modules
     sub.packages = ctx.packages
     sub.in_prelude = prelude
+    sub.qualify = "" if _is_lib_path(path) else stem + MODULE_SEP
     global _POS_SRC
     saved_src, _POS_SRC = _POS_SRC, path
     SOURCES[path] = source
@@ -3108,9 +3175,9 @@ def format_value(v: Any, nested: bool = False, fmt: Any = None) -> str:
     fmt = fmt or (lambda x: format_value(x, True))
     if isinstance(v, Record):
         if not v.fields:
-            return v.ctor
+            return short_type_name(v.ctor)
         inner = " で ".join(f"{f} は {fmt(x)}" for f, x in zip(v.fields, v.values))
-        return f"（{inner} の {v.ctor}）"
+        return f"（{inner} の {short_type_name(v.ctor)}）"
     if v is True:
         return "真"
     if v is False:

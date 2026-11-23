@@ -1453,3 +1453,39 @@ def test_読み込んだファイルの中の実行時エラーはファイル�
     assert format_error(info.value, PARTS_MAIN) == PARTS_ERR
     with pytest.raises(SuruError, match="^「基本.suru」の[0-9]+行目 [0-9]+文字目: 無を取り出しました$"):
         _run_in(tmp_path, "無 を 取出する")
+
+
+# --- 型の名前はファイルごと ---
+
+TYPE_A = """応答 とは 状態 と 本文 の 組
+応答 は 表示可能
+  r を 文字列化する とは 「甲の応答 」 + （r の 状態 を 文字列化する）
+x を 甲作成する とは （x と 「甲」 の 応答）
+（s と b の 応答） を 甲状態取得する とは s
+"""
+TYPE_B = """応答 とは 番号 の 応答 か 空応答
+x を 乙作成する とは x の 応答
+（n の 応答） を 乙番号取得する とは n
+空応答 を 乙番号取得する とは 0
+"""
+
+
+def test_型の名前はファイルごとに分かれる(tmp_path):
+    _files(tmp_path, 甲=TYPE_A, 乙=TYPE_B)
+    head = "「甲」 を 読み込む\n「乙」 を 読み込む\n"
+    assert _run_in(tmp_path, head + "1 を 甲内の甲作成する\n（2 を 乙内の乙作成する） を 乙内の乙番号取得する\n"
+                   "（3 と 「x」 の 甲内の応答） の 本文\n（5 の 乙内の応答）\n乙内の空応答 を 乙内の乙番号取得する\n"
+                   "（3 と 「x」 の 甲内の応答） を 甲内の甲状態取得する") == ["甲の応答 1", "2", "x", "（番号 は 5 の 応答）", "0", "3"]
+    # 片方だけ読み込めば、前置きなしでも書ける
+    assert _run_in(tmp_path, "「乙」 を 読み込む\n（5 の 応答） を 乙内の乙番号取得する\n空応答") == ["5", "空応答"]
+    with pytest.raises(SuruError, match="「応答」は「甲」と「乙」の両方にある型か形の名前です。「甲内の応答」のように"):
+        _run_in(tmp_path, head + "（5 の 応答）")
+
+
+def test_型の名前はファイルごとに分かれる_型の検査(tmp_path):
+    from suru_check import check
+    _files(tmp_path, 甲=TYPE_A, 乙=TYPE_B)
+    head = "「甲」 を 読み込む\n「乙」 を 読み込む\n"
+    check(head + "甲内の応答 を 表示用にする は 文字列\nr を 表示用にする とは r の 本文\n（1 と 「a」 の 甲内の応答） を 表示用にする\n", str(tmp_path))
+    with pytest.raises(SuruError, match="乙内の応答"):
+        check(head + "甲内の応答 を 表示用にする は 文字列\nr を 表示用にする とは r の 本文\n（1 の 乙内の応答） を 表示用にする\n", str(tmp_path))

@@ -108,6 +108,8 @@ type Token struct {
 	Form    string // CALL のとき する / して / すること など
 	Quoted  bool
 	Negated bool
+	// Qualified は読み込んだファイルの型か形の名前に、そのファイルの前置きを付けたもの(「部品内の点」)
+	Qualified bool
 }
 
 // Value は Python の str(tok.value) にあたる表示
