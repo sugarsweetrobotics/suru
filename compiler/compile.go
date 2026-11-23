@@ -90,6 +90,8 @@ declare i64 @rt_do_result(i64)
 declare i64 @rt_std(ptr)
 declare i64 @rt_global_cached(ptr, ptr, i32)
 declare void @rt_top(i64)
+declare void @rt_safepoint()
+@rt_gc_stop = external global i32
 declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)
 declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)
 declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)
@@ -267,6 +269,14 @@ func (f *fnGen) loadSlot(owner *fnGen, k int) string {
 	return t
 }
 
+// 関数の入口の安全点: GC がほかのスレッドを止めたいとき(rt_gc_stop が 1)は、ここで止まる(Python 版の SAFEPOINT と同じ)
+const safepoint = `  %sp = load atomic i32, ptr @rt_gc_stop monotonic, align 4
+  %spc = icmp ne i32 %sp, 0
+  br i1 %spc, label %sp.wait, label %b0
+sp.wait:
+  call void @rt_safepoint()
+  br label %b0`
+
 func (f *fnGen) finish(header string) string {
 	var b strings.Builder
 	size := len(header) + 128
@@ -286,7 +296,7 @@ func (f *fnGen) finish(header string) string {
 	} else {
 		fmt.Fprintf(&b, "\n  %%fr = alloca i64, i32 %d", f.nslots)
 	}
-	b.WriteString("\n  store ptr %up, ptr %fr\n  br label %b0")
+	b.WriteString("\n  store ptr %up, ptr %fr\n" + safepoint)
 	for _, l := range f.lines {
 		b.WriteString("\n" + l)
 	}

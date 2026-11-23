@@ -98,6 +98,8 @@ declare i64 @rt_do_result(i64)
 declare i64 @rt_std(ptr)
 declare i64 @rt_global_cached(ptr, ptr, i32)
 declare void @rt_top(i64)
+declare void @rt_safepoint()
+@rt_gc_stop = external global i32
 declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)
 declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)
 declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)
@@ -162,6 +164,15 @@ class Scope:
                 return s.vars[name]
             s = s.parent
         return None
+
+
+# 関数の入口の安全点(Go 版の safepoint と同じ)
+SAFEPOINT = """  %sp = load atomic i32, ptr @rt_gc_stop monotonic, align 4
+  %spc = icmp ne i32 %sp, 0
+  br i1 %spc, label %sp.wait, label %b0
+sp.wait:
+  call void @rt_safepoint()
+  br label %b0"""
 
 
 class FnGen:
@@ -250,7 +261,8 @@ class FnGen:
         else:
             frame.append(f"  %fr = alloca i64, i32 {self.nslots}")
         frame.append("  store ptr %up, ptr %fr")
-        return "\n".join([f"{header} {{", "entry:"] + self.entry + frame + ["  br label %b0"] + self.lines + ["}"])
+        # 安全点: GC がほかのスレッドを止めたいとき(rt_gc_stop が 1)は、ここで止まる
+        return "\n".join([f"{header} {{", "entry:"] + self.entry + frame + [SAFEPOINT] + self.lines + ["}"])
 
 
 # --- コンパイラ ------------------------------------------------------------
