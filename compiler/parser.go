@@ -135,6 +135,8 @@ type ParseContext struct {
 	Loading map[string]bool
 	// Packages はプロジェクトの依存(名前 → Package)。nil なら、初めて読み込むときに BaseDir から探す
 	Packages map[string]Package
+	// InPrelude は 基本.suru そのものを読んでいるとき(基本を自動で読み込まない)
+	InPrelude bool
 }
 
 func NewParseContext(baseDir string) *ParseContext {
@@ -605,14 +607,14 @@ func (p *ExprParser) pipeline(piped Node, hasPiped bool) Node {
 			if t.Kind == "CALL" && t.Form == Shita {
 				p.next()
 				res := p.peek0()
-				if res == nil || res.Kind != "WORD" || res.S != Result {
-					raise(t.Line, "「"+strings.TrimSuffix(t.S, Suru)+"した」の後には「結果」を書いてください")
+				if res == nil || res.Kind != "WORD" || (res.S != Result && res.S != Content) {
+					raise(t.Line, "「"+strings.TrimSuffix(t.S, Suru)+"した」の後には「結果」か「中身」を書いてください")
 				}
 				p.next()
 				if hasPiped {
 					args = mergePiped(args, piped, WO)
 				}
-				value = &Run{&Call{t.S, args, t.Line}, t.Line}
+				value = &Run{&Call{t.S, args, t.Line}, t.Line, res.S == Content}
 				args, piped, hasPiped = nil, nil, false
 			} else if t.Kind == "CALL" && t.Form != Koto {
 				break
@@ -702,7 +704,7 @@ func (p *ExprParser) pipeline(piped Node, hasPiped bool) Node {
 			return &Chain{call, cont, t.Line}
 		}
 		if t.Form == Shita {
-			raise(t.Line, "「した」の後には「結果」を書いてください")
+			raise(t.Line, "「した」の後には「結果」か「中身」を書いてください")
 		}
 	}
 }
@@ -2155,6 +2157,13 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 			modNames = append(modNames, imp.Module.Name)
 		}
 	}
+	var prelude *Import
+	if !ctx.InPrelude && !hasPreludeImport(imports) {
+		if line, ok := preludeLine(nodes); ok {
+			prelude = &Import{loadPrelude(ctx, line), line, true}
+			modNames = append(modNames, PreludeName)
+		}
+	}
 	if len(modNames) > 0 {
 		joinInNodes(nodes, setOf(modNames...))
 	}
@@ -2173,6 +2182,9 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 		} else {
 			statements = append(statements, parseStatement(n))
 		}
+	}
+	if prelude != nil {
+		statements = append([]Node{prelude}, statements...)
 	}
 	checkOpenImports(statements)
 	attachExterns(statements)
@@ -2206,6 +2218,57 @@ func parseExternArgs(toks []*Token) []ExternArg {
 		}
 	}
 	return out
+}
+
+// 基本(成否・有無)は、その名前を書いたファイルが自動で「読み込んで 使う」
+const PreludeName = "基本"
+
+var preludeWords = setOf("成否", "有無", "成功", "失敗", "有")
+var preludeCalls = setOf("成否にする", "有無にする", "中断する") // 取出する は性質の関数なので入れない
+
+func hasPreludeImport(imports map[*LNode]Node) bool {
+	for _, i := range imports {
+		if imp, ok := i.(*Import); ok && isLibFile(imp.Module.Path, PreludePath) {
+			return true
+		}
+	}
+	return false
+}
+
+// preludeLine は基本(成否・有無)の名前を書いた最初の行(基本.suru そのものなら false)
+func preludeLine(nodes []*LNode) (Pos, bool) {
+	for _, n := range nodes {
+		if td := tryParseTypedef(n); td != nil && (td.Name == "成否" || td.Name == "有無") {
+			return Pos{}, false
+		}
+	}
+	return preludeWordLine(nodes)
+}
+
+func preludeWordLine(nodes []*LNode) (Pos, bool) {
+	for _, n := range nodes {
+		for k, t := range n.Line.Tokens {
+			if (t.Kind == "WORD" || t.Kind == "CALL") && !t.Quoted &&
+				(preludeWords[t.S] || preludeCalls[t.S] || strings.HasPrefix(t.S, PreludeName+ModuleSep) ||
+					// 「無」は「… は 無」なら外部の関数の型(C の void)
+					t.S == "無" && !(k > 0 && isKw(n.Line.Tokens[k-1], KwWa))) {
+				return n.Line.Number, true
+			}
+		}
+		if line, ok := preludeWordLine(n.Children); ok {
+			return line, true
+		}
+	}
+	return Pos{}, false
+}
+
+// loadPrelude は lib/基本.suru を読む(同じフォルダに 基本.suru があっても、いつも同梱のもの)
+func loadPrelude(ctx *ParseContext, line Pos) *Module {
+	path := libPath(PreludeName + SourceSuffix)
+	if m, ok := ctx.Modules[path]; ok {
+		return m
+	}
+	return loadPath(path, PreludeName+SourceSuffix, ctx, line, true)
 }
 
 // externLibTarget は「外部の「m」 を 読み込む」なら ExternLib
@@ -2461,6 +2524,9 @@ var NetPath = embeddedLibPrefix + "通信" + SourceSuffix
 // ThreadPath はスレッドのライブラリのファイルのパス
 var ThreadPath = embeddedLibPrefix + "スレッド" + SourceSuffix
 
+// PreludePath は基本(成否・有無)のファイルのパス
+var PreludePath = embeddedLibPrefix + PreludeName + SourceSuffix
+
 // LibFS は同梱の lib/(cmd/suruc が設定する)
 var LibFS fs.FS
 
@@ -2561,6 +2627,10 @@ func loadModule(name string, ctx *ParseContext, line Pos) *Module {
 			path = embeddedLibPrefix + filepath.Clean(file)
 		}
 	}
+	return loadPath(path, file, ctx, line, false)
+}
+
+func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Module {
 	stem := splitExt(pathBase(path))
 	bad := stem == "" || isAllHiragana(stem) || strings.ContainsFunc(stem, isHiragana) || strings.ContainsAny(stem, " 　「」『』（）()、。")
 	if bad {
@@ -2577,7 +2647,7 @@ func loadModule(name string, ctx *ParseContext, line Pos) *Module {
 		raise(line, "ファイル「"+file+"」が見つかりません")
 	}
 	ctx.Loading[path] = true
-	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages}
+	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude}
 	var program []Node
 	err := try(func() {
 		program = ParseProgram(source, sub)

@@ -145,6 +145,8 @@ type Chain struct {
 type Run struct {
 	Call Node
 	Line Pos
+	// Unwrap なら「…した 中身」: 成功(有)なら中の値、失敗(無)なら一番内側の関数か手順がその失敗を返す
+	Unwrap bool
 }
 type Do struct {
 	Statements []Node
