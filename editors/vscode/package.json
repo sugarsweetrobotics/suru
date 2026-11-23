@@ -1,7 +1,7 @@
 {
   "name": "suru",
   "displayName": "する",
-  "description": "日本語の関数型プログラミング言語「する」の色分け・書きながらの型の検査・型のホバー・定義へ移動・補完・名前の変更・実行",
+  "description": "日本語の関数型プログラミング言語「する」の色分け・書きながらの型の検査・型のホバー・定義へ移動・補完・名前の変更・実行・kumu(プロジェクトの実行・試験・点検)",
   "version": "0.4.0",
   "publisher": "suru-lang",
   "license": "GPL-3.0-or-later",
@@ -70,6 +70,41 @@
         "icon": "$(package)"
       },
       {
+        "command": "suru.kumuRun",
+        "title": "プロジェクトを実行する(kumu 実行)",
+        "category": "する",
+        "icon": "$(run-all)"
+      },
+      {
+        "command": "suru.kumuBuild",
+        "title": "プロジェクトを組む(kumu 作る)",
+        "category": "する",
+        "icon": "$(tools)"
+      },
+      {
+        "command": "suru.kumuTest",
+        "title": "プロジェクトを試験する(kumu 試験)",
+        "category": "する",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "suru.kumuCheck",
+        "title": "プロジェクトを点検する(kumu 点検)",
+        "category": "する",
+        "icon": "$(checklist)"
+      },
+      {
+        "command": "suru.kumuFetch",
+        "title": "依存を取ってくる(kumu 取得)",
+        "category": "する",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "suru.kumuTestOne",
+        "title": "この試験を動かす(kumu 試験)",
+        "category": "する"
+      },
+      {
         "command": "suru.restartServer",
         "title": "言語サーバーを再起動する",
         "category": "する"
@@ -104,6 +139,30 @@
         {
           "command": "suru.restartServer",
           "when": "editorLangId == suru"
+        },
+        {
+          "command": "suru.kumuRun",
+          "when": "editorLangId == suru"
+        },
+        {
+          "command": "suru.kumuBuild",
+          "when": "editorLangId == suru"
+        },
+        {
+          "command": "suru.kumuTest",
+          "when": "editorLangId == suru"
+        },
+        {
+          "command": "suru.kumuCheck",
+          "when": "editorLangId == suru"
+        },
+        {
+          "command": "suru.kumuFetch",
+          "when": "editorLangId == suru"
+        },
+        {
+          "command": "suru.kumuTestOne",
+          "when": "false"
         }
       ]
     },
@@ -136,6 +195,11 @@
           "type": "string",
           "default": "",
           "markdownDescription": "言語サーバー `suru-ls` の場所。空のときは、拡張に同梱のもの、PATH の `suru-ls`、`~/go/bin/suru-ls` の順に探します。`off` にすると使いません(保存したときだけ `suru --検査` で調べます)。"
+        },
+        "suru.kumu": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "プロジェクト管理の `kumu` の場所。空のときは PATH、`~/go/bin/kumu` の順に探します。"
         }
       }
     }
