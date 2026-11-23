@@ -228,6 +228,10 @@ def build(source: str, d: pathlib.Path, kind: str) -> list[str]:
     d.mkdir(exist_ok=True)
     src = d / "prog.suru"
     src.write_text(source, encoding="utf-8")
+    if "「HTTP」" in source:
+        sys.path.insert(0, str(ROOT / "tests"))
+        from net_helper import put_http
+        put_http(d)
     if kind == "interp":
         return [sys.executable, str(ROOT / "suru.py"), str(src)]
     subprocess.run([sys.executable, str(ROOT / "suru_compile.py"), str(src), "-o", str(d / "prog")], check=True)

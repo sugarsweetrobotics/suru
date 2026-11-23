@@ -204,6 +204,23 @@ def test_開いていない接続のエラーはインタプリタと同じ文(t
     assert r.returncode == 1 and "「5」は開いている待受口か接続ではありません" in r.stderr
 
 
+def test_バイト列を送るのはインタプリタと同じ(tmp_path):
+    from net_helper import BYTES_EXPECTED, BYTES_SERVER, free_port, read_all
+
+    port = free_port()
+    ir = suru_compile.compile_source(BYTES_SERVER.replace("PORT", str(port)), ".")
+    (tmp_path / "srv.ll").write_text(ir, encoding="utf-8")
+    suru_compile.build(str(tmp_path / "srv.ll"), str(tmp_path / "srv"))
+    p = subprocess.Popen([str(tmp_path / "srv")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        assert p.stdout.readline() == "待受中\n"
+        assert read_all(port) == BYTES_EXPECTED
+        assert p.wait(10) == 0
+        assert p.stdout.read() == "256\n"
+    finally:
+        p.kill()
+
+
 def test_通信のサーバーをコンパイルして答えてもらう(tmp_path):
     from net_helper import REQUESTS, SERVER, ask, expected, free_port
 
@@ -238,7 +255,7 @@ def test_HTTPのサーバーをコンパイルして答えてもらう(which, tm
     import net_helper as N
 
     port = N.free_port()
-    ir = suru_compile.compile_source(getattr(N, which).replace("PORT", str(port)), ".")
+    ir = suru_compile.compile_source(getattr(N, which).replace("PORT", str(port)), str(N.HTTP_DIR))
     (tmp_path / "srv.ll").write_text(ir, encoding="utf-8")
     suru_compile.build(str(tmp_path / "srv.ll"), str(tmp_path / "srv"))
     p = subprocess.Popen([str(tmp_path / "srv")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -274,7 +291,7 @@ def test_HTTPのサーバーは失敗しても何も送らない相手がいて�
     import net_helper as N
 
     port = N.free_port()
-    ir = suru_compile.compile_source(N.HTTP_SERVER.replace("PORT", str(port)), ".")
+    ir = suru_compile.compile_source(N.HTTP_SERVER.replace("PORT", str(port)), str(N.HTTP_DIR))
     (tmp_path / "srv.ll").write_text(ir, encoding="utf-8")
     suru_compile.build(str(tmp_path / "srv.ll"), str(tmp_path / "srv"))
     p = subprocess.Popen([str(tmp_path / "srv")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -298,7 +315,7 @@ def test_HTTPのサーバーは1万件続けて答える(tmp_path):
     import net_helper as N
 
     port = N.free_port()
-    ir = suru_compile.compile_source(N.HTTP_SERVER.replace("PORT", str(port)), ".")
+    ir = suru_compile.compile_source(N.HTTP_SERVER.replace("PORT", str(port)), str(N.HTTP_DIR))
     (tmp_path / "srv.ll").write_text(ir, encoding="utf-8")
     suru_compile.build(str(tmp_path / "srv.ll"), str(tmp_path / "srv"))
     p = subprocess.Popen([str(tmp_path / "srv")], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)

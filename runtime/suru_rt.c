@@ -69,7 +69,7 @@ typedef struct Fn {
     struct Trait *trait;    /* FK_TRAIT */
     int32_t wo, wo_list;
 } Fn;
-enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
+enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_SENDB, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
        A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_FIFO_NEW, A_CH_FIFO_OPEN, A_CH_FIFO_DEL, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
        A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
@@ -1569,7 +1569,7 @@ static V act_run(Act *a) {
         if (n > 0 && line[n - 1] == '\r') n--;
         return mk_str(line, n);
     }
-    case A_LISTEN: case A_ACCEPT: case A_CONNECT: case A_RECVLINE: case A_RECV: case A_SEND: case A_CLOSE:
+    case A_LISTEN: case A_ACCEPT: case A_CONNECT: case A_RECVLINE: case A_RECV: case A_SEND: case A_SENDB: case A_CLOSE:
         return net_run(a);
     case A_TRY: {
         TryFrame f;
@@ -2327,6 +2327,7 @@ static Sock sock_get2(V v, const char *what, int want_in, int32_t pos) {
 static Sock sock_get(V v, const char *what, int32_t pos) { return sock_get2(v, what, 0, pos); }
 __attribute__((noreturn)) static void net_fail(Act *a) { fail(a->pos, "「%s」で通信に失敗しました(%s)", a->name, strerror(errno)); }
 
+static Bytes *need_bytes(V v, const char *what, int32_t pos);
 static V net_run(Act *a) {
     int32_t pos = a->pos;
     switch (a->kind) {
@@ -2433,13 +2434,21 @@ static V net_run(Act *a) {
         if (bad) { free(b.s); net_fail(a); }
         return buf_str(&b);
     }
-    case A_SEND: {
-        Str *str = need_str(a->a, "「送信する」の「を」", pos);
+    case A_SEND: case A_SENDB: {
+        const char *data;
+        int64_t n;
+        if (a->kind == A_SEND) {
+            Str *str = need_str(a->a, "「送信する」の「を」", pos);
+            data = str->s, n = str->n;
+        } else {
+            Bytes *b = need_bytes(a->a, "「バイト列送信する」の「を」", pos);
+            data = (const char *)b->d, n = b->n;
+        }
         int fd = sock_get(a->b, "接続", pos).fd;
         int64_t off = 0;
-        world_release(); /* str は手放しているスレッドのスタックから見えるので回収されない */
-        while (off < str->n) {
-            ssize_t k = send(fd, str->s + off, (size_t)(str->n - off), 0);
+        world_release(); /* 送るものは a->a から見えるので回収されない */
+        while (off < n) {
+            ssize_t k = send(fd, data + off, (size_t)(n - off), 0);
             if (k < 0 && errno == EINTR) continue;
             if (k < 0) break;
             off += k;
@@ -2447,8 +2456,8 @@ static V net_run(Act *a) {
         int e = errno;
         world_acquire();
         errno = e;
-        if (off < str->n) net_fail(a);
-        return mk_int(str->n, pos);
+        if (off < n) net_fail(a);
+        return mk_int(n, pos);
     }
     case A_CLOSE: {
         pthread_mutex_lock(&sock_mu);
@@ -2487,6 +2496,7 @@ BI(n_connect) { return mk_net(A_CONNECT, "接続する", a[0], a[1], pos); } /* 
 BI(n_recvline) { return mk_net(A_RECVLINE, "行受信する", a[0], 0, pos); }
 BI(n_recv) { return mk_net(A_RECV, "受信する", a[0], a[1], pos); }  /* から, を */
 BI(n_send) { return mk_net(A_SEND, "送信する", a[0], a[1], pos); }  /* を, へ */
+BI(n_sendb) { return mk_net(A_SENDB, "バイト列送信する", a[0], a[1], pos); }  /* を, へ */
 BI(n_close) { return mk_net(A_CLOSE, "切断する", a[0], 0, pos); }
 
 static const int32_t P1_DE[] = {P_DE}, P2_DE_WO[] = {P_DE, P_WO}, P1_WO[] = {P_WO}, P2_WO_NI[] = {P_WO, P_NI}, P2_KARA_WO[] = {P_KARA, P_WO},
@@ -3590,6 +3600,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"行受信する", 1, P1_KARA, NULL, n_recvline},
     {"受信する", 2, P2_KARA_WO, NULL, n_recv},
     {"送信する", 2, P2_WO_HE, NULL, n_send},
+    {"バイト列送信する", 2, P2_WO_HE, NULL, n_sendb},
     {"切断する", 1, P1_WO, NULL, n_close},
 };
 

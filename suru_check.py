@@ -2017,6 +2017,7 @@ _simple("接続する", [("に", STR), ("で", NUM)], act(NUM))
 _simple("行受信する", [("から", NUM)], act(STR))
 _simple("受信する", [("から", NUM), (WO, NUM)], act(STR))
 _simple("送信する", [(WO, STR), ("へ", NUM)], act(NUM))
+_simple("バイト列送信する", [(WO, BYTES), ("へ", NUM)], act(NUM))
 _simple("切断する", [(WO, NUM)], act(NUM))
 
 # スレッド(「スレッド」の組み込み)。並行開始した結果は、合流する(待って結果を返す)動作
