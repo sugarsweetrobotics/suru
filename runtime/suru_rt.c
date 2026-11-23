@@ -131,78 +131,119 @@ static uint8_t gc_class_of[GC_SMALL_MAX / 16 + 1];
 static size_t gc_since;            /* 前の GC からの確保量 */
 static size_t gc_min = (size_t)8 << 20; /* これだけ確保するまでは GC しない(SURU_GC_MIN で KB 単位に変えられる) */
 static size_t gc_next = (size_t)8 << 20;
+static size_t gc_batch = (size_t)64 << 10; /* スレッドごとの確保量をこれだけためてから gc_since に足す */
 static int gc_log;
 static size_t gc_live;
 static int gc_on;                  /* プログラムが始まったら 1(それまでは GC しない) */
 static int64_t gc_count;
 
 /* --- スレッド ---
- * する のコードを動かせるのは「実行権」を持つ1つのスレッドだけ(全体ロック)。待つところ(外部の関数・入力・通信)では
- * 実行権を手放し、そのときのレジスタとスタックの位置を残しておく。GC は実行権を持つスレッドが行い、手放している
- * スレッドのスタックも調べる。スレッドが1つだけのうちは手放さない(何もしない)。 */
+ * スレッドは同時に動く(本当の並列)。各スレッドは「動いている」か「外にいる」(外部の関数・入力・通信・通路の待ち)。
+ * GC は止める合図(rt_gc_stop)を立て、動いているスレッドがみな安全点(関数の入口と確保)で止まるのを待ってから行う。
+ * 止まるときや外に出るときは、そのときのレジスタとスタックの位置を残しておき、GC はそこも調べる。
+ * 外にいるスレッドは、する の値を作ったり runtime の表を触ったりしない(戻るときに GC が終わるのを待つ)。
+ * スレッドが1つだけのうちは何もしない。 */
 typedef struct SThread {
     char *top;                    /* スタックの底(一番大きい番地)。ここまで調べる */
-    char *lo;                     /* 手放したときのスタックの位置(NULL ならまだスタックに値がない) */
-    jmp_buf regs;                 /* 手放したときのレジスタ */
+    char *lo;                     /* 止まった・外に出たときのスタックの位置(NULL ならまだスタックに値がない) */
+    jmp_buf regs;                 /* 止まった・外に出たときのレジスタ */
     uintptr_t start;              /* 始める動作(終わるまで GC から守る) */
     uintptr_t cell;               /* 結果を書くところ(ThreadCell) */
     int (*wready)(void *);        /* 通路や合流で待っている間: 待つのを終えてよいか(NULL なら待っていない) */
     void *warg;
+    GcBlk *avail[2][GC_NCLASS];   /* このスレッドだけが確保に使うブロック([atomic][大きさ]) */
+    size_t since;                 /* まだ gc_since に足していない確保量 */
     struct SThread *next;
 } SThread;
 static SThread main_thread;
-static SThread *threads = &main_thread; /* 生きているスレッド(実行権を持つスレッドだけが変える) */
+static SThread *threads = &main_thread; /* 生きているスレッド(world_mu を持って変える) */
 static _Thread_local SThread *self_thread = &main_thread;
 static int world_multi;                 /* 2つ目のスレッドを作ったら 1 */
+/* world_mu: スレッドの状態・表、通路・ロック・枠の中身を守る。GC をするスレッドは、終わるまでこれを持つ */
 static pthread_mutex_t world_mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t world_cv = PTHREAD_COND_INITIALIZER;
-/* 番号札: 待つ順に札を取り、world_serving の札のスレッドが実行権を持つ(取った順に回るので、同じスレッドが取り続けない) */
-static uint64_t world_next = 1, world_serving = 0;
+static pthread_cond_t world_stop_cv = PTHREAD_COND_INITIALIZER;   /* 動いているスレッドが減った(GC が待つ) */
+static pthread_cond_t world_resume_cv = PTHREAD_COND_INITIALIZER; /* GC が終わった */
+static pthread_cond_t world_change_cv = PTHREAD_COND_INITIALIZER; /* 通路や合流の状態が変わった */
+static pthread_mutex_t alloc_mu = PTHREAD_MUTEX_INITIALIZER;      /* 領域の表と、共有の空きブロック */
+int32_t rt_gc_stop;                     /* GC が止まってほしいとき 1(IR の安全点が読む) */
+static int world_running = 1;           /* 動いているスレッドの数(world_mu) */
 
-/* 実行権を手放す。このあと戻るまで、する の値を作ったり runtime の表を触ったりしない */
-__attribute__((noinline)) static void world_release(void) {
-    if (!world_multi) return;
-    SThread *t = self_thread;
+/* いまのレジスタとスタックの位置を残す(このあと GC がこのスレッドのスタックを調べてよい) */
+__attribute__((noinline)) static void world_save(SThread *t) {
     setjmp(t->regs); /* レジスタにだけある値も GC から見えるように */
     volatile char here = 0;
     t->lo = (char *)&here;
+}
+
+/* world_mu を持って呼ぶ。動いているのをやめ、GC が終わるまで待ち、また動く */
+static void world_park_locked(void) {
+    world_running--;
+    pthread_cond_signal(&world_stop_cv);
+    while (__atomic_load_n(&rt_gc_stop, __ATOMIC_RELAXED)) pthread_cond_wait(&world_resume_cv, &world_mu);
+    world_running++;
+}
+
+/* 安全点: GC が止まってほしいなら止まる(IR が関数の入口で rt_gc_stop を見て呼ぶ) */
+void rt_safepoint(void) {
+    if (!world_multi) return;
+    world_save(self_thread);
     pthread_mutex_lock(&world_mu);
-    world_serving++;
-    pthread_cond_broadcast(&world_cv);
+    world_park_locked();
     pthread_mutex_unlock(&world_mu);
 }
 
-/* 実行権を取り戻す(順番が来るまで待つ) */
+/* 外に出る。このあと戻るまで、する の値を作ったり runtime の表を触ったりしない */
+__attribute__((noinline)) static void world_release(void) {
+    if (!world_multi) return;
+    world_save(self_thread);
+    pthread_mutex_lock(&world_mu);
+    world_running--;
+    pthread_cond_signal(&world_stop_cv);
+    pthread_mutex_unlock(&world_mu);
+}
+
+/* 外から戻る(GC の途中なら終わるまで待つ) */
 static void world_acquire(void) {
     if (!world_multi) return;
     pthread_mutex_lock(&world_mu);
-    uint64_t me = world_next++;
-    while (world_serving != me) pthread_cond_wait(&world_cv, &world_mu);
+    while (__atomic_load_n(&rt_gc_stop, __ATOMIC_RELAXED)) pthread_cond_wait(&world_resume_cv, &world_mu);
+    world_running++;
     pthread_mutex_unlock(&world_mu);
 }
 
-/* 待っているスレッドがあれば、実行権を譲る(確保のたびに数えて、ときどき呼ぶ) */
-static void world_yield(void) {
+static void world_lock(void) {
+    if (world_multi) pthread_mutex_lock(&world_mu);
+}
+static void world_unlock(void) {
+    if (world_multi) pthread_mutex_unlock(&world_mu);
+}
+
+/* fork: 子には呼んだスレッドだけが残る。GC や確保の途中で fork しないよう、ロックを取ってから fork し、
+ * 子ではスレッドの表を自分だけにして、スレッドが1つの状態に戻す(fork は外部の関数なので、呼ぶスレッドは外にいる) */
+static pthread_mutex_t sock_mu = PTHREAD_MUTEX_INITIALIZER; /* 通信の表(socks) */
+static void world_atfork_prepare(void) {
     if (!world_multi) return;
     pthread_mutex_lock(&world_mu);
-    int waiting = world_next - world_serving > 1;
-    pthread_mutex_unlock(&world_mu);
-    if (!waiting) return;
-    world_release();
-    world_acquire();
+    pthread_mutex_lock(&alloc_mu);
+    pthread_mutex_lock(&sock_mu);
 }
-
-/* fork: 子には呼んだスレッドだけが残る。GC の途中で fork しないよう実行権を取ってから fork し、
- * 子ではスレッドの表を自分だけにして、スレッドが1つの状態に戻す */
-static void world_atfork_prepare(void) { world_acquire(); }
-static void world_atfork_parent(void) { world_release(); }
+static void world_atfork_parent(void) {
+    if (!world_multi) return;
+    pthread_mutex_unlock(&sock_mu);
+    pthread_mutex_unlock(&alloc_mu);
+    pthread_mutex_unlock(&world_mu);
+}
 static void world_atfork_child(void) {
     if (!world_multi) return;
     pthread_mutex_init(&world_mu, NULL);
-    pthread_cond_init(&world_cv, NULL);
-    world_serving = 0;
-    world_next = 1;
-    world_multi = 0; /* 戻ったところの world_acquire は何もしない(実行権はこのスレッドにある) */
+    pthread_mutex_init(&alloc_mu, NULL);
+    pthread_mutex_init(&sock_mu, NULL);
+    pthread_cond_init(&world_stop_cv, NULL);
+    pthread_cond_init(&world_resume_cv, NULL);
+    pthread_cond_init(&world_change_cv, NULL);
+    rt_gc_stop = 0;
+    world_multi = 0; /* 戻ったところの world_acquire は何もしない */
+    world_running = 1;
     threads = self_thread;
     self_thread->next = NULL;
     self_thread->lo = NULL;
@@ -280,7 +321,8 @@ static GcBlk *gc_find(uintptr_t p) {
     return p < (uintptr_t)b->end ? b : NULL;
 }
 
-static void gc_new_block(int atomic, int k) {
+/* 新しいブロック(どのつながりにも入れない。alloc_mu を持たずに呼び、表に足すところだけ持つ) */
+static GcBlk *gc_new_block(int atomic, int k) {
     GcBlk *b = malloc(sizeof(GcBlk));
     char *mem = aligned_alloc(GC_BLOCK, GC_BLOCK); /* 番地を GC_BLOCK にそろえる(gc_find が下位を落として引く) */
     if (!b || !mem) gc_oom();
@@ -292,10 +334,12 @@ static void gc_new_block(int atomic, int k) {
     b->atomic = atomic;
     b->mark = calloc(b->nobj, 1);
     if (!b->mark) gc_oom();
-    gc_add_region(b);
     b->cursor = 0;
-    b->next = gc_avail[atomic][k];
-    gc_avail[atomic][k] = b;
+    b->next = NULL;
+    if (world_multi) pthread_mutex_lock(&alloc_mu);
+    gc_add_region(b);
+    if (world_multi) pthread_mutex_unlock(&alloc_mu);
+    return b;
 }
 
 /* --- 印を付ける --- */
@@ -320,7 +364,7 @@ static void gc_mark(uintptr_t p) {
 }
 
 /* スタックやレジスタ: C の局所変数が文字列の途中(奇数の番地)を指すこともあるので、すべての語を調べる */
-static void gc_mark_range(const void *lo, const void *hi) {
+__attribute__((no_sanitize("thread"))) static void gc_mark_range(const void *lo, const void *hi) {
     const char *p = (const char *)(((uintptr_t)lo + 7) & ~(uintptr_t)7);
     for (; p + sizeof(uintptr_t) <= (const char *)hi; p += sizeof(uintptr_t)) {
         uintptr_t w = *(const uintptr_t *)p;
@@ -352,7 +396,7 @@ __attribute__((noinline)) static void gc_mark_stack(void) {
     volatile char here = 0;
     gc_mark_range((const void *)&regs, (const void *)(&regs + 1));
     gc_mark_range((const void *)&here, self_thread->top);
-    /* 実行権を手放しているほかのスレッド: 手放したときのレジスタとスタック */
+    /* ほかのスレッド(みな止まっているか外にいる): 止まった・外に出たときのレジスタとスタック */
     for (SThread *t = threads; t; t = t->next) {
         if (t == self_thread) continue;
         if (t->start) gc_mark(t->start);
@@ -371,8 +415,12 @@ static void gc_collect(void) {
     gc_drain();
     gc_mark_stack();
     gc_drain();
-    /* 片付け: 印のないものを空きに戻す */
+    /* 片付け: 印のないものを空きに戻す。スレッドが持っていたブロックも共有のつながりに戻す */
     memset(gc_avail, 0, sizeof gc_avail);
+    for (SThread *t = threads; t; t = t->next) {
+        memset(t->avail, 0, sizeof t->avail);
+        t->since = 0;
+    }
     gc_live = 0;
     size_t keep = 0;
     for (size_t r = 0; r < gc_nregs; r++) {
@@ -425,14 +473,36 @@ static void gc_init(void) {
     }
 }
 
+/* GC をする。ほかのスレッドがいれば、みな止まるのを待ってから(ほかのスレッドが始めていたら、止まって終わるのを待つ) */
+static void gc_request(void) {
+    if (!world_multi) { gc_collect(); return; }
+    world_save(self_thread);
+    pthread_mutex_lock(&world_mu);
+    if (__atomic_load_n(&rt_gc_stop, __ATOMIC_RELAXED)) world_park_locked();
+    else if (__atomic_load_n(&gc_since, __ATOMIC_RELAXED) >= gc_next) {
+        __atomic_store_n(&rt_gc_stop, 1, __ATOMIC_RELAXED);
+        while (world_running > 1) pthread_cond_wait(&world_stop_cv, &world_mu);
+        gc_collect();
+        __atomic_store_n(&rt_gc_stop, 0, __ATOMIC_RELAXED);
+        pthread_cond_broadcast(&world_resume_cv);
+    }
+    pthread_mutex_unlock(&world_mu);
+}
+
+/* 確保した量を数える(スレッドごとにためて、ときどき足す) */
+static void gc_count_alloc(SThread *t, size_t n) {
+    t->since += n;
+    if (t->since >= gc_batch) {
+        __atomic_fetch_add(&gc_since, t->since, __ATOMIC_RELAXED);
+        t->since = 0;
+    }
+}
+
 static void *gc_alloc(int64_t size, int atomic) {
     if (size < 16) size = 16;
-    static _Thread_local unsigned yield_tick;
-    if (world_multi && ++yield_tick >= 4096) { /* ほかのスレッドにも順番を回す */
-        yield_tick = 0;
-        world_yield();
-    }
-    if (gc_on && gc_since >= gc_next) gc_collect();
+    if (__atomic_load_n(&rt_gc_stop, __ATOMIC_RELAXED)) rt_safepoint();
+    if (gc_on && __atomic_load_n(&gc_since, __ATOMIC_RELAXED) >= gc_next) gc_request();
+    SThread *t = self_thread;
     if (size > GC_SMALL_MAX) {
         GcBlk *b = malloc(sizeof(GcBlk));
         char *mem = calloc(1, (size_t)size);
@@ -446,26 +516,35 @@ static void *gc_alloc(int64_t size, int atomic) {
         b->mark = calloc(1, 1);
         if (!b->mark) gc_oom();
         b->mark[0] = GC_USED;
+        if (world_multi) pthread_mutex_lock(&alloc_mu);
         gc_add_region(b);
-        gc_since += (size_t)size;
+        if (world_multi) pthread_mutex_unlock(&alloc_mu);
+        gc_count_alloc(t, (size_t)size);
         return mem;
     }
     int k = gc_class_of[(size + 15) / 16];
     GcBlk *b;
     uint8_t *f;
     for (;;) {
-        b = gc_avail[atomic][k];
-        if (!b) { gc_new_block(atomic, k); continue; }
+        b = t->avail[atomic][k];
+        if (!b) { /* 共有のつながりから1つもらう(なければ新しく作る) */
+            if (world_multi) pthread_mutex_lock(&alloc_mu);
+            b = gc_avail[atomic][k];
+            if (b) gc_avail[atomic][k] = b->next;
+            if (world_multi) pthread_mutex_unlock(&alloc_mu);
+            if (!b) b = gc_new_block(atomic, k);
+            t->avail[atomic][k] = b;
+        }
         f = memchr(b->mark + b->cursor, GC_FREE, b->nobj - b->cursor);
         if (f) break;
-        gc_avail[atomic][k] = b->next; /* このブロックはもう空きがない */
+        t->avail[atomic][k] = NULL; /* このブロックはもう空きがない(次の GC で空きがあればつながりに戻る) */
     }
     size_t i = (size_t)(f - b->mark);
     b->cursor = i + 1;
     *f = GC_USED;
     void *o = b->start + i * b->osz;
     memset(o, 0, GC_SIZES[k]);
-    gc_since += GC_SIZES[k];
+    gc_count_alloc(t, GC_SIZES[k]);
     return o;
 }
 
@@ -734,9 +813,12 @@ V rt_lazy(Code code, void *up) {
 V rt_force(V v) {
     if (v == 0 || IS_INT(v) || OBJ(v)->tag != T_LAZY) return v;
     Lazy *z = AS(Lazy, v);
-    if (z->state == 0) {
-        z->v = z->code(z->up, NULL, 0);
-        z->state = 1;
+    /* ほかのスレッドが同時に計算することもある(純粋なので同じ値になる) */
+    if (__atomic_load_n(&z->state, __ATOMIC_ACQUIRE) == 0) {
+        V x = z->code(z->up, NULL, 0);
+        __atomic_store_n(&z->v, x, __ATOMIC_RELAXED);
+        __atomic_store_n(&z->state, 1, __ATOMIC_RELEASE);
+        return x;
     }
     return z->v;
 }
@@ -1461,8 +1543,10 @@ static V act_run(Act *a) {
     switch (a->kind) {
     case A_SHOW: {
         char *s = (char *)show(a->a);
+        flockfile(stdout); /* ほかのスレッドの表示と混ざらないように */
         fputs(s, stdout);
         fputc('\n', stdout);
+        funlockfile(stdout);
         free(s);
         return a->a;
     }
@@ -2077,6 +2161,7 @@ static Sock *socks;
 static int64_t nsocks, capsocks, lastsock;
 
 static int64_t sock_add(int fd) {
+    pthread_mutex_lock(&sock_mu);
     if (nsocks == capsocks) {
         capsocks = capsocks ? capsocks * 2 : 16;
         socks = realloc(socks, capsocks * sizeof(Sock));
@@ -2086,15 +2171,35 @@ static int64_t sock_add(int fd) {
     socks[nsocks].fd = fd;
     socks[nsocks].in = NULL;
     nsocks++;
-    return lastsock;
+    int64_t num = lastsock;
+    pthread_mutex_unlock(&sock_mu);
+    return num;
 }
-static Sock *sock_get(V v, const char *what, int32_t pos) {
+/* 表の中の場所(sock_mu を持って呼ぶ。なければ -1) */
+static int64_t sock_find(V v) {
     int64_t i = IS_INT(v) ? INT_VAL(v) : 0;
     if (TAG(v) != T_BOOL)
         for (int64_t k = nsocks; k-- > 0;)
-            if (socks[k].num == i) return &socks[k];
-    fail(pos, "「%s」は開いている%sではありません", plain(v).s, what);
+            if (socks[k].num == i) return k;
+    return -1;
 }
+/* 番号の待受口か接続(写しを返す。ほかのスレッドが表を広げても使える)。want_in なら読むための FILE も作る */
+static Sock sock_get2(V v, const char *what, int want_in, int32_t pos) {
+    pthread_mutex_lock(&sock_mu);
+    int64_t k = sock_find(v);
+    if (k < 0) {
+        pthread_mutex_unlock(&sock_mu);
+        fail(pos, "「%s」は開いている%sではありません", plain(v).s, what);
+    }
+    if (want_in && !socks[k].in) {
+        int fd2 = dup(socks[k].fd);
+        if (fd2 >= 0) socks[k].in = fdopen(fd2, "rb");
+    }
+    Sock s = socks[k];
+    pthread_mutex_unlock(&sock_mu);
+    return s;
+}
+static Sock sock_get(V v, const char *what, int32_t pos) { return sock_get2(v, what, 0, pos); }
 __attribute__((noreturn)) static void net_fail(Act *a) { fail(a->pos, "「%s」で通信に失敗しました(%s)", a->name, strerror(errno)); }
 
 static V net_run(Act *a) {
@@ -2117,7 +2222,7 @@ static V net_run(Act *a) {
         return mk_int(sock_add(fd), pos);
     }
     case A_ACCEPT: {
-        int lfd = sock_get(a->a, "待受口", pos)->fd;
+        int lfd = sock_get(a->a, "待受口", pos).fd;
         fflush(stdout); /* 待つ前に、それまでの表示を出しておく */
         int fd;
         world_release(); /* 待つ間は、表(socks)に触らない */
@@ -2132,7 +2237,7 @@ static V net_run(Act *a) {
         return mk_int(sock_add(fd), pos);
     }
     case A_RECVLINE: case A_RECV: {
-        Sock *s = sock_get(a->a, "接続", pos);
+        Sock s = sock_get2(a->a, "接続", 1, pos);
         fflush(stdout);
         int64_t want = 0;
         if (a->kind == A_RECV) {
@@ -2140,11 +2245,8 @@ static V net_run(Act *a) {
             want = IS_INT(v) ? INT_VAL(v) : -1;
             if (want < 0) fail(pos, "「%s」は受信するバイト数ではありません", plain(v).s);
         }
-        if (!s->in) {
-            int fd2 = dup(s->fd);
-            if (fd2 < 0 || !(s->in = fdopen(fd2, "rb"))) net_fail(a);
-        }
-        FILE *in = s->in; /* 待つ間は、表(socks)に触らない */
+        if (!s.in) net_fail(a);
+        FILE *in = s.in; /* 待つ間は、表(socks)に触らない */
         Buf b = {0};
         world_release();
         if (a->kind == A_RECVLINE) {
@@ -2171,7 +2273,7 @@ static V net_run(Act *a) {
     }
     case A_SEND: {
         Str *str = need_str(a->a, "「送信する」の「を」", pos);
-        int fd = sock_get(a->b, "接続", pos)->fd;
+        int fd = sock_get(a->b, "接続", pos).fd;
         int64_t off = 0;
         world_release(); /* str は手放しているスレッドのスタックから見えるので回収されない */
         while (off < str->n) {
@@ -2187,10 +2289,17 @@ static V net_run(Act *a) {
         return mk_int(str->n, pos);
     }
     case A_CLOSE: {
-        Sock *s = sock_get(a->a, "待受口か接続", pos);
-        if (s->in) fclose(s->in);
-        close(s->fd);
-        *s = socks[--nsocks];
+        pthread_mutex_lock(&sock_mu);
+        int64_t k = sock_find(a->a);
+        if (k < 0) {
+            pthread_mutex_unlock(&sock_mu);
+            fail(pos, "「%s」は開いている待受口か接続ではありません", plain(a->a).s);
+        }
+        Sock s = socks[k];
+        socks[k] = socks[--nsocks];
+        pthread_mutex_unlock(&sock_mu);
+        if (s.in) fclose(s.in);
+        close(s.fd);
         return a->a;
     }
     }
@@ -2529,33 +2638,32 @@ static V mem_run(Act *a) {
 
 /* スレッドの結果を書くところ(GC の領域。合流する動作と、動いているスレッドの両方から見える) */
 typedef struct { int64_t state; V result; char *msg; int32_t pos; } ThreadCell; /* state: 0 動いている、1 終わった、2 エラー */
-static pthread_cond_t world_change_cv = PTHREAD_COND_INITIALIZER;
-
-/* 通路や合流の状態を変えたら呼ぶ(待っているスレッドを起こす)。実行権を持って呼ぶ */
+/* 通路や合流の状態を変えたら、world_mu を持って呼ぶ(待っているスレッドを起こす) */
 static void world_changed(void) {
-    if (!world_multi) return;
-    pthread_mutex_lock(&world_mu);
-    pthread_cond_broadcast(&world_change_cv);
-    pthread_mutex_unlock(&world_mu);
+    if (world_multi) pthread_cond_broadcast(&world_change_cv);
 }
 
-/* ready(arg) が真になるまで、実行権を手放して待つ。実行権を持って呼び、持って戻る。
+/* world_mu を持って呼び、ready(arg) が真になるまで(外に出て)待つ。持ったまま戻るので、続けて状態を変えられる。
  * ほかのスレッドがみな同じように待っていて、どれも進めないなら、ずっと終わらないのでエラーにする
- * (外部の関数や入力で待っているスレッドは、そのうち進むかもしれないので数えない) */
+ * (動いているスレッドや、外部の関数や入力で待っているスレッドは、そのうち進むかもしれないので数えない) */
 static void world_wait(int (*ready)(void *), void *arg, int32_t pos) {
     while (!ready(arg)) {
         int stuck = 1;
         for (SThread *t = threads; t && stuck; t = t->next)
             if (t != self_thread && !(t->wready && !t->wready(t->warg))) stuck = 0;
-        if (stuck) fail(pos, "すべてのスレッドが待っていて、先に進めません(通路や合流の待ち)");
+        if (stuck) {
+            world_unlock();
+            fail(pos, "すべてのスレッドが待っていて、先に進めません(通路や合流の待ち)");
+        }
         SThread *me = self_thread;
         me->warg = arg;
         me->wready = ready;
-        world_release();
-        pthread_mutex_lock(&world_mu);
+        world_save(me);
+        world_running--;
+        pthread_cond_signal(&world_stop_cv);
         while (!ready(arg)) pthread_cond_wait(&world_change_cv, &world_mu);
-        pthread_mutex_unlock(&world_mu);
-        world_acquire();
+        while (__atomic_load_n(&rt_gc_stop, __ATOMIC_RELAXED)) pthread_cond_wait(&world_resume_cv, &world_mu);
+        world_running++;
         me->wready = NULL;
     }
 }
@@ -2572,13 +2680,26 @@ static V thread_map(V v) {
 
 typedef struct { SThread *t; V (*run)(V); int quiet; } ThreadStart;
 
-static void thread_finish(SThread *t, ThreadCell *c) {
-    /* 表から外してから知らせる(実行権を持っている) */
+/* 終わったスレッド: 表から外して知らせ、使っていたブロックを共有のつながりに戻す */
+static void thread_finish(SThread *t) {
+    pthread_mutex_lock(&world_mu);
     SThread **pp = &threads;
     while (*pp != t) pp = &(*pp)->next;
     *pp = t->next;
+    __atomic_fetch_add(&gc_since, t->since, __ATOMIC_RELAXED);
+    pthread_mutex_lock(&alloc_mu);
+    for (int a = 0; a < 2; a++)
+        for (int k = 0; k < GC_NCLASS; k++) {
+            GcBlk *b = t->avail[a][k];
+            if (!b) continue;
+            b->next = gc_avail[a][k];
+            gc_avail[a][k] = b;
+        }
+    pthread_mutex_unlock(&alloc_mu);
+    world_running--;
+    pthread_cond_signal(&world_stop_cv);
     world_changed();
-    (void)c;
+    pthread_mutex_unlock(&world_mu);
 }
 
 static void *thread_main(void *arg) {
@@ -2595,21 +2716,24 @@ static void *thread_main(void *arg) {
     f.prev = NULL;
     f.quiet = st.quiet;
     try_top = &f;
+    int64_t state;
     if (setjmp(f.jb) == 0) {
         V r = st.run((V)t->start);
         try_top = NULL;
         c->result = r;
-        c->state = 1;
+        state = 1;
     } else {
         if (st.quiet) {
             c->pos = fail_last_pos;
             c->msg = fail_last_msg;
             fail_last_msg = NULL;
         }
-        c->state = 2;
+        state = 2;
     }
-    thread_finish(t, c);
-    world_release();
+    pthread_mutex_lock(&world_mu);
+    __atomic_store_n(&c->state, state, __ATOMIC_RELEASE);
+    pthread_mutex_unlock(&world_mu);
+    thread_finish(t);
     free(t);
     return NULL;
 }
@@ -2631,18 +2755,23 @@ static ThreadCell *thread_start(V (*run)(V), V arg, int quiet, int32_t pos) {
     pthread_attr_setstacksize(&attr, THREAD_STACK);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     if (!world_multi) {
-        /* 初めてのスレッド: このスレッドが実行権を持っている状態(札 0)から番号札を使い始める */
-        world_serving = 0;
-        world_next = 1;
+        /* 初めてのスレッド: ここからロックを使う(このスレッドが動いている) */
+        world_running = 1;
         world_multi = 1;
     }
+    pthread_mutex_lock(&world_mu);
     t->next = threads;
     threads = t;
+    pthread_mutex_unlock(&world_mu);
     pthread_t th;
     int e = pthread_create(&th, &attr, thread_main, st);
     pthread_attr_destroy(&attr);
     if (e != 0) {
-        threads = t->next;
+        pthread_mutex_lock(&world_mu);
+        SThread **pp = &threads;
+        while (*pp != t) pp = &(*pp)->next;
+        *pp = t->next;
+        pthread_mutex_unlock(&world_mu);
         free(t);
         free(st);
         fail(pos, "スレッドを始められませんでした(%s)", strerror(e));
@@ -2653,7 +2782,9 @@ static ThreadCell *thread_start(V (*run)(V), V arg, int quiet, int32_t pos) {
 /* 終わるまで待って結果を返す(エラーで終わっていたら同じエラー) */
 static int thread_done(void *arg) { return __atomic_load_n(&((ThreadCell *)arg)->state, __ATOMIC_ACQUIRE) != 0; }
 static V thread_wait(ThreadCell *c) {
+    world_lock();
     world_wait(thread_done, c, c->pos);
+    world_unlock();
     if (c->state == 2) {
         if (c->msg) fail_msg(c->pos, c->msg);
         fail(c->pos, "並行開始した動作はエラーで終わりました");
@@ -2707,9 +2838,12 @@ typedef struct { Chan *c; int64_t my; } SendWait;
 static int ch_taken(void *a) { SendWait *w = a; return ld(&w->c->taken) >= w->my; }
 
 static V chan_send(Chan *c, V x, int32_t pos) {
-    if (c->closed) fail(pos, "閉じた通路には送れません");
-    world_wait(ch_can_send, c, pos);
-    if (c->closed) fail(pos, "閉じた通路には送れません");
+    world_lock();
+    if (!c->closed) world_wait(ch_can_send, c, pos);
+    if (c->closed) {
+        world_unlock();
+        fail(pos, "閉じた通路には送れません");
+    }
     c->buf[(c->head + c->n) % c->size] = x;
     __atomic_store_n(&c->n, c->n + 1, __ATOMIC_RELEASE);
     int64_t my = ++c->sent;
@@ -2718,18 +2852,24 @@ static V chan_send(Chan *c, V x, int32_t pos) {
         SendWait w = {c, my};
         world_wait(ch_taken, &w, pos);
     }
+    world_unlock();
     return x;
 }
 /* 値を1つ取り出す。閉じていて空なら 0 */
 static V chan_take(Chan *c, int32_t pos) {
+    world_lock();
     world_wait(ch_can_recv, c, pos);
-    if (c->n == 0) return 0;
+    if (c->n == 0) {
+        world_unlock();
+        return 0;
+    }
     V x = c->buf[c->head];
     c->buf[c->head] = 0;
     c->head = (c->head + 1) % c->size;
     __atomic_store_n(&c->n, c->n - 1, __ATOMIC_RELEASE);
     __atomic_store_n(&c->taken, c->taken + 1, __ATOMIC_RELEASE);
     world_changed();
+    world_unlock();
     return x;
 }
 
@@ -2763,12 +2903,16 @@ static V run_guarded(V m, void (*leave)(Gate *), Gate *g) {
     fail_msg(fail_last_pos, msg ? msg : "エラー");
 }
 static void lock_leave(Gate *g) {
+    world_lock();
     if (--g->depth == 0) __atomic_store_n(&g->owner, NULL, __ATOMIC_RELEASE);
     world_changed();
+    world_unlock();
 }
 static void slot_leave(Gate *g) {
+    world_lock();
     __atomic_store_n(&g->free, g->free + 1, __ATOMIC_RELEASE);
     world_changed();
+    world_unlock();
 }
 static void need_action(V v, const char *what, int32_t pos) {
     int t = TAG(v);
@@ -2788,8 +2932,8 @@ static V thread_run(Act *a) {
     case A_SPAWN: {
         fflush(stdout); /* それまでの表示を先に出しておく */
         /* 結果は「スレッド」の組(lib/スレッド.suru)。動作の結果を動作にすると続けて行われてしまうので、組で包む */
-        static Ctor *ctor;
-        if (!ctor && !(ctor = find_ctor("スレッド"))) fail(a->pos, "「スレッド」を読み込んでいません");
+        Ctor *ctor = find_ctor("スレッド");
+        if (!ctor) fail(a->pos, "「スレッド」を読み込んでいません");
         ThreadCell *c = thread_start(thread_perform, a->a, 0, a->pos);
         V j = mk_act(A_JOIN, "合流する", (V)(intptr_t)c, 0);
         AS(Act, j)->pos = a->pos;
@@ -2815,8 +2959,10 @@ static V thread_run(Act *a) {
     }
     case A_CH_CLOSE: {
         Chan *c = need_chan(a->a, "「通路閉鎖する」の「を」", a->pos);
+        world_lock();
         __atomic_store_n(&c->closed, 1, __ATOMIC_RELEASE);
         world_changed();
+        world_unlock();
         return a->a;
     }
     case A_LOCK_NEW: return mk_handle("ロック", rt_alloc(sizeof(Gate)), a->pos);
@@ -2824,9 +2970,11 @@ static V thread_run(Act *a) {
         Gate *g = need_handle(a->a, "ロック", "「排他実行する」の「で」", a->pos);
         need_action(a->b, "「排他実行する」の「を」", a->pos);
         GateWait w = {g, self_thread};
+        world_lock();
         world_wait(lock_ready, &w, a->pos);
         __atomic_store_n(&g->owner, self_thread, __ATOMIC_RELEASE);
         g->depth++;
+        world_unlock();
         return run_guarded(a->b, lock_leave, g);
     }
     case A_SLOT_NEW: {
@@ -2841,8 +2989,10 @@ static V thread_run(Act *a) {
         Gate *g = need_handle(a->a, "枠", "「枠内実行する」の「で」", a->pos);
         need_action(a->b, "「枠内実行する」の「を」", a->pos);
         GateWait w = {g, self_thread};
+        world_lock();
         world_wait(slot_ready, &w, a->pos);
         __atomic_store_n(&g->free, g->free - 1, __ATOMIC_RELEASE);
+        world_unlock();
         return run_guarded(a->b, slot_leave, g);
     }
     case A_BOX_NEW: {
@@ -2850,14 +3000,18 @@ static V thread_run(Act *a) {
         b->v = a->a;
         return mk_handle("箱", b, a->pos);
     }
-    case A_BOX_GET: return ((Box *)need_handle(a->a, "箱", "「箱読取する」の「を」", a->pos))->v;
-    case A_BOX_UPDATE: { /* 純粋な関数なので、実行権を持ったまま計算して置きかえる(ほかのスレッドとぶつからない) */
+    case A_BOX_GET: return __atomic_load_n(&((Box *)need_handle(a->a, "箱", "「箱読取する」の「を」", a->pos))->v, __ATOMIC_ACQUIRE);
+    case A_BOX_UPDATE: { /* 純粋な関数で計算して置きかえる。その間にほかのスレッドが変えていたら、新しい値でやり直す */
         Box *b = need_handle(a->a, "箱", "「箱更新する」の「を」", a->pos);
-        V x = apply1(a->b, b->v, a->pos);
-        b->v = x;
-        return x;
+        V old = __atomic_load_n(&b->v, __ATOMIC_ACQUIRE);
+        for (;;) {
+            V x = apply1(a->b, old, a->pos);
+            if (__atomic_compare_exchange_n(&b->v, &old, x, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return x;
+        }
     }
-    case A_BOX_SET: ((Box *)need_handle(a->b, "箱", "「箱書込する」の「へ」", a->pos))->v = a->a; return a->a;
+    case A_BOX_SET:
+        __atomic_store_n(&((Box *)need_handle(a->b, "箱", "「箱書込する」の「へ」", a->pos))->v, a->a, __ATOMIC_RELEASE);
+        return a->a;
     case A_CH_EACH: { /* 閉じるまで、届いた値ごとに動作を行う。結果は行った数 */
         Chan *c = need_chan(a->a, "「通路処理する」の「を」", a->pos);
         int64_t k = 0;
@@ -3032,7 +3186,7 @@ const uint8_t *rt_ffi_bytes(V v, const char *fname, int32_t part, int32_t pos) {
 }
 
 /* 外部の関数を呼ぶ前と後: 「エラー番号取得する」はその関数が残した errno */
-/* 外部の関数を呼ぶ前後: 呼んでいる間は実行権を手放す(待つ関数でもほかのスレッドが動けるように) */
+/* 外部の関数を呼ぶ前後: 呼んでいる間は外に出る(待つ関数の間も GC がこのスレッドを待たないように) */
 void rt_ffi_pre(void) {
     world_release();
     errno = 0;
@@ -3091,8 +3245,9 @@ V rt_global(const char *name, int32_t pos) {
 }
 
 V rt_global_cached(V *slot, const char *name, int32_t pos) {
-    if (!*slot) *slot = rt_global(name, pos);
-    return *slot;
+    V v = __atomic_load_n(slot, __ATOMIC_RELAXED);
+    if (!v) __atomic_store_n(slot, v = rt_global(name, pos), __ATOMIC_RELAXED);
+    return v;
 }
 
 /* 一番外の式の値: 動作なら行い、そうでなければ表示する */
@@ -3100,8 +3255,10 @@ void rt_top(V v) {
     int t = TAG(v);
     if (t == T_ACT || t == T_PURE) { perform(v); return; }
     char *s = (char *)show(v);
+    flockfile(stdout);
     fputs(s, stdout);
     fputc('\n', stdout);
+    funlockfile(stdout);
     free(s);
 }
 
@@ -3140,6 +3297,7 @@ static void *run_main(void *arg) {
     gc_on = 1;
     const char *e = getenv("SURU_GC_MIN");
     if (e) gc_min = gc_next = (size_t)strtoull(e, NULL, 10) << 10;
+    if (gc_min / 16 < gc_batch) gc_batch = gc_min / 16;
     gc_log = getenv("SURU_GC_LOG") != NULL;
     suru_main();
     fflush(stdout);
