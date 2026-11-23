@@ -311,3 +311,39 @@ def test_失敗説明するの型():
         suru_check.check("（1 の 成功） を 3 で 失敗説明する\n")
     with pytest.raises(suru.SuruError):
         suru_check.check("3 を 失敗詳細にする\n")
+
+
+# --- 段階5: 数値確認する と JSON解析する --------------------------------------
+
+NUMCHECK = """「12」 を 数値確認する
+「１２.5」 を 数値確認する
+「abc」 を 数値確認する
+x と y を 文字加算する とは （（x を 数値確認した 中身） + （y を 数値確認した 中身）） の 成功
+「3」 と 「4」 を 文字加算する
+「3」 と 「x」 を 文字加算する
+「JSON」 を 読み込んで 使う
+v を 項目読取する とは （（v を JSON解析した 中身） から 「a」 を JSON取得する） の 成功
+「{"a": 1}」 を 項目読取する
+「{"a": 」 を 項目読取する
+"""
+
+NUMCHECK_OUT = """（値 は 12 の 成功）
+（値 は 12.5 の 成功）
+（理由 は 「「abc」は数値にできません」 の 失敗）
+（値 は 7 の 成功）
+（理由 は 「「x」は数値にできません」 の 失敗）
+（値 は （数値 は 1 の JSON数） の 成功）
+（理由 は 「JSON を読めません(閉じていない『[』か『{』があります)」 の 失敗）
+"""
+
+
+def test_数値確認するとJSON解析する(tmp_path):
+    for r in run_both(NUMCHECK, tmp_path):
+        assert (r.returncode, r.stdout, r.stderr) == (0, NUMCHECK_OUT, "")
+
+
+def test_数値確認するの型():
+    suru_check.check("r は （数 と 文字列） の 成否\nr とは 「1」 を 数値確認する\n")
+    with pytest.raises(suru.SuruError):
+        suru_check.check("3 を 数値確認する\n")
+    suru_check.check("「JSON」 を 読み込んで 使う\nr は （JSON と 文字列） の 成否\nr とは 「1」 を JSON解析する\n")

@@ -2795,6 +2795,19 @@ BI(f_detail) {
     return r;
 }
 
+BI(m_numcheck) { /* 数にできれば 数 の 成功、できなければ エラーの文 の 失敗 */
+    TryFrame f;
+    f.prev = try_top;
+    f.quiet = 1;
+    try_top = &f;
+    if (setjmp(f.jb) == 0) {
+        V r = b_to_number(up, a, pos);
+        try_top = f.prev;
+        return rt_construct("成功", 1, &r, 0);
+    }
+    V why = rt_str(fail_last_msg, (int64_t)strlen(fail_last_msg));
+    return rt_construct("失敗", 1, &why, 0);
+}
 BI(m_abort) {
     fail_msg(pos, need_str(a[0], "「中断する」の「を」", pos)->s);
 }
@@ -3464,6 +3477,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"中断する", 1, P1_WO, NULL, m_abort},
     {"失敗説明する", 2, P2_WO_DE, NULL, f_explain},
     {"失敗詳細にする", 1, P1_WO, NULL, f_detail},
+    {"数値確認する", 1, P1_WO, NULL, m_numcheck},
     /* 「スレッド」の組み込み */
     {"並行開始する", 1, P1_WO, NULL, t_spawn},
     {"合流する", 1, P1_WO, NULL, t_join},

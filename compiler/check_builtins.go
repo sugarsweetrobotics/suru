@@ -280,6 +280,12 @@ func init() {
 		need(c, a, WO, resultT(newTVar(), newTVar()), line, "失敗詳細にする")
 		return STR
 	})
+	prim("数値確認する", []partReq{req(WO)}, func() Type {
+		return &TFun{[]TParam{{WO, STR}}, resultT(NUM, STR)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		need(c, a, WO, STR, line, "数値確認する")
+		return resultT(NUM, STR)
+	})
 	prim("試行する", []partReq{req(WO), opt("で")}, func() Type {
 		x := newTVar()
 		return &TFun{[]TParam{{WO, act(x)}, {"で", act(x)}}, act(x)}

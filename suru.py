@@ -3291,7 +3291,7 @@ PRELUDE_NONE = "無"
 PRELUDE_TRY = "試行する"
 PRELUDE_TYPES = ("成否", "有無")
 PRELUDE_WORDS = frozenset(("成否", "有無", "成功", "失敗", "有"))
-PRELUDE_CALLS = frozenset(("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする"))  # 取出する は性質の関数なので入れない
+PRELUDE_CALLS = frozenset(("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する"))  # 取出する は性質の関数なので入れない
 
 
 def _int(v: Any, what: str, line: int | None) -> int:
@@ -3730,6 +3730,7 @@ PRELUDE_PRIMITIVES = [
     Builtin("中断する", [(WO, True)], _abort),
     Builtin("失敗説明する", [(WO, True), ("で", True)], lambda it, a, line: _explain(it, a, line)),
     Builtin("失敗詳細にする", [(WO, True)], lambda it, a, line: _detail(it, a, line)),
+    Builtin("数値確認する", [(WO, True)], lambda it, a, line: _number_check(it, a, line)),
 ]
 
 
@@ -4593,6 +4594,14 @@ def _explain(it: Any, a: dict, line: int) -> Any:
     if not is_failure(v):
         return v
     return Record(v.ctor, v.type_name, v.fields, v.values, v.trace, v.notes + (note,))
+
+
+def _number_check(it: Any, a: dict, line: int) -> Any:
+    """数にできれば 数 の 成功、できなければ エラーの文 の 失敗"""
+    try:
+        return Record("成功", "成否", ("値",), (_to_number(it, a, line),))
+    except SuruError as e:
+        return Record("失敗", "成否", ("理由",), (e.message,))
 
 
 def _detail(it: Any, a: dict, line: int) -> str:

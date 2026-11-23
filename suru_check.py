@@ -1982,6 +1982,12 @@ def _t_detail(c, a, line):
     return STR
 
 
+@prim("数値確認する", {WO: True}, lambda: TFun([(WO, STR)], _result_t(NUM, STR)))
+def _t_numcheck(c, a, line):
+    _need(c, a, WO, STR, line, "数値確認する")
+    return _result_t(NUM, STR)
+
+
 @prim("試行する", {WO: True, "で": False}, lambda: (lambda x: TFun([(WO, act(x)), ("で", act(x))], act(x)))(TVar()))
 def _t_try(c, a, line):
     x = TVar()
