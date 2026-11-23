@@ -13,6 +13,7 @@ __version__ = "0.1.0"
 
 import math
 import os
+import struct
 import sys
 import unicodedata
 from dataclasses import dataclass, field
@@ -3239,6 +3240,125 @@ def _affix(name: str, f: Any) -> Builtin:
                    lambda it, a, line: f(_str(a[GA], f"「{name}」の「が」", line), _str(a["で"], f"「{name}」の「で」", line)))
 
 
+# 直列化: 値をバイト列にする(プロセスどうしで値を渡すため)。runtime/suru_rt.c と同じ形式
+_SER_MAGIC = b"SURU\x01"
+
+
+def _serialize(v: Any, line: int) -> bytes:
+    out = bytearray(_SER_MAGIC)
+
+    def text(b: bytes) -> None:
+        out.extend(len(b).to_bytes(4, "little"))
+        out.extend(b)
+
+    def put(x: Any, depth: int) -> None:
+        if depth > 10000:
+            raise SuruError("入れ子が深すぎて直列化できません", line)
+        if x is True or x is False:
+            out.extend(b"b\x01" if x else b"b\x00")
+        elif isinstance(x, int):
+            if not -(1 << 63) <= x < (1 << 63):
+                raise SuruError(f"「{format_value(x)}」は大きすぎて直列化できません(±2の63乗までです)", line)
+            out.extend(b"i" + x.to_bytes(8, "little", signed=True))
+        elif isinstance(x, float):
+            out.extend(b"f" + struct.pack("<d", x))
+        elif isinstance(x, str):
+            out.extend(b"s")
+            text(x.encode("utf-8"))
+        elif isinstance(x, bytes):
+            out.extend(b"y")
+            text(x)
+        elif isinstance(x, tuple):
+            out.extend(b"l" + len(x).to_bytes(4, "little"))
+            for y in x:
+                put(y, depth + 1)
+        elif isinstance(x, Record):
+            out.extend(b"r")
+            text(x.ctor.encode("utf-8"))
+            out.extend(len(x.fields).to_bytes(4, "little"))
+            for f, y in zip(x.fields, x.values):
+                text(f.encode("utf-8"))
+                put(y, depth + 1)
+        else:
+            raise SuruError(f"「{format_value(x)}」は直列化できません(関数・動作・番地はほかのプロセスへ渡せません)", line)
+
+    put(v, 0)
+    return bytes(out)
+
+
+def _deserialize(it: "Interpreter", v: Any, line: int) -> Any:
+    d = _bytes(v, "「復元する」の「を」", line)
+    pos = [0]
+
+    def bad() -> SuruError:
+        return SuruError(f"バイト列が直列化した値ではありません({pos[0]} バイト目)", line)
+
+    def take(k: int) -> bytes:
+        if pos[0] + k > len(d):
+            raise bad()
+        b = d[pos[0]:pos[0] + k]
+        pos[0] += k
+        return b
+
+    def u32() -> int:
+        return int.from_bytes(take(4), "little")
+
+    def get(depth: int) -> Any:
+        if depth > 10000:
+            raise SuruError("入れ子が深すぎて復元できません", line)
+        t = take(1)
+        if t == b"i":
+            return int.from_bytes(take(8), "little", signed=True)
+        if t == b"f":
+            return struct.unpack("<d", take(8))[0]
+        if t == b"b":
+            x = take(1)[0]
+            if x > 1:
+                raise bad()
+            return x == 1
+        if t == b"s":
+            try:
+                return take(u32()).decode("utf-8")
+            except UnicodeDecodeError:
+                raise SuruError("復元した文字列が UTF-8 ではありません", line) from None
+        if t == b"y":
+            return take(u32())
+        if t == b"l":
+            k = u32()
+            if k > len(d) - pos[0]:
+                raise bad()
+            return tuple(get(depth + 1) for _ in range(k))
+        if t == b"r":
+            try:
+                name = take(u32()).decode("utf-8")
+            except UnicodeDecodeError:
+                raise bad() from None
+            if name not in it.ctx.ctors:
+                raise SuruError(f"形「{name}」はこのプログラムにないので復元できません", line)
+            type_name, fields = it.ctx.ctors[name]
+            nf = u32()
+            if nf != len(fields):
+                raise SuruError(f"形「{name}」のフィールドの数が違うので復元できません(このプログラムでは{len(fields)}個、バイト列では{nf}個)", line)
+            values = []
+            for j, f in enumerate(fields):
+                if take(u32()) != f.encode("utf-8"):
+                    raise SuruError(f"形「{name}」のフィールドが違うので復元できません({j + 1}番目は、このプログラムでは「{f}」)", line)
+                values.append(get(depth + 1))
+            if not fields:
+                return it.shared.vars[name]
+            return Record(name, type_name, tuple(fields), tuple(values))
+        raise bad()
+
+    if take(5)[:4] != b"SURU":
+        raise bad()
+    if d[4] != 1:
+        raise SuruError(f"直列化の版({d[4]})に対応していません", line)
+    r = get(0)
+    if pos[0] != len(d):
+        raise bad()
+    return r
+
+
 # 標準.suru の中と、読み込んだ側の「標準内の…」でだけ使える組み込み(する では書けないもの)
 STD_PRIMITIVES = [
     Builtin("切捨する", [(WO, True)], _floor),
@@ -3270,6 +3390,8 @@ STD_PRIMITIVES = [
     Builtin("バイト長にする", [(WO, True)], lambda it, a, line: len(_bytes(a[WO], "「バイト長にする」の「を」", line))),
     Builtin("番地にする", [(WO, True)], lambda it, a, line: Address(_addr_num(a[WO], line))),
     Builtin("番地数値にする", [(WO, True)], lambda it, a, line: _addr(a[WO], "「番地数値にする」の「を」", line).value),
+    Builtin("直列化する", [(WO, True)], lambda it, a, line: _serialize(a[WO], line)),
+    Builtin("復元する", [(WO, True)], lambda it, a, line: _deserialize(it, a[WO], line)),
     Builtin("バイト列取得する", [("から", True), (WO, True)], lambda it, a, line: _peek(a["から"], a[WO], line)),
     Builtin("書込する", [(WO, True), ("へ", True)], lambda it, a, line: _poke(a[WO], a["へ"], line)),
     Builtin("エラー番号取得する", [], lambda it, a, line: Action("エラー番号取得する", lambda it2: _errno())),

@@ -1831,6 +1831,17 @@ _simple("文字列にする", [(WO, BYTES)], STR)
 _simple("バイト長にする", [(WO, BYTES)], NUM)
 _simple("番地にする", [(WO, NUM)], ADDR)
 _simple("番地数値にする", [(WO, ADDR)], NUM)
+@prim("直列化する", {WO: True}, lambda: TFun([(WO, TVar())], BYTES))
+def _t_serialize(c, a, line):
+    return BYTES
+
+
+@prim("復元する", {WO: True}, lambda: TFun([(WO, BYTES)], TVar()))
+def _t_deserialize(c, a, line):
+    _need(c, a, WO, BYTES, line, "復元する")
+    return TVar()
+
+
 _simple("バイト列取得する", [("から", ADDR), (WO, NUM)], act(BYTES))
 _simple("書込する", [(WO, BYTES), ("へ", ADDR)], act(NUM))
 _simple("エラー番号取得する", [], act(NUM))
