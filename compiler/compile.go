@@ -269,13 +269,62 @@ func (f *fnGen) loadSlot(owner *fnGen, k int) string {
 	return t
 }
 
-// 関数の入口の安全点: GC がほかのスレッドを止めたいとき(rt_gc_stop が 1)は、ここで止まる(Python 版の SAFEPOINT と同じ)
+// 関数の入口の安全点: GC がほかのスレッドを止めたいとき(rt_gc_stop が 1)は、ここで止まる(Python 版の SAFEPOINT と同じ)。
+// する のコードを呼ばない関数(葉)には置かない
 const safepoint = `  %sp = load atomic i32, ptr @rt_gc_stop monotonic, align 4
   %spc = icmp ne i32 %sp, 0
   br i1 %spc, label %sp.wait, label %b0
 sp.wait:
   call void @rt_safepoint()
   br label %b0`
+
+// 呼んでも する のコードに戻らない実行時の関数(Python 版の LEAF_SAFE と同じ)
+var leafSafe = map[string]bool{}
+
+func init() {
+	for _, n := range strings.Fields(`@rt_alloc @rt_bool @rt_float @rt_str @rt_list @rt_make_fn @rt_lazy @rt_binop @rt_neg @rt_truthy
+@rt_truth @rt_pred_check @rt_eq @rt_field @rt_field_result @rt_prop @rt_each_check @rt_is_list_len @rt_list_at
+@rt_is_ctor @rt_rec_at @rt_named_get @rt_no_match @rt_fail @rt_construct @rt_update @rt_global_cached
+@llvm.sadd.with.overflow.i64 @llvm.ssub.with.overflow.i64 @llvm.smul.with.overflow.i64`) {
+		leafSafe[n] = true
+	}
+}
+
+// 行の中の呼び出しがみな leafSafe なら真(Python 版の CALL_RE と同じ読み方: 「call 」の後の最初の @ か % から「(」まで)
+func isLeaf(lines []string) bool {
+	for _, l := range lines {
+		for rest := l; ; {
+			i := strings.Index(rest, "call ")
+			if i < 0 {
+				break
+			}
+			if i > 0 && isWordByte(rest[i-1]) {
+				rest = rest[i+5:]
+				continue
+			}
+			rest = rest[i+5:]
+			j := strings.IndexAny(rest, "@%")
+			if j < 0 {
+				break
+			}
+			name := rest[j:]
+			k := strings.IndexAny(name, "( \t\n")
+			if k < 0 || name[k] != '(' {
+				rest = name[1:]
+				continue
+			}
+			if !leafSafe[name[:k]] {
+				return false
+			}
+			rest = name[k:]
+		}
+	}
+	return true
+}
+
+func isWordByte(c byte) bool {
+	return c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= 0x80
+}
 
 func (f *fnGen) finish(header string) string {
 	var b strings.Builder
@@ -296,7 +345,11 @@ func (f *fnGen) finish(header string) string {
 	} else {
 		fmt.Fprintf(&b, "\n  %%fr = alloca i64, i32 %d", f.nslots)
 	}
-	b.WriteString("\n  store ptr %up, ptr %fr\n" + safepoint)
+	if isLeaf(f.lines) {
+		b.WriteString("\n  store ptr %up, ptr %fr\n  br label %b0")
+	} else {
+		b.WriteString("\n  store ptr %up, ptr %fr\n" + safepoint)
+	}
 	for _, l := range f.lines {
 		b.WriteString("\n" + l)
 	}

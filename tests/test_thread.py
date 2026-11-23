@@ -355,3 +355,19 @@ def test_並列写像は速くなる(tmp_path):
     seq = best(SPEED.replace("を フィボナッチにすること で MAPして", "の それぞれ を フィボナッチにして"), tmp_path / "seq")
     par = best(SPEED.replace("MAPして", "並列写像して"), tmp_path / "par")
     assert par < seq * 0.75, (seq, par)
+
+
+def test_葉の関数には安全点を置かない():
+    src = """x を 加一する とは x + 1
+n を 数え下げする とは もし n = 0 ならば 0 そうでなければ （n - 1 を 数え下げする） + 1
+3 を 加一して 表示する
+3 を 数え下げして 表示する
+"""
+    ll = suru_compile.compile_source(src, str(ROOT))
+    funcs = {}
+    for part in ll.split("\ndefine ")[1:]:
+        funcs[part.split("(")[0]] = "@rt_safepoint()" in part
+    # 加一する(葉)には置かず、数え下げする(自分を呼ぶ)と一番外には置く
+    direct = [v for k, v in funcs.items() if k.startswith("internal i64 @f.")]
+    assert sorted(direct) == [False, True]
+    assert funcs["internal i64 @suru_init"]
