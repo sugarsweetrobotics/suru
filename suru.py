@@ -2829,6 +2829,7 @@ class Pure:
 
 
 ACTION_TYPES = (Action, Pure)
+_OUT_LOCK = __import__("threading").Lock()  # 「表示する」の出力(スレッドから同時に書くとき)
 
 
 @dataclass(frozen=True)
@@ -3050,7 +3051,9 @@ def _show(it: "Interpreter", a: dict, line: int) -> Any:
     x = a[WO]
 
     def perform(it2: "Interpreter") -> Any:
-        it2.out(it2.format(x))
+        text = it2.format(x)
+        with _OUT_LOCK:  # スレッドどうしで1行が混ざらないように
+            it2.out(text)
         return x
 
     return Action("表示する", perform)
@@ -3140,6 +3143,8 @@ LIB_DIR = data_path("lib")  # 見つからないファイルはここから探�
 STD_PATH = os.path.join(LIB_DIR, STD_NAME + SOURCE_SUFFIX)
 NET_NAME = "通信"
 NET_PATH = os.path.join(LIB_DIR, NET_NAME + SOURCE_SUFFIX)
+THREAD_NAME = "スレッド"
+THREAD_PATH = os.path.join(LIB_DIR, THREAD_NAME + SOURCE_SUFFIX)
 
 
 def _int(v: Any, what: str, line: int | None) -> int:
@@ -3513,6 +3518,86 @@ NET_PRIMITIVES = [
 
 
 # ---------------------------------------------------------------------------
+# スレッド(「スレッド」の組み込み)。Python の GIL があるので速くはならないが、書いたとおりに動く
+# ---------------------------------------------------------------------------
+
+THREAD_STACK = 256 << 20  # 深い再帰のために(仮想のメモリなので、使った分だけ実際に使う)
+
+
+def _start_thread(target: Any) -> Any:
+    import threading
+    try:
+        threading.stack_size(THREAD_STACK)
+    except (ValueError, RuntimeError):
+        pass
+    th = threading.Thread(target=target, daemon=True)  # プログラムの終わりでは待たない(コンパイルしたものと同じ)
+    th.start()
+    return th
+
+
+def _spawn(it: "Interpreter", a: dict, line: int) -> Any:
+    m = a[WO]
+    if not isinstance(m, ACTION_TYPES):
+        raise SuruError(f"「並行開始する」の「を」は動作でなければなりません(「{format_value(m)}」が渡されました)", line)
+
+    def perform(it2: "Interpreter") -> Any:
+        box: dict = {}
+
+        def run() -> None:
+            try:
+                box["value"] = it2.perform(m)
+            except SuruError as e:  # このスレッドだけが終わる。文はその場で書く(1回の write でほかの行と混ざらないように)
+                sys.stderr.write(f"エラー: {e}\n")
+                sys.stderr.flush()
+                box["error"] = True
+            except RecursionError:
+                sys.stderr.write("エラー: 再帰が深すぎます\n")
+                sys.stderr.flush()
+                box["error"] = True
+
+        sys.stdout.flush()
+        th = _start_thread(run)
+
+        def join(it3: "Interpreter") -> Any:
+            th.join()
+            if "error" in box:
+                raise SuruError("並行開始した動作はエラーで終わりました", line)
+            return box["value"]
+
+        # 動作の結果を動作にすると続けて行われてしまうので、「スレッド」の組(lib/スレッド.suru)で包む
+        return Record(THREAD_CTOR, THREAD_NAME, (THREAD_FIELD,), (Action("合流する", join),))
+
+    return Action("並行開始する", perform)
+
+
+THREAD_CTOR, THREAD_FIELD = "スレッド", "中身"
+
+
+def _join(it: "Interpreter", a: dict, line: int) -> Any:
+    t = a[WO]
+    if not (isinstance(t, Record) and t.ctor == THREAD_CTOR):
+        raise SuruError(f"「合流する」の「を」はスレッドでなければなりません(「{format_value(t)}」が渡されました)", line)
+    return t.values[0]
+
+
+def _pmap(it: "Interpreter", a: dict, line: int) -> Any:
+    # 純粋な関数なので、順に計算しても結果は同じ(インタプリタは GIL で並列にならないので分けない)
+    return tuple(it.apply(a["で"], [x], line) for x in _list(a[WO], "「並列写像する」の「を」", line))
+
+
+def _ncpu(it: "Interpreter", a: dict, line: int) -> Any:
+    return Action("コア数取得する", lambda it2: os.cpu_count() or 1)
+
+
+THREAD_PRIMITIVES = [
+    Builtin("並行開始する", [(WO, True)], _spawn),
+    Builtin("合流する", [(WO, True)], _join),
+    Builtin("並列写像する", [(WO, True), ("で", True)], _pmap),
+    Builtin("コア数取得する", [], _ncpu),
+]
+
+
+# ---------------------------------------------------------------------------
 # 外部の関数(FFI)。インタプリタは ctypes で C の呼び出し規約の関数を呼ぶ
 # ---------------------------------------------------------------------------
 
@@ -3655,7 +3740,7 @@ def extern_builtin(d: Define) -> Builtin:
     return Builtin(d.name, [(p, True) for p in parts], lambda it, a, line: call(a, line))
 
 # lib/ のファイルごとの組み込み(そのファイルの中と、読み込んだ側の「標準内の…」「通信内の…」で使える)
-LIB_PRIMITIVES = {STD_PATH: STD_PRIMITIVES, NET_PATH: NET_PRIMITIVES}
+LIB_PRIMITIVES = {STD_PATH: STD_PRIMITIVES, NET_PATH: NET_PRIMITIVES, THREAD_PATH: THREAD_PRIMITIVES}
 
 def make_global_env() -> Env:
     env = Env()

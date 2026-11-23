@@ -246,6 +246,32 @@ func init() {
 	simple("行受信する", []TParam{{"から", NUM}}, act(STR))
 	simple("受信する", []TParam{{"から", NUM}, {WO, NUM}}, act(STR))
 	simple("送信する", []TParam{{WO, STR}, {"へ", NUM}}, act(NUM))
+	// スレッド(「スレッド」の組み込み)。並行開始した結果は、合流する(待って結果を返す)動作
+	prim("並行開始する", []partReq{req(WO)}, func() Type {
+		x := newTVar()
+		return &TFun{[]TParam{{WO, act(x)}}, act(threadT(x))}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		x := newTVar()
+		need(c, a, WO, act(x), line, "並行開始する")
+		return act(threadT(x))
+	})
+	prim("合流する", []partReq{req(WO)}, func() Type {
+		x := newTVar()
+		return &TFun{[]TParam{{WO, threadT(x)}}, act(x)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		x := newTVar()
+		need(c, a, WO, threadT(x), line, "合流する")
+		return act(x)
+	})
+	prim("並列写像する", []partReq{req(WO), req("で")}, func() Type {
+		x, y := newTVar(), newTVar()
+		return &TFun{[]TParam{{WO, lst(x)}, {"で", &TFun{[]TParam{{WO, x}}, y}}}, lst(y)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		elem := newTVar()
+		need(c, a, WO, lst(elem), line, "並列写像する")
+		return lst(c.apply(a.must("で"), []Type{elem}, line, "「並列写像する」の「で」"))
+	})
+	simple("コア数取得する", nil, act(NUM))
 	simple("切断する", []TParam{{WO, NUM}}, act(NUM))
 	prim("逆順にする", []partReq{req(WO)}, func() Type {
 		x := newTVar()
