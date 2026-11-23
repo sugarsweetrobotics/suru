@@ -40,11 +40,13 @@ const usage = `使い方: kumu <命令> [オプション]
   削除 名前   依存を外す。名前か場所で書く(remove)
   更新 [名前] 依存を一番新しいタグにする。名前がなければ全部(update)
   取得        依存を取ってきて 組.lock を書く(fetch)
+  試験 [名前] 試験/ の「…試験する」を1つずつ動かす(test。名前の一部で選べる)
+  点検        プロジェクトの全部のファイルを点検する(check)
   版          kumu の版を出す(version)
   助け        この案内を出す(help)
 
-作る・実行 のオプション:
-  -O0 〜 -O3  clang の最適化の強さ(既定は -O2)
+作る・実行・試験 のオプション:
+  -O0 〜 -O3  clang の最適化の強さ(既定は -O2。試験は -O0)
   --検査なし  型の検査をしない(--no-check)
 `
 
@@ -58,6 +60,8 @@ var commands = map[string]string{
 	"削除": "削除", "remove": "削除",
 	"更新": "更新", "update": "更新",
 	"取得": "取得", "fetch": "取得",
+	"試験": "試験", "test": "試験",
+	"点検": "点検", "check": "点検", "lint": "点検",
 	"版": "版", "version": "版", "--版": "版", "--version": "版",
 	"助け": "助け", "help": "助け", "-h": "助け", "--help": "助け",
 }
@@ -114,9 +118,14 @@ func (k *kumu) run(args []string) int {
 		return 0
 	case "追加", "削除", "更新", "取得":
 		return k.deps(cmd, rest)
+	case "点検":
+		return k.lint(rest)
 	}
 	// 作る・実行
 	opt, check := "-O2", true
+	if cmd == "試験" {
+		opt = "-O0"
+	}
 	var progArgs []string
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
@@ -128,10 +137,10 @@ func (k *kumu) run(args []string) int {
 			opt = a
 		case a == "--検査なし" || a == "--no-check":
 			check = false
-		case cmd == "実行":
+		case cmd == "実行" || cmd == "試験" && !strings.HasPrefix(a, "-"):
 			progArgs = append(progArgs, a)
 		default:
-			fmt.Fprintf(k.stderr, "「%s」は 作る に使えないオプションです\n", a)
+			fmt.Fprintf(k.stderr, "「%s」は %s に使えないオプションです\n", a, cmd)
 			return 2
 		}
 	}
@@ -141,6 +150,9 @@ func (k *kumu) run(args []string) int {
 	}
 	if _, err := Resolve(p, k.stderr); err != nil {
 		return k.fail(err)
+	}
+	if cmd == "試験" {
+		return k.test(p, progArgs, opt, check)
 	}
 	exe, err := k.build(p, opt, check)
 	if err != nil {
@@ -178,44 +190,57 @@ func (k *kumu) build(p *Project, opt string, check bool) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("入口のファイル「%s」が読めません", p.Entry+compiler.SourceSuffix)
 	}
-	source := compiler.NormalizeNewlines(string(data))
-	ir, serr := compiler.CompileSource(source, filepath.Dir(path), path, check)
-	if serr != nil {
-		return "", errors.New(compiler.FormatError(serr, source, true))
-	}
-	out := filepath.Join(p.Root, OutDir)
-	if err := os.MkdirAll(out, 0o755); err != nil {
+	exe := filepath.Join(p.Root, OutDir, p.Name)
+	built, err := compileTo(string(data), path, exe, opt, check)
+	if err != nil {
 		return "", err
 	}
-	exe := filepath.Join(out, p.Name)
+	if built {
+		fmt.Fprintf(k.stderr, "「%s」%s を組みました(%s)\n", p.Name, p.Version, k.rel(exe))
+	}
+	return exe, nil
+}
+
+// rel は今のフォルダからの道(上に出るなら絶対パス)
+func (k *kumu) rel(path string) string {
+	rel, err := filepath.Rel(k.dir, path)
+	if err != nil || rel == "" || strings.HasPrefix(rel, "..") {
+		return path
+	}
+	return rel
+}
+
+// compileTo は path(中身は source)をコンパイルして exe を作る。
+// IR・最適化・実行時ライブラリが前と同じなら clang を呼ばない(built が false)
+func compileTo(source, path, exe, opt string, check bool) (built bool, err error) {
+	source = compiler.NormalizeNewlines(source)
+	ir, serr := compiler.CompileSource(source, filepath.Dir(path), path, check)
+	if serr != nil {
+		return false, errors.New(compiler.FormatError(serr, source, true))
+	}
+	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
+		return false, err
+	}
 	h := sha256.New()
 	for _, part := range []string{version, opt, ir, string(suru.Runtime)} {
 		fmt.Fprintf(h, "%d:%s", len(part), part)
 	}
 	digest := hex.EncodeToString(h.Sum(nil))
-	stamp := filepath.Join(out, "."+p.Name+".stamp")
+	stamp := filepath.Join(filepath.Dir(exe), "."+filepath.Base(exe)+".stamp")
 	if old, err := os.ReadFile(stamp); err == nil && string(old) == digest {
 		if _, err := os.Stat(exe); err == nil {
-			return exe, nil
+			return false, nil
 		}
 	}
 	llPath := exe + ".ll"
 	if err := os.WriteFile(llPath, []byte(ir), 0o644); err != nil {
-		return "", err
+		return false, err
 	}
 	defer os.Remove(llPath)
 	if err := native.Build(llPath, exe, opt); err != nil {
-		return "", err
+		return false, err
 	}
-	if err := os.WriteFile(stamp, []byte(digest), 0o644); err != nil {
-		return "", err
-	}
-	rel, _ := filepath.Rel(k.dir, exe)
-	if rel == "" || strings.HasPrefix(rel, "..") {
-		rel = exe
-	}
-	fmt.Fprintf(k.stderr, "「%s」%s を組みました(%s)\n", p.Name, p.Version, rel)
-	return exe, nil
+	return true, os.WriteFile(stamp, []byte(digest), 0o644)
 }
 
 func main() {

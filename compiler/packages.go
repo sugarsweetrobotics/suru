@@ -94,7 +94,11 @@ func FindPackages(dir string) map[string]Package {
 	}
 	d := absPath(dir)
 	for {
-		if _, err := os.Stat(filepath.Join(d, ProjectConfig)); err == nil {
+		if data, err := os.ReadFile(filepath.Join(d, ProjectConfig)); err == nil {
+			// プロジェクト自身も、組.suru の名前で読み込める(試験/ のファイルから使う)
+			if name := projectName(string(data)); name != "" {
+				out[name] = Package{name, d}
+			}
 			for _, e := range ReadLock(d) {
 				out[e.Name] = Package{e.Name, PackageDir(d, e.Source, e.Version)}
 			}
@@ -125,4 +129,18 @@ func packagePath(name string, ctx *ParseContext, line Pos) (string, bool) {
 		rest = first
 	}
 	return absPath(filepath.Join(pkg.Dir, filepath.FromSlash(rest)+SourceSuffix)), true
+}
+
+// projectName は 組.suru の「名前 とは 「…」」(読めなければ "")
+func projectName(source string) (name string) {
+	_ = try(func() {
+		for _, n := range ParseProgram(NormalizeNewlines(source), NewParseContext(".")) {
+			if d, ok := n.(*Define); ok && d.Name == "名前" {
+				if s, ok := d.Body.(*Str); ok {
+					name = s.Value
+				}
+			}
+		}
+	})
+	return
 }
