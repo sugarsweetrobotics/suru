@@ -134,8 +134,8 @@ xs の 3
 ならば
 """.splitlines()
 
-# 読めることだけ確かめる(中は 未解析式)
-UNPARSED = ["（合計とは、a+b。合計/2）。", "手順（「a」を表示する。「b」を表示する。）。"]
+# 括弧の中の文の並び
+BLOCKS = ["（合計とは、a+b。合計/2）。", "手順（「a」を表示する。「b」を表示する。）。", "（x とは、1。ただし、y とは、2。x+y）。"]
 
 
 def num(v) -> str:
@@ -210,9 +210,45 @@ def dump(n) -> str:
         return f"型({n.ctor} {lst(n.items)}){at()}"
     if isinstance(n, S.PNamed):
         return f"名型({n.ctor or '-'}{fields(n.fields)}){at()}"
-    if isinstance(n, (S.Block, S.Do)):
-        return "未解析"  # 括弧の中の文の並び(lib/構文.suru はまだ読まない)
+    if isinstance(n, S.Define):
+        params = "".join(f" {p}={param(x)}" for p, x in n.params)
+        return f"定({n.name} {'関' if n.is_function else '値'}{params} ; {dump(n.body)}){at()}"
+    if isinstance(n, S.Block):
+        return "塊" + lst(n.statements)
+    if isinstance(n, S.Do):
+        return ("順続" if n.sequel else "順") + lst(n.statements) + at()
+    if isinstance(n, S.TypeDef):
+        return f"型定({n.name}" + "".join(f" {c}[{' '.join(fs)}]" for c, fs in n.ctors) + f"){at()}"
+    if isinstance(n, S.TypeSig):
+        params = "" if n.params is None else "".join(f" {p}={dump(t)}" for p, t in n.params)
+        return f"宣({n.name} {'値' if n.params is None else '関'}{params} -> {dump(n.result)}){at()}"
+    if isinstance(n, S.TypeName):
+        return f"型:{n.name}" + (lst(n.args) if n.args else "")
+    if isinstance(n, S.TypeFun):
+        return "関型[" + "".join(f" {p}={dump(t)}" for p, t in n.params) + f" -> {dump(n.result)}]"
+    if isinstance(n, S.TypeVarName):
+        return f"変:{n.name}"
+    if isinstance(n, S.TraitDecl):
+        sigs = "[" + " ".join(f"頭({name}" + "".join(f" {p}={param(x)}" for p, x in ps) + ")" for name, ps in n.sigs) + "]"
+        return f"性質({n.name} {sigs} {lst(n.defaults)}){at()}"
+    if isinstance(n, S.TraitImpl):
+        return f"実装({n.type_name} {n.trait} {lst(n.defs)}){at()}"
+    if isinstance(n, S.Import):
+        return f"読込({n.module.name} {'開' if n.open else '閉'}){at()}"
+    if isinstance(n, S.ExternLib):
+        return f"外庫({n.name}){at()}"
+    if isinstance(n, S.Extern):
+        return f"外({n.symbol} {n.pointer}){at()}"
+    if isinstance(n, S.Visibility):
+        return f"公開({'公' if n.public else '非'} [{' '.join(n.names)}]){at()}"
     raise AssertionError(f"表示できない構文木: {n!r}")
+
+
+def param(x) -> str:
+    """定義の引数: 名前(「a」)・名前の並び(「a と b」)・パターン"""
+    if isinstance(x, (str, list)):
+        return pat_name(x)
+    return dump(x)
 
 
 def body(tokens: list) -> list:
@@ -255,8 +291,8 @@ def normalize(text: str) -> str:
         except ValueError:
             return f"数:{float(t)}@"
     text = re.sub(r"数:([-+0-9.eE]+|真|偽|空)@", number, text)
-    text = re.sub(r"未解析@\d+", "未解析", text)
-    return re.sub(r"(?m)^(L\d+: )誤り: .*$", r"\1誤り", text)
+    text = re.sub(r"(?m)^(L\d+: )誤り: .*$", r"\1誤り", text)
+    return re.sub(r"(?m)^誤り: .*$", "誤り", text)
 
 
 @pytest.fixture(scope="module")
@@ -269,8 +305,9 @@ def dumper(tmp_path_factory):
     return [str(exe)]
 
 
-def su_dump(dumper, path: pathlib.Path, ctors: dict = CTORS) -> list[str]:
-    args = [f"{c}={len(fs)}" for c, (_, fs) in ctors.items()]
+def su_dump(dumper, path: pathlib.Path, ctors: dict = CTORS, types: dict = TYPES, program: bool = False) -> list[str]:
+    args = [f"{c}={len(fs)}" for c, (_, fs) in ctors.items()] + [f"型:{t}" for t in types]
+    args += ["--文"] if program else []
     r = subprocess.run([*dumper, str(path), *args], capture_output=True, text=True, timeout=600)
     assert r.returncode == 0, r.stderr
     return normalize(r.stdout).splitlines()
@@ -301,13 +338,30 @@ def test_読めない式はどちらも誤りになる(dumper, tmp_path):
     assert all(x.endswith("誤り") for x in py), py
 
 
-def test_文の並びは未解析式になる(dumper, tmp_path):
-    path = tmp_path / "blocks.suru"
-    path.write_text("\n".join(UNPARSED) + "\n", encoding="utf-8")
-    assert su_dump(dumper, path) == ["L1: 未解析", "L2: 未解析"]
+def test_括弧の中の文の並びの構文木が同じ(dumper, tmp_path):
+    py = check_same(dumper, tmp_path, BLOCKS)
+    assert [x for x in py if x.endswith("誤り")] == []
 
 
 FILES = sorted((ROOT / "examples").glob("*.suru")) + sorted((ROOT / "lib").glob("*.suru"))
+
+
+def py_program(source: str, base_dir: str) -> tuple[list[str], "suru.ParseContext"]:
+    ctx = suru.ParseContext(base_dir=base_dir)
+    try:
+        out = [dump(s) for s in suru.parse_program(source, ctx)]
+    except suru.SuruError:
+        out = ["誤り"]
+    return out, ctx
+
+
+@pytest.mark.parametrize("path", FILES, ids=lambda p: f"{p.parent.name}/{p.name}")
+def test_例とライブラリのプログラムの構文木が同じ(dumper, path):
+    """ファイル全体を suru.py の parse_program と同じ一番外の文のリストにする"""
+    source = path.read_text(encoding="utf-8")
+    py, ctx = py_program(source, str(path.parent))
+    assert py != ["誤り"]
+    assert su_dump(dumper, path, ctx.ctors, ctx.types, program=True) == py
 
 
 @pytest.mark.parametrize("path", FILES, ids=lambda p: f"{p.parent.name}/{p.name}")
@@ -317,4 +371,103 @@ def test_例とライブラリの行の構文木が同じ(dumper, path):
     ctx = suru.ParseContext(base_dir=str(path.parent))
     suru.parse_program(source, ctx)
     ctx = suru.ParseContext(ctors=ctx.ctors, types=ctx.types)
-    assert su_dump(dumper, path, ctx.ctors) == py_dump(source, ctx)
+    assert su_dump(dumper, path, ctx.ctors, ctx.types) == py_dump(source, ctx)
+
+
+# 手で書いたプログラム(文の書き方の組み合わせ)
+PROGRAMS = [
+    """\
+図形 とは 半径 の 円 か 幅 と 高 の 長方形
+信号 とは 赤 か 黄 か 青
+（半径 の 円） を 面積にする とは 半径 * 半径 * 3
+（幅 と 高 の 長方形） を 面積にする とは 幅 * 高
+赤 を 次にする とは 青
+c を 次にする とは 赤
+0 を x で 何かする とは x
+n を x で 何かする とは n + x
+先頭 は x で 残り は 他 を 足する とは x + （他 を 足する）
+空 を 足する とは 0
+""",
+    """\
+比較可能 という 性質 とは
+  a と b を 比較する
+  a と b を 大きい方にする とは
+    もし （a と b を 比較する） > 0 ならば a そうでなければ b
+ただし x を 小さい方にする とは x
+点 とは 横 と 縦 の 組
+点 は 比較可能
+  a と b を 比較する とは a の 横 - b の 横
+ただし a と b を 差にする とは a の 横 - b の 縦
+""",
+    """\
+数 を 数 で 加算する は 数
+（数 を 受け取って 数 を 返すこと） を 数 の リスト で 写像化する は 数 の リスト
+甲 の リスト を （甲 を 数 で 受け取って 真偽 を 返すこと） で 選ぶする は 甲 の リスト
+税率 は 数
+表 は 数 の リスト の リスト
+税率 とは 0.1
+a と b を 内側にする とは a
+a と b を 外側にする とは b
+内側にする は 非公開とする
+""",
+    """\
+aとbを平均するとは、合計/2。ただし、合計とは、a+b。
+「やあ」を表示する。それから、「またね」を表示する。それから、「おわり」を表示する。
+挨拶するとは、手順（「a」を表示する。xとは、入力した結果。xを表示する。）。
+""",
+    """\
+挨拶する とは 手順
+  名前 とは 入力した 結果
+  名前 を 表示する
+  それから 「おわり」 を 表示する
+n を 判定する とは
+  もし n > 0
+    ならば 「正」
+    そうでなければ 「負」
+x を 二倍する とは
+  y とは x + x
+  y
+番地 を 長さ計測する は 数
+s を 長さ計測する とは 外部の（s）
+""",
+    """\
+「数学」 を 読み込む
+数学内の二乗する
+数学内の 円周率
+""",
+]
+
+BAD_PROGRAMS = [
+    "  x とは 1\n",
+    "x とは\n",
+    "とは 1\n",
+    "ただし x とは 1\n",
+    "それから x\n",
+    "x とは 1\n    y\n  z\n",
+    "点 とは 横 と と 縦 の 組\n",
+    "数 を 何かする は\n",
+    "x を 三倍しない とは x\n",
+    "a b を 何かする とは a\n",
+    "f とは 「a」 を 読み込む\n",
+    "x とは 1 +\n",
+    "（1 と 2\n",
+]
+
+
+@pytest.mark.parametrize("source", PROGRAMS, ids=range(len(PROGRAMS)))
+def test_手で書いたプログラムの構文木が同じ(dumper, tmp_path, source):
+    path = tmp_path / "prog.suru"
+    path.write_text(source, encoding="utf-8")
+    (tmp_path / "数学.suru").write_text((ROOT / "examples" / "数学.suru").read_text(encoding="utf-8"), encoding="utf-8")
+    py, ctx = py_program(source, str(tmp_path))
+    assert py != ["誤り"]
+    assert su_dump(dumper, path, ctx.ctors, ctx.types, program=True) == py
+
+
+@pytest.mark.parametrize("source", BAD_PROGRAMS)
+def test_読めないプログラムはどちらも誤りになる(dumper, tmp_path, source):
+    path = tmp_path / "bad.suru"
+    path.write_text(source, encoding="utf-8")
+    py, _ = py_program(source, str(tmp_path))
+    assert py == ["誤り"]
+    assert su_dump(dumper, path, {}, {}, program=True) == ["誤り"]
