@@ -629,15 +629,19 @@ class Checker:
 
     # --- プログラム -----------------------------------------------------
 
-    def check_program(self, program: list) -> None:
+    def check_program(self, program: list, want: Any = ()) -> None:
+        """want に入っている文(id)の式の型を self.recorded に、定義の型の環境を self.env に残す(対話モードで使う)"""
         self.base = TEnv()  # 性質の実装(どのファイルのものも)
         self.checked: dict = {}  # 読み込んだファイル(絶対パス → その定義の型)
-        env = self.check_unit(program)
+        self.recorded: dict = {}
+        env = self.env = self.check_unit(program)
         for s in program:
             if isinstance(s, (Define,) + TOP_LEVEL_ONLY):
                 continue
             self.line = first_line(s)
-            self.infer(s, env)
+            t = self.infer(s, env)
+            if id(s) in want:
+                self.recorded[id(s)] = t
             self.solve(env)
         self.solve(env)
 
@@ -2020,14 +2024,18 @@ def _t_contains(c, a, line):
 def check(source: str, base_dir: str = ".") -> None:
     """型を調べる。間違いがあれば SuruError を出す。読み込むファイルは base_dir から探す"""
     ctx = ParseContext(base_dir=base_dir)
-    program = parse_program(source, ctx)
+    check_parsed(parse_program(source, ctx), ctx)
+
+
+def check_parsed(program: list, ctx: ParseContext, want: Any = ()) -> "Checker":
+    """解析済みのプログラムの型を調べて、調べ終わった Checker を返す。間違いがあれば SuruError を出す"""
     shapes = Shapes(ctx)
 
     def attempt() -> tuple:
         for _ in range(100):
             checker = Checker(ctx, shapes)
             try:
-                checker.check_program(program)
+                checker.check_program(program, want)
                 return None, checker
             except Restart:
                 continue
@@ -2038,10 +2046,38 @@ def check(source: str, base_dir: str = ".") -> None:
     _usual.clear()
     first, checker = attempt()
     if first is None:
-        return
+        return checker
     # いつも同じ型で使うフィールドを覚えて、もう一度調べる(エラーの型の表示が短くなる)
     if shapes.learn_usual(checker.instances):
         second, _ = attempt()
         _usual.clear()
         raise second or first
     raise first
+
+
+def session_types(program: list, ctx: ParseContext, values: list, names: list) -> tuple[list, list]:
+    """対話モード用。program の型を調べて、values(文)の式の型と、names の定義の型を文字で返す。
+    定義は「数 を 二乗する は 数」「税率 は 数」のように型の宣言の形で書く"""
+    checker = check_parsed(program, ctx, {id(s) for s in values})
+    checker.shapes.learn_usual(checker.instances)  # いつも同じ型で使う型の引数は省いて表示する
+    try:
+        return _session_types(checker, values, names)
+    finally:
+        _usual.clear()
+
+
+def _session_types(checker: "Checker", values: list, names: list) -> tuple[list, list]:
+    value_types = [show(checker.recorded[id(s)])[0] if id(s) in checker.recorded else "?" for s in values]
+    sigs = []
+    for name in names:
+        v = checker.env.vars.get(name)
+        if v is None:
+            continue
+        t = prune(v.t if isinstance(v, Scheme) else v)
+        n = Namer(t)
+        if isinstance(t, TFun) and t.params:
+            ps = " ".join(f"{n(x, True)} {p}" for p, x in t.params)
+            sigs.append(f"{ps} {name} は {n(t.result)}")
+        else:
+            sigs.append(f"{name} は {n(t)}")
+    return value_types, sigs
