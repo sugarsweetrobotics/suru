@@ -614,7 +614,7 @@ func (p *ExprParser) pipeline(piped Node, hasPiped bool) Node {
 				if hasPiped {
 					args = mergePiped(args, piped, WO)
 				}
-				value = &Run{&Call{t.S, args, t.Line}, t.Line, res.S == Content}
+				value = &Run{&Call{t.S, args, t.Line}, t.Line, res.S == Content, ""}
 				args, piped, hasPiped = nil, nil, false
 			} else if t.Kind == "CALL" && t.Form != Koto {
 				break
@@ -2188,7 +2188,43 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 	}
 	checkOpenImports(statements)
 	attachExterns(statements)
-	return attachProvisos(statements)
+	statements = attachProvisos(statements)
+	for _, st := range statements {
+		switch st.(type) {
+		case *Import, *ExternLib:
+		default:
+			nameUnwraps(st, topFn)
+		}
+	}
+	return statements
+}
+
+// 関数の外と無名関数の「した 中身」の経路の名前
+const (
+	topFn    = "一番外"
+	lambdaFn = "無名関数"
+)
+
+// nameUnwraps は「した 中身」に、それを書いた一番内側の関数の名前を付ける(失敗の経路に使う)
+func nameUnwraps(node Node, fn string) {
+	switch n := node.(type) {
+	case nil:
+		return
+	case *Import, *Module:
+		return
+	case *Define:
+		if n.IsFunction {
+			parts := strings.Split(n.Name, "\x00")
+			fn = parts[len(parts)-1]
+		}
+	case *Lambda:
+		fn = lambdaFn
+	case *Run:
+		n.Fn = fn
+	}
+	for _, ch := range node.Children() {
+		nameUnwraps(ch, fn)
+	}
 }
 
 // parseExternArgs は「（a と 0 と b）」の中: 引数の名前か整数を「と」でつないだもの
@@ -2224,7 +2260,7 @@ func parseExternArgs(toks []*Token) []ExternArg {
 const PreludeName = "基本"
 
 var preludeWords = setOf("成否", "有無", "成功", "失敗", "有")
-var preludeCalls = setOf("成否にする", "有無にする", "中断する") // 取出する は性質の関数なので入れない
+var preludeCalls = setOf("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する", "試算する") // 取出する は性質の関数なので入れない
 
 func hasPreludeImport(imports map[*LNode]Node) bool {
 	for _, i := range imports {
@@ -2251,7 +2287,9 @@ func preludeWordLine(nodes []*LNode) (Pos, bool) {
 			if (t.Kind == "WORD" || t.Kind == "CALL") && !t.Quoted &&
 				(preludeWords[t.S] || preludeCalls[t.S] || strings.HasPrefix(t.S, PreludeName+ModuleSep) ||
 					// 「無」は「… は 無」なら外部の関数の型(C の void)
-					t.S == "無" && !(k > 0 && isKw(n.Line.Tokens[k-1], KwWa))) {
+					t.S == "無" && !(k > 0 && isKw(n.Line.Tokens[k-1], KwWa)) ||
+					// 「で」のない「試行する」は成否を返す
+					t.Kind == "CALL" && t.S == "試行する" && !lineHasPart(n.Line.Tokens, "で")) {
 				return n.Line.Number, true
 			}
 		}
@@ -2260,6 +2298,15 @@ func preludeWordLine(nodes []*LNode) (Pos, bool) {
 		}
 	}
 	return Pos{}, false
+}
+
+func lineHasPart(tokens []*Token, part string) bool {
+	for _, u := range tokens {
+		if u.Kind == "PART" && u.S == part {
+			return true
+		}
+	}
+	return false
 }
 
 // loadPrelude は lib/基本.suru を読む(同じフォルダに 基本.suru があっても、いつも同梱のもの)

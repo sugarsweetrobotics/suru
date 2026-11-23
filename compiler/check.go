@@ -2105,7 +2105,28 @@ func callName(n Node) string {
 
 // unwrapType は「した 中身」: value(成否・有無)の中の値の型。失敗は target(返す先の型)として返す
 func (c *Checker) unwrapType(value, target Type, call Node, line Pos) Type {
-	name := callName(call)
+	return c.unwrapTypeNamed(value, target, call, line, callName(call))
+}
+
+// hasEach は「xs の それぞれ を f する」のように「の それぞれ」の引数を持つ呼び出しか
+func hasEach(call Node) bool {
+	if cl, ok := call.(*Call); ok {
+		for _, a := range cl.Args {
+			if _, ok := a.Value.(*Each); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// unwrapTypeNamed は「した 中身」の中の値の型。「xs の それぞれ を f した 中身」なら value は成否(有無)のリストで、中の値のリストになる
+func (c *Checker) unwrapTypeNamed(value, target Type, call Node, line Pos, name string) Type {
+	if hasEach(call) {
+		elem := newTVar()
+		c.expect(value, lst(elem), line, "「それぞれ … した 中身」の前")
+		return lst(c.unwrapTypeNamed(elem, target, nil, line, name))
+	}
 	kind := unwrapTypes[0]
 	for _, t := range []Type{prune(value), prune(target)} {
 		if tc, ok := t.(*TCon); ok && (tc.Name == unwrapTypes[0] || tc.Name == unwrapTypes[1]) {

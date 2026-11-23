@@ -85,8 +85,9 @@ declare i64 @rt_call_ex(i64, i32, ptr, ptr, ptr, i32)
 declare i64 @rt_ref(i64, i32, ptr, ptr, ptr, i32)
 declare i64 @rt_chain_then(i64, i64, i32)
 declare i64 @rt_do_run(i64, i64, ptr, i32)
-declare i64 @rt_do_unwrap(i64, i64, ptr, i32)
+declare i64 @rt_do_unwrap(i64, i64, ptr, ptr, i32)
 declare i64 @rt_unwrap(i64, ptr, i32)
+declare i64 @rt_trace(i64, ptr, i32)
 declare i64 @rt_do_seq(i64, i64, i32)
 declare i64 @rt_do_result(i64)
 declare i64 @rt_std(ptr)
@@ -571,7 +572,8 @@ func (c *Compiler) ex(node Node, sc *scope, fg *fnGen) string {
 			early, cont := fg.newLabel(), fg.newLabel()
 			fg.emit(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", b, early, cont))
 			fg.start(early)
-			fg.emit("ret i64 " + v)
+			t := fg.call("i64", "@rt_trace", fmt.Sprintf("i64 %s, ptr %s, i32 %d", v, c.cstr(n.Fn), posOf(n.Line)))
+			fg.emit("ret i64 " + t)
 			fg.start(cont)
 			return x
 		}
@@ -1252,7 +1254,8 @@ func (c *Compiler) do(stmts []Node, i int, sc *scope, fg *fnGen, line Pos) strin
 		rest := genBody(func(local *scope, kfg *fnGen) string { return c.do(stmts, i, local, kfg, line) })
 		k := c.closure("続き", []Param{{Part: WO, Name: key}}, rest, sc, fg, false)
 		if r.Unwrap {
-			return fg.call("i64", "@rt_do_unwrap", fmt.Sprintf("i64 %s, i64 %s, ptr %s, i32 %d", m, k, c.cstr(callName(r.Call)), posOf(r.Line)))
+			name := c.cstr(callName(r.Call))
+			return fg.call("i64", "@rt_do_unwrap", fmt.Sprintf("i64 %s, i64 %s, ptr %s, ptr %s, i32 %d", m, k, name, c.cstr(r.Fn), posOf(r.Line)))
 		}
 		name := ""
 		if call, ok := r.Call.(*Call); ok {

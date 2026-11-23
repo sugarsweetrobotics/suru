@@ -49,7 +49,8 @@ typedef struct Ctor {
     const char **fields;
     V nullary;
 } Ctor;
-typedef struct { int32_t tag; Ctor *c; V v[]; } Rec;
+/* traced なら、成否の失敗が v[n] に経路、v[n+1] に説明のリストを持つ(「した 中身」と「失敗説明する」。比べるときは見ない) */
+typedef struct { int32_t tag; int32_t traced; Ctor *c; V v[]; } Rec;
 
 typedef V (*Code)(void *up, V *args, int32_t pos);
 enum { FK_CODE, FK_TRAIT, FK_PARTIAL };
@@ -615,6 +616,7 @@ typedef struct TryFrame { jmp_buf jb; struct TryFrame *prev; int quiet; } TryFra
 static _Thread_local TryFrame *try_top;
 static _Thread_local char *fail_last_msg;
 static _Thread_local int32_t fail_last_pos;
+static V caught_failure(void); /* 受け止めた実行時エラーの失敗(後で定義) */
 
 __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
     fflush(stdout);
@@ -1571,13 +1573,14 @@ static V act_run(Act *a) {
     case A_TRY: {
         TryFrame f;
         f.prev = try_top;
-        f.quiet = 0;
+        f.quiet = a->b == 0; /* 「で」を省いたときは、エラーの文を書かずに失敗にする */
         try_top = &f;
         if (setjmp(f.jb) == 0) {
             V r = perform(a->a);
             try_top = f.prev;
-            return r;
+            return a->b ? r : rt_construct("成功", 1, &r, 0);
         }
+        if (!a->b) return caught_failure();
         return perform(a->b); /* fail_msg が try_top を戻している */
     }
     case A_RUNALL: {
@@ -1719,8 +1722,96 @@ V rt_do_seq(V v, V k, int32_t pos) {
 
 V rt_do_result(V v) { return is_monadic(v) ? v : mk_pure(v); }
 
+static int is_failure(V v) {
+    return TAG(v) == T_REC && !strcmp(AS(Rec, v)->c->type, "成否") && !strcmp(AS(Rec, v)->c->name, "失敗");
+}
+static V fail_trace(V v) { Rec *r = AS(Rec, v); return r->traced ? r->v[r->c->n] : V_EMPTY; }
+static V fail_notes(V v) { Rec *r = AS(Rec, v); return r->traced ? r->v[r->c->n + 1] : V_EMPTY; }
+static V list_push(V l, V x) {
+    List *a = AS(List, l), *b = new_list(a->n + 1);
+    memcpy(b->it, a->it, a->n * sizeof(V));
+    b->it[a->n] = x;
+    return (V)(intptr_t)b;
+}
+static V with_trace(V v, V trace, V notes) {
+    Rec *r = AS(Rec, v);
+    int32_t n = r->c->n;
+    Rec *o = rt_alloc(sizeof(Rec) + (n + 2) * sizeof(V));
+    o->tag = T_REC;
+    o->traced = 1;
+    o->c = r->c;
+    memcpy(o->v, r->v, n * sizeof(V));
+    o->v[n] = trace;
+    o->v[n + 1] = notes;
+    return (V)(intptr_t)o;
+}
+static int is_success(V v) {
+    if (TAG(v) != T_REC) return 0;
+    Ctor *c = AS(Rec, v)->c;
+    return (!strcmp(c->type, "成否") && !strcmp(c->name, "成功")) || (!strcmp(c->type, "有無") && !strcmp(c->name, "有"));
+}
+/* 「した 中身」で失敗を返した場所(行と関数の名前)を、失敗の値の見えない経路に足す */
+V rt_trace(V v, const char *fn, int32_t pos) {
+    if (TAG(v) == T_LIST) { /* 「それぞれ … した 中身」: 最初の失敗(無) */
+        List *l = AS(List, v);
+        for (int64_t i = 0; i < l->n; i++)
+            if (!is_success(l->it[i])) { v = l->it[i]; break; }
+    }
+    if (!is_failure(v)) return v;
+    char buf[64];
+    int k = snprintf(buf, sizeof buf, "%d行目 ", pos & 0xfffff);
+    Buf b = {0};
+    buf_add(&b, buf, (size_t)k);
+    buf_cat(&b, fn);
+    V e = mk_str(b.s, (int64_t)b.n);
+    free(b.s);
+    return with_trace(v, list_push(fail_trace(v), e), fail_notes(v));
+}
+/* 「試行する」(で を省く)・「試算する」で受け止めた実行時エラーの失敗。起きた場所を経路の先頭に入れる */
+static V caught_failure(void) {
+    V why = rt_str(fail_last_msg, (int64_t)strlen(fail_last_msg));
+    V f = rt_construct("失敗", 1, &why, 0);
+    int line = fail_last_pos & 0xfffff, col = (fail_last_pos >> 20) & 0x7ff;
+    if (!line) return f;
+    char buf[96];
+    int k = col ? snprintf(buf, sizeof buf, "%d行目 %d文字目(ここで実行時エラー)", line, col)
+                : snprintf(buf, sizeof buf, "%d行目(ここで実行時エラー)", line);
+    return with_trace(f, list_push(V_EMPTY, mk_str(buf, k)), V_EMPTY);
+}
+/* 失敗の詳細: 説明(外側から)、理由、経路(内側から) */
+static char *failure_detail(V v) {
+    V why = AS(Rec, v)->v[0];
+    List *notes = AS(List, fail_notes(v)), *trace = AS(List, fail_trace(v));
+    Buf b = {0};
+    buf_cat(&b, "");
+    for (int64_t i = notes->n - 1; i >= 0; i--) {
+        if (i < notes->n - 1) buf_cat(&b, "\n  原因: ");
+        buf_cat(&b, AS(Str, notes->it[i])->s);
+        buf_cat(&b, "のに失敗しました");
+    }
+    if (notes->n) buf_cat(&b, "\n  原因: ");
+    buf_cat(&b, TAG(why) == T_STR ? AS(Str, why)->s : show(why));
+    if (trace->n) buf_cat(&b, "\n  経路:");
+    for (int64_t i = 0; i < trace->n; i++) {
+        buf_cat(&b, "\n    ");
+        buf_cat(&b, AS(Str, trace->it[i])->s);
+    }
+    return b.s;
+}
+
 /* 「…した 中身」: 成否の成功・有無の有なら中の値、失敗・無なら 0 */
 V rt_unwrap(V v, const char *name, int32_t pos) {
+    if (TAG(v) == T_LIST) { /* 「それぞれ … した 中身」: 全部が成功なら値のリスト */
+        List *l = AS(List, v);
+        if (l->n == 0) return v;
+        List *out = new_list(l->n);
+        for (int64_t i = 0; i < l->n; i++) {
+            V x = rt_unwrap(l->it[i], name, pos);
+            if (!x) return 0;
+            out->it[i] = x;
+        }
+        return (V)(intptr_t)out;
+    }
     if (TAG(v) == T_REC) {
         Ctor *c = AS(Rec, v)->c;
         if (!strcmp(c->type, "成否") || !strcmp(c->type, "有無")) {
@@ -1732,18 +1823,21 @@ V rt_unwrap(V v, const char *name, int32_t pos) {
 }
 
 /* 手順の中の「…した 中身」: 成功なら続き k に中の値を渡し、失敗なら手順をそこで終えて失敗を結果にする */
-static V unwrap_then(V v, V k, const char *name, int32_t pos) {
-    V x = rt_unwrap(v, name, pos);
-    return x ? apply1(k, x, pos) : mk_pure(v);
+typedef struct { V k; const char *name, *fn; int32_t pos; } UnwrapData;
+static V unwrap_then(V v, UnwrapData *d) {
+    V x = rt_unwrap(v, d->name, d->pos);
+    return x ? apply1(d->k, x, d->pos) : mk_pure(rt_trace(v, d->fn, d->pos));
 }
-static V k_unwrap(void *up, V *args, int32_t pos) {
-    KData *d = up;
-    return unwrap_then(args[0], d->f, (const char *)(intptr_t)d->m, d->pos);
-}
-V rt_do_unwrap(V m, V k, const char *name, int32_t pos) {
+static V k_unwrap(void *up, V *args, int32_t pos) { return unwrap_then(args[0], up); }
+V rt_do_unwrap(V m, V k, const char *name, const char *fn, int32_t pos) {
+    UnwrapData *d = rt_alloc(sizeof(UnwrapData));
+    d->k = k;
+    d->name = name;
+    d->fn = fn;
+    d->pos = pos;
     int t = TAG(m);
-    if (t == T_ACT || t == T_PURE) return chain(m, mk_k("中身", k_unwrap, k, (V)(intptr_t)name, pos), pos);
-    return unwrap_then(m, k, name, pos);
+    if (t == T_ACT || t == T_PURE) return chain(m, mk_builtin("中身", 1, PARTS_WO, NULL, k_unwrap, d), pos);
+    return unwrap_then(m, d);
 }
 
 /* 「の 結果」の引数: 1つなら写像、2つ以上なら前から順に連鎖して最後を写像する */
@@ -2341,9 +2435,9 @@ static V mk_net(int kind, const char *name, V x, V y, int32_t pos) {
     AS(Act, v)->pos = pos;
     return v;
 }
-BI(s_try) { /* を, で */
+BI(s_try) { /* を, で(「で」を省くと成否を返す) */
     const char *parts[2] = {"を", "で"};
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < (a[1] ? 2 : 1); i++) {
         int t = TAG(a[i]);
         if (t != T_ACT && t != T_PURE) fail(pos, "「試行する」の「%s」は動作でなければなりません(「%s」が渡されました)", parts[i], plain(a[i]).s);
     }
@@ -2717,6 +2811,45 @@ BI(m_exit) {
     V n = need_num(a[0], pos);
     if (!IS_INT(n) || INT_VAL(n) < 0 || INT_VAL(n) > 255) fail(pos, "「%s」は終了コードではありません(0 から 255 までの整数です)", plain(n).s);
     return mk_act_pos(A_EXIT, "終了する", n, 0, pos);
+}
+BI(f_explain) { /* を, で */
+    Str *note = need_str(a[1], "「失敗説明する」の「で」", pos);
+    if (!is_failure(a[0])) return a[0];
+    return with_trace(a[0], fail_trace(a[0]), list_push(fail_notes(a[0]), (V)(intptr_t)note));
+}
+BI(f_detail) {
+    if (!is_failure(a[0])) fail(pos, "「失敗詳細にする」の「を」は失敗の値でなければなりません(「%s」が渡されました)", show(a[0]));
+    char *s = failure_detail(a[0]);
+    V r = mk_str(s, (int64_t)strlen(s));
+    free(s);
+    return r;
+}
+
+BI(m_numcheck) { /* 数にできれば 数 の 成功、できなければ エラーの文 の 失敗 */
+    TryFrame f;
+    f.prev = try_top;
+    f.quiet = 1;
+    try_top = &f;
+    if (setjmp(f.jb) == 0) {
+        V r = b_to_number(up, a, pos);
+        try_top = f.prev;
+        return rt_construct("成功", 1, &r, 0);
+    }
+    V why = rt_str(fail_last_msg, (int64_t)strlen(fail_last_msg));
+    return rt_construct("失敗", 1, &why, 0);
+}
+BI(m_calc_try) { /* 引数を全部渡した関数の値を呼び、成功なら 値 の 成功、実行時エラーなら エラーの文 の 失敗 */
+    need_fn(a[0], pos);
+    TryFrame f;
+    f.prev = try_top;
+    f.quiet = 1;
+    try_top = &f;
+    if (setjmp(f.jb) == 0) {
+        V r = apply(a[0], 0, NULL, pos);
+        try_top = f.prev;
+        return rt_construct("成功", 1, &r, 0);
+    }
+    return caught_failure();
 }
 BI(m_abort) {
     fail_msg(pos, need_str(a[0], "「中断する」の「を」", pos)->s);
@@ -3365,7 +3498,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"バイト数にする", 1, P1_WO, NULL, s_bytes},
     {"文字にする", 1, P1_WO, NULL, s_chr},
     {"文字コードにする", 1, P1_WO, NULL, s_ord},
-    {"試行する", 2, P2_WO_DE, NULL, s_try},
+    {"試行する", 2, P2_WO_DE, R_1_OPT, s_try},
     {"バイト列にする", 1, P1_WO, NULL, m_tobytes},
     {"バイト列組立する", 1, P1_WO, NULL, m_build},
     {"数列にする", 1, P1_WO, NULL, m_list},
@@ -3385,6 +3518,10 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"終了する", 1, P1_WO, NULL, m_exit},
     /* 「基本」の組み込み */
     {"中断する", 1, P1_WO, NULL, m_abort},
+    {"失敗説明する", 2, P2_WO_DE, NULL, f_explain},
+    {"失敗詳細にする", 1, P1_WO, NULL, f_detail},
+    {"数値確認する", 1, P1_WO, NULL, m_numcheck},
+    {"試算する", 1, P1_WO, NULL, m_calc_try},
     /* 「スレッド」の組み込み */
     {"並行開始する", 1, P1_WO, NULL, t_spawn},
     {"合流する", 1, P1_WO, NULL, t_join},
@@ -3547,10 +3684,7 @@ void rt_top(V v) {
 void rt_top_unwrap(V v) {
     int t = TAG(v);
     V r = (t == T_ACT || t == T_PURE) ? perform(v) : v;
-    if (TAG(r) == T_REC && !strcmp(AS(Rec, r)->c->type, "成否") && !strcmp(AS(Rec, r)->c->name, "失敗")) {
-        V why = AS(Rec, r)->v[0];
-        fail_msg(0, TAG(why) == T_STR ? AS(Str, why)->s : show(why));
-    }
+    if (is_failure(r)) fail_msg(0, failure_detail(r));
     if (t != T_ACT && t != T_PURE) rt_top(v);
 }
 

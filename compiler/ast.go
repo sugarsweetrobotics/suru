@@ -147,6 +147,8 @@ type Run struct {
 	Line Pos
 	// Unwrap なら「…した 中身」: 成功(有)なら中の値、失敗(無)なら一番内側の関数か手順がその失敗を返す
 	Unwrap bool
+	// Fn は「した 中身」を書いた関数の名前(失敗の経路に使う)
+	Fn string
 }
 type Do struct {
 	Statements []Node

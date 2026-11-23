@@ -1124,9 +1124,14 @@ class Checker:
             self.exits.pop()
         return TFun(params, result)
 
-    def unwrap_type(self, value: Any, target: Any, call: Any, line: Any) -> Any:
-        """「した 中身」: value(成否・有無)の中の値の型。失敗は target(返す先の型)として返す"""
-        name = _call_name(call)
+    def unwrap_type(self, value: Any, target: Any, call: Any, line: Any, name: str = "") -> Any:
+        """「した 中身」: value(成否・有無)の中の値の型。失敗は target(返す先の型)として返す。
+        「xs の それぞれ を f した 中身」なら value は成否(有無)のリストで、中の値のリストになる"""
+        if isinstance(call, Call) and any(isinstance(a, Each) for a in call.args.values()):
+            elem = TVar()
+            self.expect(value, lst(elem), line, "「それぞれ … した 中身」の前")
+            return lst(self.unwrap_type(elem, target, None, line, name=_call_name(call)))
+        name = name or _call_name(call)
         kind = next((t.name for t in (prune(value), prune(target)) if isinstance(t, TCon) and t.name in UNWRAP_TYPES),
                     UNWRAP_TYPES[0])
         inner = TVar()
@@ -1963,10 +1968,46 @@ def _t_abort(c, a, line):
     return TVar()
 
 
-@prim("試行する", {WO: True, "で": True}, lambda: (lambda x: TFun([(WO, act(x)), ("で", act(x))], act(x)))(TVar()))
+def _result_t(a: Any, e: Any) -> TCon:
+    return TCon("成否", (a, e))
+
+
+@prim("失敗説明する", {WO: True, "で": True},
+      lambda: (lambda a, e: TFun([(WO, _result_t(a, e)), ("で", STR)], _result_t(a, e)))(TVar(), TVar()))
+def _t_explain(c, a, line):
+    r = _result_t(TVar(), TVar())
+    _need(c, a, WO, r, line, "失敗説明する")
+    _need(c, a, "で", STR, line, "失敗説明する")
+    return r
+
+
+@prim("失敗詳細にする", {WO: True}, lambda: TFun([(WO, _result_t(TVar(), TVar()))], STR))
+def _t_detail(c, a, line):
+    _need(c, a, WO, _result_t(TVar(), TVar()), line, "失敗詳細にする")
+    return STR
+
+
+@prim("数値確認する", {WO: True}, lambda: TFun([(WO, STR)], _result_t(NUM, STR)))
+def _t_numcheck(c, a, line):
+    _need(c, a, WO, STR, line, "数値確認する")
+    return _result_t(NUM, STR)
+
+
+@prim("試算する", {WO: True}, lambda: (lambda a: TFun([(WO, TFun([], a))], _result_t(a, STR)))(TVar()))
+def _t_calc_try(c, a, line):
+    r = TVar()
+    if WO in a:
+        c.unify_or(a[WO], TFun([], r), line,
+                   lambda sa, sb: f"「試算する」の「を」には、引数を全部渡した関数の値(「… すること」)が必要ですが、{sa}が渡されています")
+    return _result_t(r, STR)
+
+
+@prim("試行する", {WO: True, "で": False}, lambda: (lambda x: TFun([(WO, act(x)), ("で", act(x))], act(x)))(TVar()))
 def _t_try(c, a, line):
     x = TVar()
     _need(c, a, WO, act(x), line, "試行する")
+    if "で" not in a:
+        return act(TCon("成否", (x, STR)))  # 「で」を省くと、実行時エラーを失敗(エラーの文)にする
     _need(c, a, "で", act(x), line, "試行する")
     return act(x)
 # 通信(「通信」の組み込み)。待受口と接続は番号

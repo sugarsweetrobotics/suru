@@ -94,8 +94,9 @@ declare i64 @rt_call_ex(i64, i32, ptr, ptr, ptr, i32)
 declare i64 @rt_ref(i64, i32, ptr, ptr, ptr, i32)
 declare i64 @rt_chain_then(i64, i64, i32)
 declare i64 @rt_do_run(i64, i64, ptr, i32)
-declare i64 @rt_do_unwrap(i64, i64, ptr, i32)
+declare i64 @rt_do_unwrap(i64, i64, ptr, ptr, i32)
 declare i64 @rt_unwrap(i64, ptr, i32)
+declare i64 @rt_trace(i64, ptr, i32)
 declare i64 @rt_do_seq(i64, i64, i32)
 declare i64 @rt_do_result(i64)
 declare i64 @rt_std(ptr)
@@ -876,7 +877,8 @@ class Compiler:
             early, cont = fg.new_label(), fg.new_label()
             fg.emit(f"br i1 {b}, label %{early}, label %{cont}")
             fg.start(early)
-            fg.emit(f"ret i64 {v}")
+            t = fg.call("i64", "@rt_trace", f"i64 {v}, ptr {self.cstr(node.fn)}, i32 {pos_of(node)}")
+            fg.emit(f"ret i64 {t}")
             fg.start(cont)
             return x
         if sc.lookup(key) is None:
@@ -903,7 +905,8 @@ class Compiler:
                     return self.do(stmts, i, local, kfg, line)
 
                 k = self.closure("続き", [(S.WO, key)], rest_u, sc, fg, check_pred=False)
-                return fg.call("i64", "@rt_do_unwrap", f"i64 {m}, i64 {k}, ptr {self.cstr(S._call_name(r.call))}, i32 {pos_of(r)}")
+                return fg.call("i64", "@rt_do_unwrap", f"i64 {m}, i64 {k}, ptr {self.cstr(S._call_name(r.call))}, "
+                                                       f"ptr {self.cstr(r.fn)}, i32 {pos_of(r)}")
 
             def rest(local: Scope, kfg: FnGen) -> str:
                 return self.do(stmts, i, local, kfg, line)

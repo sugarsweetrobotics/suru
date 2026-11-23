@@ -264,12 +264,49 @@ func init() {
 		need(c, a, WO, STR, line, "中断する")
 		return newTVar()
 	})
-	prim("試行する", []partReq{req(WO), req("で")}, func() Type {
+	resultT := func(a, e Type) Type { return &TCon{"成否", []Type{a, e}} }
+	prim("失敗説明する", []partReq{req(WO), req("で")}, func() Type {
+		r := resultT(newTVar(), newTVar())
+		return &TFun{[]TParam{{WO, r}, {"で", STR}}, r}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		r := resultT(newTVar(), newTVar())
+		need(c, a, WO, r, line, "失敗説明する")
+		need(c, a, "で", STR, line, "失敗説明する")
+		return r
+	})
+	prim("失敗詳細にする", []partReq{req(WO)}, func() Type {
+		return &TFun{[]TParam{{WO, resultT(newTVar(), newTVar())}}, STR}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		need(c, a, WO, resultT(newTVar(), newTVar()), line, "失敗詳細にする")
+		return STR
+	})
+	prim("数値確認する", []partReq{req(WO)}, func() Type {
+		return &TFun{[]TParam{{WO, STR}}, resultT(NUM, STR)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		need(c, a, WO, STR, line, "数値確認する")
+		return resultT(NUM, STR)
+	})
+	prim("試算する", []partReq{req(WO)}, func() Type {
+		x := newTVar()
+		return &TFun{[]TParam{{WO, &TFun{nil, x}}}, resultT(x, STR)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		r := newTVar()
+		if t, ok := a.get(WO); ok {
+			c.unifyOr(t, &TFun{nil, r}, line, func(sa, sb string) string {
+				return "「試算する」の「を」には、引数を全部渡した関数の値(「… すること」)が必要ですが、" + sa + "が渡されています"
+			})
+		}
+		return resultT(r, STR)
+	})
+	prim("試行する", []partReq{req(WO), opt("で")}, func() Type {
 		x := newTVar()
 		return &TFun{[]TParam{{WO, act(x)}, {"で", act(x)}}, act(x)}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
 		x := newTVar()
 		need(c, a, WO, act(x), line, "試行する")
+		if _, ok := a.get("で"); !ok {
+			return act(&TCon{"成否", []Type{x, STR}}) // 「で」を省くと、実行時エラーを失敗(エラーの文)にする
+		}
 		need(c, a, "で", act(x), line, "試行する")
 		return act(x)
 	})
