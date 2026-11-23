@@ -471,3 +471,15 @@ def test_読めないプログラムはどちらも誤りになる(dumper, tmp_p
     py, _ = py_program(source, str(tmp_path))
     assert py == ["誤り"]
     assert su_dump(dumper, path, {}, {}, program=True) == ["誤り"]
+
+
+def test_読み込みの後でも自分の型と形を使える(dumper, tmp_path):
+    """このファイルの型と形は lib/構文.suru が自分で集める(読み込みの文の後の文でも見える)"""
+    source = ("「数学」 を 読み込む\n点 とは 横 と 縦 の 組\n点 を 横取得する は 数\n"
+              "p を 横取得する とは p の 横\n（3 と 4 の 点） を 横取得して 表示する\n")
+    path = tmp_path / "prog.suru"
+    path.write_text(source, encoding="utf-8")
+    (tmp_path / "数学.suru").write_text((ROOT / "examples" / "数学.suru").read_text(encoding="utf-8"), encoding="utf-8")
+    py, _ = py_program(source, str(tmp_path))
+    assert py != ["誤り"]
+    assert su_dump(dumper, path, {}, {}, program=True) == py

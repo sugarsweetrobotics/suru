@@ -12,8 +12,8 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	suru "github.com/sugarsweetrobotics/suru"
-	"github.com/sugarsweetrobotics/suru/compiler"
+	suru "github.com/suru-lang/suru"
+	"github.com/suru-lang/suru/compiler"
 )
 
 // FindCC は使える C コンパイラ($CC か clang)。なければ ""

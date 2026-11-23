@@ -1,0 +1,88 @@
+# VS Code 拡張のリリース: vscode-v0.4.0 のようなタグを push すると動きます。
+# 拡張の版(editors/vscode/package.json)は本体の版とは別に上げます。
+#   1. 版を調べて、suru-ls を同梱した .vsix を作る
+#   2. GitHub Releases に置く
+#   3. VS Code Marketplace に公開する(シークレット VSCE_PAT が要ります)
+#   4. Open VSX にも公開する(シークレット OVSX_PAT があるときだけ)
+# 手で動かす(workflow_dispatch)ときは 1 だけを行い、何も公開しません。
+# 準備と手順は docs/リリース.md にあります。
+name: VS Code 拡張のリリース
+
+on:
+  push:
+    tags: ["vscode-v[0-9]*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: .vsix を作る
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: editors/vscode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - if: github.ref_type == 'tag'
+        run: python3 ../../packaging/check_version.py "$GITHUB_REF_NAME"
+      - run: |
+          npm ci
+          ./build_server.sh
+          npx --yes @vscode/vsce package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vsix
+          path: editors/vscode/*.vsix
+
+  release:
+    name: GitHub Releases
+    if: github.ref_type == 'tag'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: vsix
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" *.vsix --repo "$GITHUB_REPOSITORY" \
+            --title "VS Code 拡張 ${GITHUB_REF_NAME#vscode-v}" \
+            --notes "「する」の VS Code 拡張です。VS Code の拡張機能ビューで「する」を検索して入れるか、この .vsix を「VSIX からのインストール…」で入れてください。"
+
+  marketplace:
+    name: Marketplace に公開
+    if: github.ref_type == 'tag'
+    needs: release
+    runs-on: ubuntu-latest
+    environment: marketplace
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          name: vsix
+      - name: VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx --yes @vscode/vsce publish --packagePath *.vsix
+      - name: Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "OVSX_PAT がないので、Open VSX には公開しません"
+            exit 0
+          fi
+          npx --yes ovsx publish *.vsix -p "$OVSX_PAT"

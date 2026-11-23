@@ -1,0 +1,169 @@
+# 「する」本体のリリース: v0.1.0 のようなタグを push すると動きます。
+#   1. 版がそろっているか調べて、テストする
+#   2. PyPI 用の wheel と sdist、OS ごとの suruc・suru-ls・kumu を作る
+#   3. GitHub Releases に置く
+#   4. PyPI に公開する(Trusted Publishing。トークンは要りません)
+#   5. Homebrew の tap(リポジトリの持ち主の homebrew-suru)の formula を新しくする
+# 持ち主やリポジトリの名前はここに書かず、GitHub から受け取ります(organization に移しても直さなくてよい)。
+# 手で動かす(workflow_dispatch)ときは 1 と 2 だけを行い、何も公開しません。
+# 準備と手順は docs/リリース.md にあります。
+name: リリース
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: 版とテスト
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - id: version
+        name: 版を調べる
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            python3 packaging/check_version.py "$GITHUB_REF_NAME"
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(python3 -c 'import re;print(re.search(r"__version__ = \"(.+?)\"", open("suru.py", encoding="utf-8").read()).group(1))')" >> "$GITHUB_OUTPUT"
+          fi
+      - name: テスト
+        run: |
+          pip install pytest
+          python3 -m pytest -q tests/test_suru.py tests/test_check.py tests/test_compile.py tests/test_go_compiler.py
+          go test ./...
+
+  python:
+    name: wheel と sdist
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install build twine
+          python3 -m build
+          python3 -m twine check dist/*
+          pip install dist/*.whl
+          cd /tmp && suru --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+
+  binaries:
+    name: suruc と suru-ls
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: packaging/build_binaries.sh "${{ needs.check.outputs.version }}" bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: bin/
+
+  # Linux で作ったものを macOS で動かして確かめる
+  smoke-macos:
+    name: macOS で動かす
+    needs: [check, binaries]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+      - run: |
+          tar -xzf suru-*-darwin-arm64.tar.gz
+          cd suru-*-darwin-arm64
+          ./suruc --version
+          ./suru-ls --version
+          printf '1 と 2 を 加算する\n' > t.suru
+          ./suruc t.suru && ./t
+
+  release:
+    name: GitHub Releases
+    if: github.ref_type == 'tag'
+    needs: [check, python, binaries, smoke-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" assets/* \
+            --title "する ${{ needs.check.outputs.version }}" \
+            --notes "$(sed "s|__REPO__|$GITHUB_REPOSITORY|g; s|__OWNER__|$GITHUB_REPOSITORY_OWNER|g" packaging/release_notes.md)"
+
+  pypi:
+    name: PyPI に公開
+    if: github.ref_type == 'tag'
+    needs: release
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/suru-lang/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  homebrew:
+    name: Homebrew の tap
+    if: github.ref_type == 'tag'
+    needs: [check, release]
+    runs-on: ubuntu-latest
+    environment: homebrew
+    steps:
+      - uses: actions/checkout@v4
+      - name: formula を作る
+        run: |
+          version="${{ needs.check.outputs.version }}"
+          curl -fsSL "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/v${version}.tar.gz" -o src.tar.gz
+          sha=$(sha256sum src.tar.gz | cut -d' ' -f1)
+          python3 packaging/homebrew/make_formula.py --repo "$GITHUB_REPOSITORY" "$version" "$sha" > suru.rb
+          { echo '```ruby'; cat suru.rb; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: tap に push する
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN がないので、tap は新しくしません(formula はこの実行のまとめにあります)"
+            exit 0
+          fi
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/${GITHUB_REPOSITORY_OWNER}/homebrew-suru.git" tap
+          mkdir -p tap/Formula
+          cp suru.rb tap/Formula/suru.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/suru.rb
+          git commit -m "suru ${{ needs.check.outputs.version }}"
+          git push

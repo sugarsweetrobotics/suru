@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sugarsweetrobotics/suru/cmd/internal/native"
-	"github.com/sugarsweetrobotics/suru/compiler"
+	"github.com/suru-lang/suru/cmd/internal/native"
+	"github.com/suru-lang/suru/compiler"
 )
 
 func TestMain(m *testing.M) {

@@ -12,10 +12,21 @@ python3 suru.py --翻訳 examples/basic.suru  # バイナリ examples/basic を�
 python3 -m pytest tests               # テスト
 ```
 
+### 入れ方
+
+| 方法 | 入れ方 | 入るもの |
+|---|---|---|
+| pip | `pip install suru-lang` | `suru` |
+| Homebrew(macOS・Linux) | `brew install suru-lang/suru/suru` | `suru`・`suruc`・`suru-ls`・`kumu` |
+| バイナリ | [GitHub Releases](https://github.com/suru-lang/suru/releases) の `suru-版-OS-CPU.tar.gz` | `suruc`・`suru-ls`・`kumu` |
+| VS Code | 拡張機能ビューで「する」を検索 | 拡張(`suru-ls` を同梱) |
+
+バイナリを作る(`suru --翻訳`、`suruc`)には、どの方法でも手元に clang が要ります。macOS では `xcode-select --install`、Ubuntu などでは `sudo apt install clang` で入ります。Windows 用は `suru-ls` だけです(作ったプログラムの実行時ライブラリが POSIX 向けなので、WSL を使ってください)。
+
 ### pip で入れる
 
 ```sh
-pip install git+https://github.com/sugarsweetrobotics/suru   # または、取ってきたフォルダで pip install .
+pip install suru-lang   # 最新のリポジトリからなら pip install git+https://github.com/suru-lang/suru(取ってきたフォルダで pip install . も可)
 suru examples/basic.suru          # python3 suru.py と同じ(--検査・--検査なし・--翻訳 も使えます)
 suru --version
 ```
@@ -27,7 +38,7 @@ suru --version
 `--翻訳` と同じことを、Go で書いたコンパイラ `suruc` でもできます。出す LLVM IR は Python 版と一字一句同じで、IR を作るまでが 14〜35 倍ほど速くなります(Go 1.23 以降が必要です)。
 
 ```sh
-go install github.com/sugarsweetrobotics/suru/cmd/suruc@latest   # または、取ってきたフォルダで go build ./cmd/suruc
+go install github.com/suru-lang/suru/cmd/suruc@latest   # または、取ってきたフォルダで go build ./cmd/suruc
 suruc examples/basic.suru          # バイナリ examples/basic を作る(clang が必要)
 suruc -O0 examples/basic.suru      # clang の最適化を弱めて、もっと速く作る(-O0 〜 -O3。既定は -O2)
 suruc --ll examples/basic.suru     # LLVM IR だけを出す
@@ -40,7 +51,7 @@ suruc --ll examples/basic.suru     # LLVM IR だけを出す
 `kumu`(組む)は、プロジェクトの雛形作り・ビルド・実行を1つでこなす道具です(cargo のようなもの)。中に Go 版のコンパイラを持っているので、`suruc` は別に要りません(clang は必要です)。
 
 ```sh
-go install github.com/sugarsweetrobotics/suru/cmd/kumu@latest   # または、取ってきたフォルダで go build ./cmd/kumu
+go install github.com/suru-lang/suru/cmd/kumu@latest   # または、取ってきたフォルダで go build ./cmd/kumu
 kumu 新規 挨拶      # 挨拶/ に 組.suru・本体.suru・.gitignore を作る(new)
 cd 挨拶
 kumu 実行           # 出力/挨拶 を作って実行する(run。-- の後ろはプログラムへの引数)
@@ -515,6 +526,21 @@ x を y で 累乗する とは 外部の「pow」
 3. **suru.py と同じまとめ方をする。** 続けて書いた場合ごとの関数定義は引数のパターンマッチ1つにまとめ、「ただし」の定義は前の定義のブロックに、「それから」の文は前の文の後ろに付けます。読み込むファイルは読みません。形のフィールドの数、場合が全部書いてあるか、同じ名前の定義が離れていないか、外部の関数の名前と型のような意味の検査はしません。
 4. **suru.py と同じ構文木になることを確かめる。** `tests/test_syntax.py` が、手で選んだ式とプログラム、例とライブラリの全ファイル(プログラム全体と、すべての論理行)で、`suru.py` の構文木と同じになること、`suru.py` で読めないものは 構文 でも読めないことを確かめています。
 
+### 点検の構文木の規則
+
+1. **構文木を使う規則を4つ足す。** `suru --点検` は、ファイルを `lib/構文.suru` で構文木にして、次の書き方も知らせます。読み込むファイルの型と形も読んでから調べます。構文木にできないファイル(実行するとエラーになるもの)では、この4つは調べません。
+
+| 規則 | 知らせること |
+|---|---|
+| 冗長な真偽 | `もし c ならば 真 そうでなければ 偽`(`c` だけでよい)、`もし c ならば 偽 そうでなければ 真`(`c = 偽` でよい)、`x = 真`・`x != 偽`(`x` だけでよい)、`もし x が 真 ならば`(`もし x ならば` でよい)。`x = 偽` は値を打ち消すただ1つの書き方なので知らせません |
+| 同じ枝 | 「もし」の「ならば」の後と「そうでなければ」の後が同じ式 |
+| 自分との比較 | `x = x`・`x < x`・`もし x が x ならば` のように、同じ式どうしを比べている(結果はいつも同じ) |
+| 不要な括弧 | `（x）` のように中が1つの字句の括弧と、`（（…））` の外側の括弧で、外しても構文木が変わらないもの。一番外の文ごとに括弧を外して読み直し、構文木(行の番号は除く)が同じかで確かめるので、`（a の b） の （r）` のように読み方を決めている括弧は知らせません |
+
+2. **桁は近くの字句で出す。** 構文木は行の番号しか持たないので、知らせの桁は、その行の「もし」や比べる記号(`=`・`が` など)の最初のものの桁にします。同じ行に同じ形が2つあると、同じ桁で2回知らせることがあります。
+3. **構文 に点検の助けを置く。** `e を 構文内の子式群にする`(直接の中の式)、`e を 構文内の中式行取得する`(式の行)、`e を 構文内の無行表示文にする`(行の番号を除いた表示。同じ形の式かを比べる)、`論理行群 を 形群 で 型群 に 構文内の外せる括弧群にする`(外しても構文木が変わらない括弧の、開き括弧と閉じ括弧の字句の対)、`論理行群 を 構文内の定義形群にする` / `構文内の定義型名群にする`(そのファイルで定義している形と型の名前)。
+4. **読み込みの文の後でも、そのファイルの型を使える。** これまで `lib/構文.suru` は、読み込みの文の後の文を、そのファイルの型と形を集める前の状態で読んでいたので、「『点』という型はありません」の誤りになっていました。`tests/test_syntax.py` に、型や形を外から渡さずに確かめるテストを足しました。
+
 ### プロセス・パイプ・共有メモリ
 
 1. **`「プロセス」 を 読み込む` でほかのプログラムを動かす。** `lib/プロセス.suru` に する で書いてあり、C の `system`・`popen`・`pipe` などを外部の関数として呼びます。どれも動作です。文字列の命令は `/bin/sh` に渡し、リストで渡すものは1つずつ `'…'` で囲んでから渡します(空白や記号がそのまま引数になります)。始める前にそれまでの表示を出しておくので、表示の順は入れ替わりません。例は `examples/process.suru`。
@@ -701,6 +727,20 @@ c を 通路閉鎖する
 3. **設定は `組.suru` に する の定義で書く。** 書けるのは `名前`(必須)・`版`(既定は「0.1.0」)・`入口`(既定は「本体」)で、どれも `… とは 「…」` の文字列です。kumu は `組.suru` を実行せずに読むだけで、定義のほかの文、知らない項目、文字列でない値、2回書いた項目はエラーです(行を付けて知らせます)。句読点の書き方(`名前とは「挨拶」。`)でも書けます。`組.suru` は、今のフォルダから上へ探します。
 4. **作ったものは `出力/名前` に置く。** 入口のファイルのフォルダが読み込みの起点になるので、プロジェクトの中のファイルは今までどおり `「部品」 を 読み込む` で使えます。`新規` は `.gitignore` に `/出力/` を書きます。LLVM IR・最適化の強さ・実行時ライブラリ・kumu の版が前と同じなら clang を呼ばずに前のバイナリを使います(`出力/.名前.stamp` に覚えます)。
 5. **`実行` は作ったバイナリに引数と入出力をそのまま渡し、終了コードもそのまま返す。** `--` の後ろは全部プログラムへの引数です。kumu の知らせ(「…を組みました」)は標準エラーに出すので、プログラムの出力と混ざりません。
+
+### リリースと配布の方法
+
+1. **4つの方法で配る。** PyPI(`suru-lang`)、GitHub Releases(OS ごとの `suruc`・`suru-ls`・`kumu`)、Homebrew の tap(`suru-lang/homebrew-suru`)、VS Code Marketplace(拡張)です。どれも GitHub Actions がタグから作って公開します。手順と、初めに用意するもの(PyPI の Trusted Publishing、Marketplace の publisher など)は [docs/リリース.md](docs/リリース.md) にあります。
+
+2. **PyPI の名前は `suru-lang`。** `suru` はほかの人が使っていたので、パッケージの名前だけを変えました。入るコマンドとモジュールの名前は `suru` のままです。
+
+3. **タグは2種類。** `v0.1.0` の形のタグで本体(PyPI・GitHub Releases・Homebrew)を、`vscode-v0.4.0` の形のタグで VS Code 拡張を出します。拡張の版は本体と別に上げます。タグと `suru.py`・Go 版(`cmd/suruc`・`cmd/suru-ls`・`cmd/kumu`)の版が違えば、`packaging/check_version.py` が止めます。Go 版のバイナリの版は、ビルドのときに `-X main.version=…` でタグの版にします。
+
+4. **Windows 用は言語サーバーだけ。** 実行時ライブラリ(`runtime/suru_rt.c`)が POSIX(pthread・ソケット・シグナルなど)を使うので、Windows では `suruc` で作ったプログラムが動きません。Windows には VS Code 拡張のための `suru-ls` だけを配ります。
+
+5. **Homebrew はソースからビルドする。** formula(`packaging/homebrew/make_formula.py` が作る)は、タグのソースから Go で `suruc`・`suru-ls`・`kumu` を作り、Python 版の `suru` を libexec に置いてラッパーで動かします。clang は入れず、caveats で案内します(macOS では Xcode のコマンドラインツールに入っているので)。
+
+6. **持ち主の名前に頼らない。** ワークフローは tap やリリースの案内に使う持ち主の名前を GitHub から受け取ります。organization などに移したときは、`packaging/move_owner.py` が URL・Go のモジュールの道・tap・publisher をまとめて書きかえます(手順は [docs/リリース.md](docs/リリース.md) の「organization などに移すとき」)。
 
 ### 対話モード
 

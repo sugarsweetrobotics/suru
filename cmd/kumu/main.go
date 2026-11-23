@@ -21,12 +21,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	suru "github.com/sugarsweetrobotics/suru"
-	"github.com/sugarsweetrobotics/suru/cmd/internal/native"
-	"github.com/sugarsweetrobotics/suru/compiler"
+	suru "github.com/suru-lang/suru"
+	"github.com/suru-lang/suru/cmd/internal/native"
+	"github.com/suru-lang/suru/compiler"
 )
 
-const version = "0.1.0"
+// version はリリースのときに -ldflags "-X main.version=…" で書きかえる
+var version = "0.1.0"
 
 const usage = `使い方: kumu <命令> [オプション]
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sugarsweetrobotics/suru/cmd/internal/native"
+	"github.com/suru-lang/suru/cmd/internal/native"
 )
 
 func TestParseLint(t *testing.T) {
