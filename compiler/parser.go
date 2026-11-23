@@ -2391,6 +2391,9 @@ var StdPath = embeddedLibPrefix + "標準" + SourceSuffix
 // NetPath は通信ライブラリのファイルのパス
 var NetPath = embeddedLibPrefix + "通信" + SourceSuffix
 
+// ThreadPath はスレッドのライブラリのファイルのパス
+var ThreadPath = embeddedLibPrefix + "スレッド" + SourceSuffix
+
 // LibFS は同梱の lib/(cmd/suruc が設定する)
 var LibFS fs.FS
 

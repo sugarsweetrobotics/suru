@@ -1874,6 +1874,35 @@ _simple("受信する", [("から", NUM), (WO, NUM)], act(STR))
 _simple("送信する", [(WO, STR), ("へ", NUM)], act(NUM))
 _simple("切断する", [(WO, NUM)], act(NUM))
 
+# スレッド(「スレッド」の組み込み)。並行開始した結果は、合流する(待って結果を返す)動作
+def _thread(t: Any) -> TCon:
+    return TCon("スレッド", (t,))  # lib/スレッド.suru の型
+
+
+@prim("並行開始する", {WO: True}, lambda: (lambda x: TFun([(WO, act(x))], act(_thread(x))))(TVar()))
+def _t_spawn(c, a, line):
+    x = TVar()
+    _need(c, a, WO, act(x), line, "並行開始する")
+    return act(_thread(x))
+
+
+@prim("合流する", {WO: True}, lambda: (lambda x: TFun([(WO, _thread(x))], act(x)))(TVar()))
+def _t_join(c, a, line):
+    x = TVar()
+    _need(c, a, WO, _thread(x), line, "合流する")
+    return act(x)
+
+
+@prim("並列写像する", {WO: True, "で": True},
+      lambda: (lambda x, y: TFun([(WO, lst(x)), ("で", TFun([(WO, x)], y))], lst(y)))(TVar(), TVar()))
+def _t_pmap(c, a, line):
+    elem = TVar()
+    _need(c, a, WO, lst(elem), line, "並列写像する")
+    return lst(c.apply(a["で"], [elem], line, "「並列写像する」の「で」"))
+
+
+_simple("コア数取得する", [], act(NUM))
+
 
 def _seq_fun():
     a = TVar()

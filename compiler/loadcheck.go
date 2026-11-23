@@ -40,6 +40,11 @@ var netPrimitives = []builtinInfo{
 	{"送信する", nil}, {"切断する", nil},
 }
 
+// スレッド.suru の中と「スレッド内の…」でだけ使える組み込み
+var threadPrimitives = []builtinInfo{
+	{"並行開始する", nil}, {"合流する", nil}, {"並列写像する", nil}, {"コア数取得する", nil},
+}
+
 // libPrimitives は lib/ のファイルごとの組み込み(suru.py の LIB_PRIMITIVES)
 // (同梱のものでも、LibDir(SURU_LIB)のフォルダから読んだものでも)
 func libPrimitives(path string) []builtinInfo {
@@ -48,6 +53,8 @@ func libPrimitives(path string) []builtinInfo {
 		return stdPrimitives
 	case isLibFile(path, NetPath):
 		return netPrimitives
+	case isLibFile(path, ThreadPath):
+		return threadPrimitives
 	}
 	return nil
 }

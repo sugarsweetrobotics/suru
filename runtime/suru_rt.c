@@ -64,7 +64,8 @@ typedef struct Fn {
     struct Trait *trait;    /* FK_TRAIT */
     int32_t wo, wo_list;
 } Fn;
-enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT };
+enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
+       A_SPAWN, A_JOIN, A_NCPU };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
@@ -142,7 +143,8 @@ typedef struct SThread {
     char *top;                    /* スタックの底(一番大きい番地)。ここまで調べる */
     char *lo;                     /* 手放したときのスタックの位置(NULL ならまだスタックに値がない) */
     jmp_buf regs;                 /* 手放したときのレジスタ */
-    uintptr_t start;              /* 始める動作(始まるまで GC から守る) */
+    uintptr_t start;              /* 始める動作(終わるまで GC から守る) */
+    uintptr_t cell;               /* 結果を書くところ(ThreadCell) */
     struct SThread *next;
 } SThread;
 static SThread main_thread;
@@ -351,6 +353,7 @@ __attribute__((noinline)) static void gc_mark_stack(void) {
     for (SThread *t = threads; t; t = t->next) {
         if (t == self_thread) continue;
         if (t->start) gc_mark(t->start);
+        if (t->cell) gc_mark(t->cell);
         if (!t->lo) continue;
         gc_mark_range((const void *)&t->regs, (const void *)(&t->regs + 1));
         gc_mark_range((const void *)t->lo, t->top);
@@ -523,8 +526,10 @@ static int display_width(const char *s, size_t n) {
 }
 
 /* 「試行する」の中なら、実行時エラーで止まらずに代わりの動作へ戻る */
-typedef struct TryFrame { jmp_buf jb; struct TryFrame *prev; } TryFrame;
+typedef struct TryFrame { jmp_buf jb; struct TryFrame *prev; int quiet; } TryFrame; /* quiet: 文を書かない(並列写像の中) */
 static _Thread_local TryFrame *try_top;
+static _Thread_local char *fail_last_msg;
+static _Thread_local int32_t fail_last_pos;
 
 __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
     fflush(stdout);
@@ -538,9 +543,14 @@ __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
     buf_cat(&b, msg);
     if (try_top) {
         /* 試行する の中: エラーの文だけを書いて、代わりの動作へ */
-        fprintf(stderr, "%s\n", b.s);
-        fflush(stderr);
+        if (!try_top->quiet) {
+            fprintf(stderr, "%s\n", b.s);
+            fflush(stderr);
+        }
         free(b.s);
+        free(fail_last_msg); /* スレッドの一番外の受け口が、合流したときに同じエラーにするために覚えておく */
+        fail_last_msg = strdup(msg);
+        fail_last_pos = pos;
         TryFrame *f = try_top;
         try_top = f->prev;
         longjmp(f->jb, 1);
@@ -1442,6 +1452,7 @@ static V dispatch(Fn *m, V *args, int32_t pos) {
 static V perform(V v);
 static V net_run(Act *a);
 static V mem_run(Act *a);
+static V thread_run(Act *a);
 
 static V act_run(Act *a) {
     switch (a->kind) {
@@ -1470,6 +1481,7 @@ static V act_run(Act *a) {
     case A_TRY: {
         TryFrame f;
         f.prev = try_top;
+        f.quiet = 0;
         try_top = &f;
         if (setjmp(f.jb) == 0) {
             V r = perform(a->a);
@@ -1487,6 +1499,7 @@ static V act_run(Act *a) {
     }
     case A_CALL: return apply1(a->a, V_EMPTY, a->pos); /* 外部の関数を呼ぶ動作 */
     case A_PEEK: case A_POKE: case A_ERRNO: case A_FAIL: case A_ARGS: case A_EXIT: return mem_run(a);
+    case A_SPAWN: case A_JOIN: case A_NCPU: return thread_run(a);
     case A_CHAIN: return apply1(a->b, perform(a->a), 0); /* 続きの動作は perform のループで行う */
     case A_FMAP: return apply1(a->b, perform(a->a), 0);
     }
@@ -2504,6 +2517,186 @@ static V mem_run(Act *a) {
     return 0;
 }
 
+
+/* ------------------------------------------------------------------ */
+/* スレッド(「スレッド」の組み込み)                                   */
+/* ------------------------------------------------------------------ */
+
+/* スレッドの結果を書くところ(GC の領域。合流する動作と、動いているスレッドの両方から見える) */
+typedef struct { int64_t state; V result; char *msg; int32_t pos; } ThreadCell; /* state: 0 動いている、1 終わった、2 エラー */
+static pthread_cond_t thread_done_cv = PTHREAD_COND_INITIALIZER;
+#define THREAD_STACK ((size_t)256 << 20) /* 仮想のメモリなので、使った分だけ実際に使う */
+
+typedef struct { V f; List *xs, *out; int64_t lo, hi; int32_t pos; } MapTask;
+
+static V thread_perform(V v) { return perform(v); }
+static V thread_map(V v) {
+    MapTask *m = (MapTask *)(intptr_t)v;
+    for (int64_t i = m->lo; i < m->hi; i++) m->out->it[i] = apply1(m->f, m->xs->it[i], m->pos);
+    return V_EMPTY;
+}
+
+typedef struct { SThread *t; V (*run)(V); int quiet; } ThreadStart;
+
+static void thread_finish(SThread *t, ThreadCell *c) {
+    /* 表から外してから知らせる(実行権を持っている) */
+    SThread **pp = &threads;
+    while (*pp != t) pp = &(*pp)->next;
+    *pp = t->next;
+    pthread_mutex_lock(&world_mu);
+    pthread_cond_broadcast(&thread_done_cv);
+    pthread_mutex_unlock(&world_mu);
+    (void)c;
+}
+
+static void *thread_main(void *arg) {
+    ThreadStart st = *(ThreadStart *)arg;
+    free(arg);
+    SThread *t = st.t;
+    self_thread = t;
+    t->top = __builtin_frame_address(0);
+    world_acquire();
+    ThreadCell *c = (ThreadCell *)(intptr_t)t->cell;
+    /* 一番外の受け口: 実行時エラーはこのスレッドだけを終える。並行開始した動作ならその場で文を書き、
+       合流したときは「エラーで終わりました」のエラー。並列写像なら文を書かず、待つ側で同じエラーにする */
+    TryFrame f;
+    f.prev = NULL;
+    f.quiet = st.quiet;
+    try_top = &f;
+    if (setjmp(f.jb) == 0) {
+        V r = st.run((V)t->start);
+        try_top = NULL;
+        c->result = r;
+        c->state = 1;
+    } else {
+        if (st.quiet) {
+            c->pos = fail_last_pos;
+            c->msg = fail_last_msg;
+            fail_last_msg = NULL;
+        }
+        c->state = 2;
+    }
+    thread_finish(t, c);
+    world_release();
+    free(t);
+    return NULL;
+}
+
+/* 新しいスレッドで run(arg) を始める。結果は返した ThreadCell に書く */
+static ThreadCell *thread_start(V (*run)(V), V arg, int quiet, int32_t pos) {
+    ThreadCell *c = rt_alloc(sizeof(ThreadCell));
+    SThread *t = calloc(1, sizeof(SThread));
+    ThreadStart *st = malloc(sizeof(ThreadStart));
+    if (!t || !st) fail(pos, "メモリが足りません");
+    c->pos = pos;
+    t->start = (uintptr_t)arg;
+    t->cell = (uintptr_t)c;
+    st->t = t;
+    st->run = run;
+    st->quiet = quiet;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, THREAD_STACK);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    if (!world_multi) {
+        /* 初めてのスレッド: このスレッドが実行権を持っている状態(札 0)から番号札を使い始める */
+        world_serving = 0;
+        world_next = 1;
+        world_multi = 1;
+    }
+    t->next = threads;
+    threads = t;
+    pthread_t th;
+    int e = pthread_create(&th, &attr, thread_main, st);
+    pthread_attr_destroy(&attr);
+    if (e != 0) {
+        threads = t->next;
+        free(t);
+        free(st);
+        fail(pos, "スレッドを始められませんでした(%s)", strerror(e));
+    }
+    return c;
+}
+
+/* 終わるまで待って結果を返す(エラーで終わっていたら同じエラー) */
+static V thread_wait(ThreadCell *c) {
+    if (c->state == 0) {
+        world_release();
+        pthread_mutex_lock(&world_mu);
+        while (__atomic_load_n(&c->state, __ATOMIC_ACQUIRE) == 0) pthread_cond_wait(&thread_done_cv, &world_mu);
+        pthread_mutex_unlock(&world_mu);
+        world_acquire();
+    }
+    if (c->state == 2) {
+        if (c->msg) fail_msg(c->pos, c->msg);
+        fail(c->pos, "並行開始した動作はエラーで終わりました");
+    }
+    return c->result;
+}
+
+static long cpu_count(void) {
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n < 1 ? 1 : n;
+}
+
+static V thread_run(Act *a) {
+    switch (a->kind) {
+    case A_SPAWN: {
+        fflush(stdout); /* それまでの表示を先に出しておく */
+        /* 結果は「スレッド」の組(lib/スレッド.suru)。動作の結果を動作にすると続けて行われてしまうので、組で包む */
+        static Ctor *ctor;
+        if (!ctor && !(ctor = find_ctor("スレッド"))) fail(a->pos, "「スレッド」を読み込んでいません");
+        ThreadCell *c = thread_start(thread_perform, a->a, 0, a->pos);
+        V j = mk_act(A_JOIN, "合流する", (V)(intptr_t)c, 0);
+        AS(Act, j)->pos = a->pos;
+        Rec *r = rt_alloc(sizeof(Rec) + sizeof(V));
+        r->tag = T_REC;
+        r->c = ctor;
+        r->v[0] = j;
+        return (V)(intptr_t)r;
+    }
+    case A_JOIN: return thread_wait((ThreadCell *)(intptr_t)a->a);
+    case A_NCPU: return mk_int(cpu_count(), a->pos);
+    }
+    return 0;
+}
+
+BI(t_spawn) { /* を */
+    int t = TAG(a[0]);
+    if (t != T_ACT && t != T_PURE) fail(pos, "「並行開始する」の「を」は動作でなければなりません(「%s」が渡されました)", plain(a[0]).s);
+    return mk_act_pos(A_SPAWN, "並行開始する", a[0], 0, pos);
+}
+BI(t_join) { /* を: スレッドの組 → 合流する動作 */
+    if (TAG(a[0]) != T_REC || strcmp(AS(Rec, a[0])->c->name, "スレッド") != 0)
+        fail(pos, "「合流する」の「を」はスレッドでなければなりません(「%s」が渡されました)", plain(a[0]).s);
+    return AS(Rec, a[0])->v[0];
+}
+BI(t_ncpu) { return mk_act_pos(A_NCPU, "コア数取得する", 0, 0, pos); }
+BI(t_pmap) { /* を, で */
+    List *xs = need_list(a[0], "「並列写像する」の「を」", pos);
+    if (xs->n == 0) return V_EMPTY;
+    int64_t k = cpu_count();
+    if (k > xs->n) k = xs->n;
+    List *out = new_list(xs->n);
+    MapTask **tasks = rt_alloc(k * sizeof(MapTask *));
+    ThreadCell **cells = rt_alloc(k * sizeof(ThreadCell *));
+    for (int64_t j = 0; j < k; j++) {
+        MapTask *m = rt_alloc(sizeof(MapTask));
+        m->f = a[1];
+        m->xs = xs;
+        m->out = out;
+        m->lo = xs->n * j / k;
+        m->hi = xs->n * (j + 1) / k;
+        m->pos = pos;
+        tasks[j] = m;
+    }
+    /* 1つ目はこのスレッドで、残りは新しいスレッドで */
+    for (int64_t j = 1; j < k; j++) cells[j] = thread_start(thread_map, (V)(intptr_t)tasks[j], 1, pos);
+    thread_map((V)(intptr_t)tasks[0]);
+    for (int64_t j = 1; j < k; j++) thread_wait(cells[j]);
+    return (V)(intptr_t)out;
+}
+
 static const BuiltinDef STD_PRIMITIVES[] = {
     {"切捨する", 1, P1_WO, NULL, s_floor},
     {"平方根にする", 1, P1_WO, NULL, s_sqrt},
@@ -2541,6 +2734,11 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"失敗する", 1, P1_WO, NULL, m_fail},
     {"引数取得する", 0, NULL, NULL, m_args},
     {"終了する", 1, P1_WO, NULL, m_exit},
+    /* 「スレッド」の組み込み */
+    {"並行開始する", 1, P1_WO, NULL, t_spawn},
+    {"合流する", 1, P1_WO, NULL, t_join},
+    {"並列写像する", 2, P2_WO_DE, NULL, t_pmap},
+    {"コア数取得する", 0, NULL, NULL, t_ncpu},
     /* 「通信」の組み込み */
     {"待受開始する", 1, P1_WO, NULL, n_listen},
     {"接続受付する", 1, P1_KARA, NULL, n_accept},
