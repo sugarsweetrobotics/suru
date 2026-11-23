@@ -42,6 +42,7 @@ const usage = `使い方: kumu <命令> [オプション]
   取得        依存を取ってきて 組.lock を書く(fetch)
   試験 [名前] 試験/ の「…試験する」を1つずつ動かす(test。名前の一部で選べる)
   点検        プロジェクトの全部のファイルを点検する(check)
+  公開        確かめて Git のタグ v版 を付ける。push はしない(publish)
   版          kumu の版を出す(version)
   助け        この案内を出す(help)
 
@@ -62,6 +63,7 @@ var commands = map[string]string{
 	"取得": "取得", "fetch": "取得",
 	"試験": "試験", "test": "試験",
 	"点検": "点検", "check": "点検", "lint": "点検",
+	"公開": "公開", "publish": "公開",
 	"版": "版", "version": "版", "--版": "版", "--version": "版",
 	"助け": "助け", "help": "助け", "-h": "助け", "--help": "助け",
 }
@@ -120,6 +122,8 @@ func (k *kumu) run(args []string) int {
 		return k.deps(cmd, rest)
 	case "点検":
 		return k.lint(rest)
+	case "公開":
+		return k.publish(rest)
 	}
 	// 作る・実行
 	opt, check := "-O2", true

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (c) 2026 sugarsweetrobotics
 
-// VS Code 拡張「する」: 言語サーバー(suru-ls)の起動、実行・型の検査・バイナリ作り。
+// VS Code 拡張「する」: 言語サーバー(suru-ls)の起動、実行・型の検査・バイナリ作り、kumu の命令。
 // 色分けは syntaxes/ の文法が行う。言語サーバーが見つからなければ、保存したときに suru --検査 で調べる。
 
 const vscode = require("vscode");
@@ -9,6 +9,7 @@ const cp = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const kumu = require("./kumu");
 
 const LANG = "suru";
 let diagnostics;
@@ -89,6 +90,52 @@ function runInTerminal(doc, extraArgs) {
   const prefix = process.platform === "win32" && /^["']/.test(args[0]) ? "& " : "";
   terminal.sendText(prefix + args.join(" "));
 }
+
+/** 開いているファイルのプロジェクト(組.suru のあるフォルダ)。なければ知らせて undefined */
+function projectRoot(doc) {
+  const root = kumu.findProjectRoot(doc.uri.fsPath);
+  if (!root) {
+    vscode.window.showWarningMessage("組.suru が見つかりません(kumu 新規 名前 でプロジェクトを作ります)");
+  }
+  return root;
+}
+
+/** プロジェクトのフォルダで kumu を動かす */
+function runKumu(doc, args) {
+  const root = projectRoot(doc);
+  if (!root) return;
+  if (!terminal || terminal.exitStatus !== undefined) {
+    terminal = vscode.window.createTerminal({ name: "する", env: { PYTHONUTF8: "1" } });
+  }
+  const conf = vscode.workspace.getConfiguration("suru", doc.uri);
+  const cmd = [...splitCommand(kumu.findKumu(conf.get("kumu"))), ...args].map(quote);
+  terminal.show(true);
+  terminal.sendText(`cd ${quote(root)}`);
+  const prefix = process.platform === "win32" && /^["']/.test(cmd[0]) ? "& " : "";
+  terminal.sendText(prefix + cmd.join(" "));
+}
+
+/** 開いているファイルを保存して、そのプロジェクトで kumu を動かす */
+async function kumuOnActive(args) {
+  const doc = activeSuruDocument();
+  if (doc && (await saved(doc))) runKumu(doc, args);
+}
+
+/** 試験/ のファイルの「…試験する」の上に「▷ 試験する」を出す */
+const testLenses = {
+  provideCodeLenses(doc) {
+    const root = kumu.findProjectRoot(doc.uri.fsPath);
+    if (!root || !kumu.isTestFile(root, doc.uri.fsPath)) return [];
+    return kumu.testDefinitions(doc.getText()).map(
+      (t) =>
+        new vscode.CodeLens(new vscode.Range(t.line, 0, t.line, 0), {
+          title: "▷ 試験する",
+          command: "suru.kumuTestOne",
+          arguments: [doc.uri, t.name],
+        }),
+    );
+  },
+};
 
 /**
  * suru --検査 の出力からエラーを取り出す。
@@ -275,6 +322,16 @@ async function activate(context) {
       const doc = activeSuruDocument();
       if (doc && (await saved(doc))) await check(doc);
     }),
+    vscode.commands.registerCommand("suru.kumuRun", () => kumuOnActive(["実行"])),
+    vscode.commands.registerCommand("suru.kumuBuild", () => kumuOnActive(["作る"])),
+    vscode.commands.registerCommand("suru.kumuTest", () => kumuOnActive(["試験"])),
+    vscode.commands.registerCommand("suru.kumuCheck", () => kumuOnActive(["点検"])),
+    vscode.commands.registerCommand("suru.kumuFetch", () => kumuOnActive(["取得"])),
+    vscode.commands.registerCommand("suru.kumuTestOne", async (uri, name) => {
+      const doc = uri ? await vscode.workspace.openTextDocument(uri) : activeSuruDocument();
+      if (doc && (await saved(doc))) runKumu(doc, name ? ["試験", name] : ["試験"]);
+    }),
+    vscode.languages.registerCodeLensProvider({ language: LANG }, testLenses),
     vscode.commands.registerCommand("suru.restartServer", async () => {
       await stopServer();
       await startServer(context);
