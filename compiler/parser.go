@@ -1988,6 +1988,8 @@ func qualifyTypeNames(nodes []*LNode, ctx *ParseContext) {
 	if len(own) == 0 && len(candidates) == 0 {
 		return
 	}
+	// 変数や引数の名前にした語は、2つのファイルにある型の名前でも変数の名前として読む(#105)
+	local := localNames(nodes)
 	var fix func(ns []*LNode)
 	fix = func(ns []*LNode) {
 		for _, n := range ns {
@@ -1998,7 +2000,9 @@ func qualifyTypeNames(nodes []*LNode, ctx *ParseContext) {
 				v := t.S
 				canon, ok := own[v]
 				if !ok {
-					if cs := candidates[v]; len(cs) > 1 {
+					if cs := candidates[v]; len(cs) > 1 && local[v] {
+						continue
+					} else if len(cs) > 1 {
 						names := make([]string, len(cs))
 						for k, c := range cs {
 							names[k] = "「" + c.mod + "」"
@@ -2021,6 +2025,55 @@ func qualifyTypeNames(nodes []*LNode, ctx *ParseContext) {
 		}
 	}
 	fix(nodes)
+}
+
+// localNames: ファイルの中で変数や引数の名前にした語(suru.py の _local_names と同じ)。
+// 「x とは …」の x と、「s に x を 接続 で 案内する とは …」の助詞の前の名前(括弧の外のもの)
+func localNames(nodes []*LNode) map[string]bool {
+	names := map[string]bool{}
+	var visit func(ns []*LNode)
+	visit = func(ns []*LNode) {
+		for _, n := range ns {
+			var toks []*Token
+			for _, t := range n.Line.Tokens {
+				if t.Kind != "SEP" {
+					toks = append(toks, t)
+				}
+			}
+			if len(toks) > 0 && isKw(toks[0], KwProviso) {
+				toks = toks[1:]
+			}
+			depth := 0
+			for k, t := range toks {
+				if t.Kind == "LP" {
+					depth++
+				} else if t.Kind == "RP" {
+					depth--
+				} else if depth == 0 && isKw(t, KwTowa) {
+					head := toks[:k]
+					if len(head) == 1 && head[0].Kind == "WORD" {
+						names[head[0].S] = true
+					} else if len(head) > 0 && head[len(head)-1].Kind == "CALL" {
+						d := 0
+						for j, h := range head {
+							if h.Kind == "LP" {
+								d++
+							} else if h.Kind == "RP" {
+								d--
+							}
+							if d == 0 && h.Kind == "WORD" && j+1 < len(head) && head[j+1].Kind == "PART" {
+								names[h.S] = true
+							}
+						}
+					}
+					break
+				}
+			}
+			visit(n.Children)
+		}
+	}
+	visit(nodes)
+	return names
 }
 
 func tryParseTypedef(node *LNode) *TypeDef {

@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 import fcntl
 import math
@@ -2682,6 +2682,8 @@ def _qualify_type_names(nodes: list, ctx: ParseContext) -> None:
     owners = {k: list(v.values()) for k, v in candidates.items() if len(v) > 1}
     if not own and not short and not full:
         return
+    # 変数や引数の名前にした語は、2つのファイルにある型の名前でも変数の名前として読む(#105)
+    local = _local_names(nodes)
 
     def fix(tokens: list) -> list:
         out = []
@@ -2689,7 +2691,7 @@ def _qualify_type_names(nodes: list, ctx: ParseContext) -> None:
             if t.kind == "WORD":
                 v = t.value
                 canon = own.get(v)
-                if canon is None and v in owners:
+                if canon is None and v in owners and v not in local:
                     names = "と".join(f"「{x}」" for x in owners[v])
                     raise SuruError(f"「{v}」は{names}の両方にある型か形の名前です。「{owners[v][0]}{MODULE_SEP}{v}」のように"
                                     "ファイルの名前を付けて書いてください", t.line)
@@ -2706,6 +2708,39 @@ def _qualify_type_names(nodes: list, ctx: ParseContext) -> None:
             walk(n.children)
 
     walk(nodes)
+
+
+def _local_names(nodes: list) -> set:
+    """ファイルの中で変数や引数の名前にした語: 「x とは …」の x と、「s に x を 接続 で 案内する とは …」の
+    助詞の前の名前(括弧の外のもの)"""
+    names: set = set()
+
+    def visit(ns: list) -> None:
+        for n in ns:
+            toks = [t for t in n.line.tokens if t.kind != "SEP"]
+            if toks and is_kw(toks[0], KW_PROVISO):
+                toks = toks[1:]
+            depth = 0
+            for k, t in enumerate(toks):
+                if t.kind == "LP":
+                    depth += 1
+                elif t.kind == "RP":
+                    depth -= 1
+                elif depth == 0 and is_kw(t, KW_TOWA):
+                    head = toks[:k]
+                    if len(head) == 1 and head[0].kind == "WORD":
+                        names.add(head[0].value)
+                    elif head and head[-1].kind == "CALL":
+                        d = 0
+                        for j, h in enumerate(head):
+                            d += (h.kind == "LP") - (h.kind == "RP")
+                            if d == 0 and h.kind == "WORD" and j + 1 < len(head) and head[j + 1].kind == "PART":
+                                names.add(h.value)
+                    break
+            visit(n.children)
+
+    visit(nodes)
+    return names
 
 
 def _prelude_line(nodes: list) -> int | None:
