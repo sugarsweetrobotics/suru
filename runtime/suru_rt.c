@@ -1719,6 +1719,33 @@ V rt_do_seq(V v, V k, int32_t pos) {
 
 V rt_do_result(V v) { return is_monadic(v) ? v : mk_pure(v); }
 
+/* 「…した 中身」: 成否の成功・有無の有なら中の値、失敗・無なら 0 */
+V rt_unwrap(V v, const char *name, int32_t pos) {
+    if (TAG(v) == T_REC) {
+        Ctor *c = AS(Rec, v)->c;
+        if (!strcmp(c->type, "成否") || !strcmp(c->type, "有無")) {
+            if (!strcmp(c->name, "成功") || !strcmp(c->name, "有")) return AS(Rec, v)->v[0];
+            if (!strcmp(c->name, "失敗") || !strcmp(c->name, "無")) return 0;
+        }
+    }
+    fail(pos, "「%sした 中身」: 「%s」は成否でも有無でもありません", name, show(v));
+}
+
+/* 手順の中の「…した 中身」: 成功なら続き k に中の値を渡し、失敗なら手順をそこで終えて失敗を結果にする */
+static V unwrap_then(V v, V k, const char *name, int32_t pos) {
+    V x = rt_unwrap(v, name, pos);
+    return x ? apply1(k, x, pos) : mk_pure(v);
+}
+static V k_unwrap(void *up, V *args, int32_t pos) {
+    KData *d = up;
+    return unwrap_then(args[0], d->f, (const char *)(intptr_t)d->m, d->pos);
+}
+V rt_do_unwrap(V m, V k, const char *name, int32_t pos) {
+    int t = TAG(m);
+    if (t == T_ACT || t == T_PURE) return chain(m, mk_k("中身", k_unwrap, k, (V)(intptr_t)name, pos), pos);
+    return unwrap_then(m, k, name, pos);
+}
+
 /* 「の 結果」の引数: 1つなら写像、2つ以上なら前から順に連鎖して最後を写像する */
 typedef struct { V fn; int32_t n; const int32_t *parts; V *vals; int32_t *lift; int32_t nlift; int32_t pos; } LiftData;
 
@@ -3513,6 +3540,17 @@ void rt_top(V v) {
     fputc('\n', stdout);
     funlockfile(stdout);
     free(s);
+}
+
+/* 一番外の手順で「した 中身」を使うもの: 結果が失敗なら、その理由のエラーで終わる(Rust の main が Err を返したとき) */
+void rt_top_unwrap(V v) {
+    int t = TAG(v);
+    V r = (t == T_ACT || t == T_PURE) ? perform(v) : v;
+    if (TAG(r) == T_REC && !strcmp(AS(Rec, r)->c->type, "成否") && !strcmp(AS(Rec, r)->c->name, "失敗")) {
+        V why = AS(Rec, r)->v[0];
+        fail_msg(0, TAG(why) == T_STR ? AS(Str, why)->s : show(why));
+    }
+    if (t != T_ACT && t != T_PURE) rt_top(v);
 }
 
 static void init_builtins(void) {

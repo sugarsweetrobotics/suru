@@ -151,6 +151,7 @@ POLITE_FORMS = {"します": SURU, "しまして": SHITE, "しましてから": 
 
 # 予約語ではなく、決まった位置でだけ特別な意味になる言葉
 RESULT = "結果"     # 「入力 の 結果 を 数値にする」「入力した 結果」
+CONTENT = "中身"    # 「安全除算した 中身」: 成功(有)なら中の値、失敗(無)ならその失敗を返す(Rust の ?)
 TEJUN = "手順"      # 「手順（文。文。…）」: 文を順に行う
 HOLE = "\0前の結果"  # 「してから」の後ろの関数に渡す値(内部の名前)
 
@@ -864,10 +865,12 @@ class Chain:
 
 @dataclass(eq=False)
 class Run:
-    """「入力した 結果」: 手順の中で動作を行った結果"""
+    """「入力した 結果」: 手順の中で動作を行った結果。
+    unwrap なら「…した 中身」: 成功(有)なら中の値、失敗(無)なら一番内側の関数か手順がその失敗を返す"""
 
     call: Any
     line: int
+    unwrap: bool = False
 
 
 @dataclass
@@ -1450,12 +1453,12 @@ class ExprParser:
                 if tok.kind == "CALL" and tok.form == SHITA:
                     self.next()
                     res = self.peek()
-                    if res is None or res.kind != "WORD" or res.value != RESULT:
-                        raise SuruError(f"「{tok.value[:-len(SURU)]}した」の後には「結果」を書いてください", tok.line)
+                    if res is None or res.kind != "WORD" or res.value not in (RESULT, CONTENT):
+                        raise SuruError(f"「{tok.value[:-len(SURU)]}した」の後には「結果」か「中身」を書いてください", tok.line)
                     self.next()
                     if has_piped:
                         args = merge_piped(args, piped)
-                    value: Any = Run(Call(tok.value, args, tok.line), tok.line)
+                    value: Any = Run(Call(tok.value, args, tok.line), tok.line, res.value == CONTENT)
                     args, piped, has_piped = {}, None, False
                 elif tok.kind == "CALL" and tok.form != KOTO:
                     break
@@ -1516,7 +1519,7 @@ class ExprParser:
                 cont = self.pipeline(Var(HOLE, tok.line), True)
                 return Chain(piped, cont, tok.line)
             if tok.form == SHITA:
-                raise SuruError("「した」の後には「結果」を書いてください", tok.line)
+                raise SuruError("「した」の後には「結果」か「中身」を書いてください", tok.line)
 
     # --- パターンマッチ ---------------------------------------------------
     # もし 値 が パターン ならば 式 { 区切り パターン ならば 式 } [ そうでなければ 式 ]
@@ -4515,6 +4518,64 @@ def _run_key(node: Run) -> str:
     return f"\0した結果{id(node)}"
 
 
+SUCCESS_SHAPES = ("成功", "有")  # 「した 中身」で中の値を取り出す形
+FAILURE_SHAPES = ("失敗", "無")  # 「した 中身」でそのまま返す形
+UNWRAP_TYPES = ("成否", "有無")
+
+
+def is_top_unwrap_do(s: Any) -> bool:
+    """一番外に書いた手順で、「した 中身」を使うもの(その結果が失敗ならエラーで終わる)"""
+    return isinstance(s, Do) and any(r.unwrap for st in s.statements for r in collect_runs(st, []))
+
+
+def check_top_failure(v: Any) -> None:
+    """一番外の手順の結果が失敗なら、その理由のエラーで終わる(Rust の main が Err を返したとき)"""
+    if isinstance(v, Record) and v.type_name == "成否" and v.ctor == "失敗":
+        r = v.values[0]
+        raise SuruError(r if isinstance(r, str) else format_value(r))
+
+
+class EarlyExit(Exception):
+    """「…した 中身」が失敗(無)だったので、一番内側の関数からその値を返す"""
+
+    def __init__(self, value: Any, line: Any):
+        super().__init__("早期脱出")
+        self.value = value
+        self.line = line
+
+
+def _call_name(call: Any) -> str:
+    name = getattr(call, "name", "")
+    return name[: -len(SURU)] if name.endswith(SURU) else name
+
+
+def unwrap_value(v: Any, call: Any, line: Any) -> tuple[bool, Any]:
+    """「した 中身」: 成功(有)なら (真, 中の値)、失敗(無)なら (偽, その値)"""
+    if isinstance(v, Record) and v.type_name in UNWRAP_TYPES:
+        if v.ctor in SUCCESS_SHAPES:
+            return True, v.values[0]
+        if v.ctor in FAILURE_SHAPES:
+            return False, v
+    raise SuruError(f"「{_call_name(call)}した 中身」: 「{format_value(v)}」は成否でも有無でもありません", line)
+
+
+def has_pure_unwrap(node: Any) -> bool:
+    """関数の本体として計算するところ(無名関数・手順・関数の定義の中は除く)に「した 中身」があるか"""
+    if isinstance(node, (Lambda, Do)):
+        return False
+    if isinstance(node, Define):
+        return not node.is_function and has_pure_unwrap(node.body)
+    if isinstance(node, Run):
+        return node.unwrap or has_pure_unwrap(node.call)
+    if isinstance(node, (list, tuple)):
+        return any(has_pure_unwrap(x) for x in node)
+    if isinstance(node, dict):
+        return any(has_pure_unwrap(x) for x in node.values())
+    if hasattr(node, "__dataclass_fields__"):
+        return any(has_pure_unwrap(getattr(node, f)) for f in node.__dataclass_fields__)
+    return False
+
+
 def collect_runs(node: Any, out: list) -> list:
     """文の中の「した 結果」を、先に行うものから順に集める(関数の本体や条件分岐の枝の中は除く)"""
     if isinstance(node, (Lambda, Do)):
@@ -4586,9 +4647,14 @@ class Interpreter:
         for s in program:
             if isinstance(s, (Define,) + TOP_LEVEL_ONLY):
                 continue
-            v = self.eval(s, self.globals)
+            try:
+                v = self.eval(s, self.globals)
+            except EarlyExit as e:
+                raise SuruError("「した 中身」の失敗を返す先がありません(関数か手順の中で使ってください)", e.line) from None
             if isinstance(v, ACTION_TYPES):
-                self.perform(v)
+                r = self.perform(v)
+                if is_top_unwrap_do(s):
+                    check_top_failure(r)
                 continue
             results.append(v)
             if emit is not None:
@@ -4704,6 +4770,21 @@ class Interpreter:
         """手順の i 番目からを行う。「した 結果」は連鎖に、途中の文は「それから」に置きかえる"""
         s = stmts[i]
         runs = [r for r in collect_runs(s, []) if not self._has(env, _run_key(r))]
+        if runs and runs[0].unwrap:
+            r = runs[0]
+            m = self.eval(r.call, env)
+
+            def k_unwrap(v: Any) -> Any:
+                ok, x = unwrap_value(v, r.call, r.line)
+                if not ok:
+                    return Pure(x)  # 手順はここで終わり、失敗(無)を結果にする
+                local = Env(env)
+                local.vars[_run_key(r)] = x
+                return self.run_do(stmts, i, local, line)
+
+            if isinstance(m, ACTION_TYPES):
+                return self.chain(m, k_unwrap, r.line)
+            return k_unwrap(m)
         if runs:
             r = runs[0]
             m = self.eval(r.call, env)
@@ -4915,6 +4996,11 @@ class Interpreter:
                 if key in e.vars:
                     return e.vars[key]
                 e = e.parent
+            if node.unwrap:
+                ok, x = unwrap_value(self.eval(node.call, env), node.call, node.line)
+                if not ok:
+                    raise EarlyExit(x, node.line)
+                return x
             raise SuruError(
                 "「した 結果」は手順の文の中で使ってください(関数の本体や条件分岐の枝の中では、そこを「手順（…）」で囲みます)",
                 node.line,
@@ -5012,6 +5098,10 @@ class Interpreter:
             for s in node.statements:
                 if isinstance(s, Define):
                     self.define(s, local)
+            # 「した 中身」を使う値の定義は、使うときでなく、書いた順にここで計算する
+            for s in node.statements:
+                if isinstance(s, Define) and not s.is_function and has_pure_unwrap(s.body):
+                    local.vars[s.name] = self.eval(s.body, local)
             result = None
             for s in node.statements:
                 if not isinstance(s, Define):
@@ -5073,7 +5163,10 @@ class Interpreter:
         local = Env(fn.closure)
         for p, pat in fn.params:
             bind(local, pat, args[p], p, fn.name, line)
-        result = self.eval(fn.body, local)
+        try:
+            result = self.eval(fn.body, local)
+        except EarlyExit as e:
+            return e.value
         if is_predicate(fn.name) and not isinstance(result, bool):
             raise SuruError(f"述語「{fn.name}」は 真 か 偽 を返す必要があります(「{self.format(result)}」が返りました)", line)
         return result

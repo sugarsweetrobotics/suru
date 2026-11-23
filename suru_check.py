@@ -28,7 +28,7 @@ from suru import (
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
     PValue, Ref, RESULT, Run, Sequel, Str, SuruError, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
     HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, Import, Module, MODULE_SEP, SOURCE_SUFFIX, _where, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
-    parse_program, collect_runs, _run_key, LIB_PRIMITIVES, GA,
+    parse_program, collect_runs, _run_key, LIB_PRIMITIVES, GA, UNWRAP_TYPES, _call_name,
 )
 
 # ---------------------------------------------------------------------------
@@ -587,6 +587,8 @@ def _fill(t: Any, mapping: dict, self_t: Any) -> Any:
 class Checker:
     def __init__(self, ctx: ParseContext, shapes: Shapes | None = None):
         self.ctx = ctx
+        # 「した 中身」の失敗を返す先: ("関数", 値の型) / ("手順", 結果の型, [使ったか]) / ("なし",)
+        self.exits: list = []
         self.shapes = shapes or Shapes(ctx)
         self.instances: list[TCon] = []  # 作った自分の型(いつも同じ型のフィールドを見つけるため)
         _pure_deferred.clear()
@@ -961,7 +963,11 @@ class Checker:
             return self.infer(d.body, env)
         local, t = head or self.function_head(d, env)
         params = t.params
-        result = self.infer(d.body, local)
+        self.exits.append(("関数", t.result))
+        try:
+            result = self.infer(d.body, local)
+        finally:
+            self.exits.pop()
         if sig is not None:
             self.unify_or(t.result, result, d.line,
                           lambda sa, sb: f"「{display_name(d.name)}」の値は{sa}と宣言されていますが、{sb}になっています")
@@ -1109,7 +1115,36 @@ class Checker:
     def infer_Lambda(self, node: Lambda, env: TEnv) -> Any:
         local = TEnv(env)
         params = [(p, self.bind_param(pat, local)) for p, pat in node.params]
-        return TFun(params, self.infer(node.body, local))
+        result = TVar()
+        self.exits.append(("関数", result))
+        try:
+            self.unify_or(result, self.infer(node.body, local), node.line,
+                          lambda sa, sb: f"無名関数の値の型が合いません({sa} と {sb})")
+        finally:
+            self.exits.pop()
+        return TFun(params, result)
+
+    def unwrap_type(self, value: Any, target: Any, call: Any, line: Any) -> Any:
+        """「した 中身」: value(成否・有無)の中の値の型。失敗は target(返す先の型)として返す"""
+        name = _call_name(call)
+        kind = next((t.name for t in (prune(value), prune(target)) if isinstance(t, TCon) and t.name in UNWRAP_TYPES),
+                    UNWRAP_TYPES[0])
+        inner = TVar()
+        rest = (TVar(),) if kind == UNWRAP_TYPES[0] else ()
+        self.unify_or(value, TCon(kind, (inner,) + rest), line,
+                      lambda sa, sb: f"「{name}した 中身」: {sa}は成否でも有無でもありません")
+        self.unify_or(target, TCon(kind, (TVar(),) + rest), line,
+                      lambda sa, sb: f"「{name}した 中身」の失敗を返す先の値は{sa}です({sb}を返す関数か手順の中で使ってください)")
+        return inner
+
+    def infer_Run_unwrap(self, node: Run, env: TEnv) -> Any:
+        """関数の本体の中の「した 中身」(手順の文の中のものは do_type で扱う)"""
+        top = self.exits[-1] if self.exits else ("なし",)
+        if top[0] == "手順":
+            raise self.err("「した 中身」は手順の文の中では条件分岐の枝の中に書けません(そこを「手順（…）」で囲みます)", node.line)
+        if top[0] != "関数":
+            raise self.err("「した 中身」の失敗を返す先がありません(成否か有無を返す関数か手順の中で使ってください)", node.line)
+        return self.unwrap_type(self.infer(node.call, env), top[1], node.call, node.line)
 
     # --- 呼び出し ---------------------------------------------------------
 
@@ -1518,6 +1553,8 @@ class Checker:
 
     def infer_Run(self, node: Run, env: TEnv) -> Any:
         t = env.lookup(_run_key(node))
+        if t is None and node.unwrap:
+            return self.infer_Run_unwrap(node, env)
         if t is None:
             raise self.err(
                 "「した 結果」は手順の文の中で使ってください(関数の本体や条件分岐の枝の中では、そこを「手順（…）」で囲みます)",
@@ -1531,12 +1568,25 @@ class Checker:
         self.monad_elem(m, elem, env)
         local = TEnv(env)
         local.vars[HOLE] = elem
-        k = self.infer(node.cont, local)
+        self.exits.append(("なし",))
+        try:
+            k = self.infer(node.cont, local)
+        finally:
+            self.exits.pop()
         return self.bind(m, elem, k, node.line,
                          "「してから」の前の値({t})は動作ではありません(純粋な値なら「して」を使います)", env)
 
     def infer_Do(self, node: Do, env: TEnv) -> Any:
-        return self.do_type(node.statements, 0, TEnv(env), node.line)
+        target, used = TVar(), []
+        self.exits.append(("手順", target, used))
+        try:
+            t = self.do_type(node.statements, 0, TEnv(env), node.line)
+        finally:
+            self.exits.pop()
+        if used:
+            self.unify_or(t, act(target), node.line,
+                          lambda sa, sb: f"「した 中身」を使う手順の値は{sb}になりますが、{sa}になっています")
+        return t
 
     def do_type(self, stmts: list, i: int, env: TEnv, line: Any) -> Any:
         """手順の i 番目からの型。「した 結果」は連鎖に、途中の文は「それから」になる"""
@@ -1545,6 +1595,8 @@ class Checker:
             key = _run_key(r)
             if env.lookup(key) is not None:
                 continue
+            if r.unwrap:
+                return self.do_unwrap_type(stmts, i, env, line, r, key)
             m = self.infer(r.call, env)
             elem = TVar()
             self.monad_elem(m, elem, env)
@@ -1566,6 +1618,21 @@ class Checker:
             return out
         k = self.do_type(stmts, i + 1, env, line)
         return self.bind(v, TVar(), k, first_line(s) or line, "手順の途中の文の値({t})は動作ではありません", env)
+
+    def do_unwrap_type(self, stmts: list, i: int, env: TEnv, line: Any, r: Run, key: str) -> Any:
+        """手順の文の中の「した 中身」: 動作なら行ってから、その結果(成否・有無)の中の値を使う"""
+        top = self.exits[-1]
+        top[2].append(True)
+        m = self.infer(r.call, env)
+        pm = prune(m)
+        is_act = isinstance(pm, TCon) and pm.name == "動作"
+        value = pm.args[0] if is_act else m
+        local = TEnv(env)
+        local.vars[key] = self.unwrap_type(value, top[1], r.call, r.line)
+        k = self.do_type(stmts, i, local, line)
+        if is_act:
+            return self.bind(m, value, k, r.line, "{t}は動作ではありません", env)
+        return k
 
     def infer_Sequel(self, node: Sequel, env: TEnv) -> Any:
         return self.infer(node.expr, env)

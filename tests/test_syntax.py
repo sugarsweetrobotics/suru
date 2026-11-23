@@ -88,6 +88,8 @@ xs を （x を 受け取って x * 2 を 返すこと） で 写像する
 もし p が （x と y の 点） ならば x そうでなければ 0
 （3 と 4） の 点 が p
 入力した 結果 を 表示する
+（a と b を 安全除算した 中身） + 1
+（x と b を 安全除算した 中身） と c を 安全除算する
 入力してから 表示する
 入力してから 数値にして 表示する
 「やあ」 を 表示してから 入力してから 表示する
@@ -126,6 +128,7 @@ x を 受け取って x
 もし x ならば 1
 もし x ならば 1 そうでなければ
 入力した 表示する
+入力した 中
 x を y を 加算する
 1 2
 xs の 3
@@ -188,7 +191,7 @@ def dump(n) -> str:
     if isinstance(n, S.Chain):
         return f"連({dump(n.call)} {dump(n.cont)}){at()}"
     if isinstance(n, S.Run):
-        return f"行({dump(n.call)}){at()}"
+        return f"{'身' if n.unwrap else '行'}({dump(n.call)}){at()}"
     if isinstance(n, S.Construct):
         return f"作({n.ctor} {lst(n.items)}){at()}"
     if isinstance(n, S.NamedConstruct):

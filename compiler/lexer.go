@@ -64,8 +64,10 @@ const (
 	Dearukoto = "であること"
 
 	Result = "結果"
-	Tejun  = "手順"
-	Hole   = "\x00前の結果"
+	// Content は「安全除算した 中身」: 成功(有)なら中の値、失敗(無)ならその失敗を返す(Rust の ?)
+	Content = "中身"
+	Tejun   = "手順"
+	Hole    = "\x00前の結果"
 )
 
 var operators = map[string]string{

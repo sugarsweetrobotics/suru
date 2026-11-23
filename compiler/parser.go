@@ -607,14 +607,14 @@ func (p *ExprParser) pipeline(piped Node, hasPiped bool) Node {
 			if t.Kind == "CALL" && t.Form == Shita {
 				p.next()
 				res := p.peek0()
-				if res == nil || res.Kind != "WORD" || res.S != Result {
-					raise(t.Line, "「"+strings.TrimSuffix(t.S, Suru)+"した」の後には「結果」を書いてください")
+				if res == nil || res.Kind != "WORD" || (res.S != Result && res.S != Content) {
+					raise(t.Line, "「"+strings.TrimSuffix(t.S, Suru)+"した」の後には「結果」か「中身」を書いてください")
 				}
 				p.next()
 				if hasPiped {
 					args = mergePiped(args, piped, WO)
 				}
-				value = &Run{&Call{t.S, args, t.Line}, t.Line}
+				value = &Run{&Call{t.S, args, t.Line}, t.Line, res.S == Content}
 				args, piped, hasPiped = nil, nil, false
 			} else if t.Kind == "CALL" && t.Form != Koto {
 				break
@@ -704,7 +704,7 @@ func (p *ExprParser) pipeline(piped Node, hasPiped bool) Node {
 			return &Chain{call, cont, t.Line}
 		}
 		if t.Form == Shita {
-			raise(t.Line, "「した」の後には「結果」を書いてください")
+			raise(t.Line, "「した」の後には「結果」か「中身」を書いてください")
 		}
 	}
 }
