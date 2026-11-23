@@ -2616,7 +2616,9 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         _check_open_imports(statements)
         _attach_externs(statements)
         statements = attach_provisos(statements)
-        name_unwraps([s for s in statements if not isinstance(s, (Import, ExternLib))])
+        body = [s for s in statements if not isinstance(s, (Import, ExternLib))]
+        name_unwraps(body)
+        resolve_param_calls(body, frozenset())
         return statements
     finally:
         _CTX = saved
@@ -4822,6 +4824,56 @@ def name_unwraps(node: Any, fn: str = TOP_FN) -> None:
     elif hasattr(node, "__dataclass_fields__") and not isinstance(node, (Module, Token)):
         for f in node.__dataclass_fields__:
             name_unwraps(getattr(node, f), fn)
+
+
+def pattern_names(pat: Any, out: set) -> set:
+    """パターン(引数の名前・名前のリスト・形のパターン)が付ける名前"""
+    if isinstance(pat, str):
+        out.add(pat)
+    elif isinstance(pat, PBind):
+        out.add(pat.name)
+    elif isinstance(pat, (list, tuple)):
+        for x in pat:
+            pattern_names(x, out)
+    elif isinstance(pat, (PSeq, PCtor)):
+        pattern_names(pat.items, out)
+    elif isinstance(pat, PNamed):
+        for _, x in pat.fields:
+            pattern_names(x, out)
+    return out
+
+
+def resolve_param_calls(node: Any, local: frozenset) -> None:
+    """「累 を 行 で 処理する」: 関数を受け取った引数(や局所の名前)「処理」を、名前+「する」で呼ぶ。
+    同じ名前の局所の関数「処理する」があればそちらを使い、引数の名前は関数の外の定義より先に見る"""
+    if isinstance(node, (Call, Ref)):
+        stem = node.name[:-len(SURU)] if node.name.endswith(SURU) else ""
+        if stem and node.name not in local and stem in local:
+            node.name = stem
+    elif isinstance(node, Define):
+        if node.params:
+            local = local | pattern_names([p for _, p in node.params], set())
+    elif isinstance(node, Lambda):
+        local = local | pattern_names([p for _, p in node.params], set())
+    elif isinstance(node, (Block, Do)):
+        local = local | {d.name for d in node.statements if isinstance(d, Define)}
+    elif isinstance(node, Match):
+        resolve_param_calls(node.subject, local)
+        for pat, cond, expr in node.cases:
+            inner = local | pattern_names(pat, set())
+            resolve_param_calls(cond, inner)
+            resolve_param_calls(expr, inner)
+        resolve_param_calls(node.default, local)
+        return
+    if isinstance(node, (list, tuple)):
+        for x in node:
+            resolve_param_calls(x, local)
+    elif isinstance(node, dict):
+        for x in node.values():
+            resolve_param_calls(x, local)
+    elif hasattr(node, "__dataclass_fields__") and not isinstance(node, (Module, Token)):
+        for f in node.__dataclass_fields__:
+            resolve_param_calls(getattr(node, f), local)
 
 
 def has_pure_unwrap(node: Any) -> bool:

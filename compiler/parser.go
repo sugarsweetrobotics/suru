@@ -2194,9 +2194,120 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 		case *Import, *ExternLib:
 		default:
 			nameUnwraps(st, topFn)
+			resolveParamCalls(st, nil)
 		}
 	}
 	return statements
+}
+
+// patternNames はパターン(引数の名前・名前のリスト・形のパターン)が付ける名前を out に足す
+func patternNames(pat Node, out map[string]bool) {
+	switch p := pat.(type) {
+	case *PBind:
+		out[p.Name] = true
+	case *PSeq:
+		for _, x := range p.Items {
+			patternNames(x, out)
+		}
+	case *PCtor:
+		for _, x := range p.Items {
+			patternNames(x, out)
+		}
+	case *PNamed:
+		for _, f := range p.Fields {
+			patternNames(f.Value, out)
+		}
+	}
+}
+
+func paramNames(params []Param, local map[string]bool) map[string]bool {
+	out := map[string]bool{}
+	for k := range local {
+		out[k] = true
+	}
+	for _, p := range params {
+		switch {
+		case p.Pat != nil:
+			patternNames(p.Pat, out)
+		case p.List:
+			for _, x := range p.Names {
+				out[x] = true
+			}
+		default:
+			out[p.Name] = true
+		}
+	}
+	return out
+}
+
+func withNames(local map[string]bool, names []string) map[string]bool {
+	out := map[string]bool{}
+	for k := range local {
+		out[k] = true
+	}
+	for _, x := range names {
+		out[x] = true
+	}
+	return out
+}
+
+func defNames(statements []Node) []string {
+	var out []string
+	for _, st := range statements {
+		if d, ok := st.(*Define); ok {
+			out = append(out, d.Name)
+		}
+	}
+	return out
+}
+
+// resolveParamCalls は「累 を 行 で 処理する」: 関数を受け取った引数(や局所の名前)「処理」を、名前+「する」で呼ぶ。
+// 同じ名前の局所の関数「処理する」があればそちらを使い、引数の名前は関数の外の定義より先に見る(suru.py と同じ)
+func resolveParamCalls(node Node, local map[string]bool) {
+	fix := func(name *string) {
+		if strings.HasSuffix(*name, Suru) && len(*name) > len(Suru) {
+			stem := strings.TrimSuffix(*name, Suru)
+			if !local[*name] && local[stem] {
+				*name = stem
+			}
+		}
+	}
+	switch n := node.(type) {
+	case nil:
+		return
+	case *Import, *Module:
+		return
+	case *Call:
+		fix(&n.Name)
+	case *Ref:
+		fix(&n.Name)
+	case *Define:
+		if len(n.Params) > 0 {
+			local = paramNames(n.Params, local)
+		}
+	case *Lambda:
+		local = paramNames(n.Params, local)
+	case *Block:
+		local = withNames(local, defNames(n.Statements))
+	case *Do:
+		local = withNames(local, defNames(n.Statements))
+	case *Match:
+		resolveParamCalls(n.Subject, local)
+		for _, c := range n.Cases {
+			inner := map[string]bool{}
+			for k := range local {
+				inner[k] = true
+			}
+			patternNames(c.Pat, inner)
+			resolveParamCalls(c.Guard, inner)
+			resolveParamCalls(c.Body, inner)
+		}
+		resolveParamCalls(n.Default, local)
+		return
+	}
+	for _, ch := range node.Children() {
+		resolveParamCalls(ch, local)
+	}
 }
 
 // 関数の外と無名関数の「した 中身」の経路の名前
