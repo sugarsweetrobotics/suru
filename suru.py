@@ -3846,6 +3846,119 @@ def _chan_each(it: "Interpreter", a: dict, line: int) -> Any:
     return Action("通路処理する", perform)
 
 
+class _Gate:
+    """ロック(owner と depth)と枠(free)。状態は _Sched.cv を持って変える"""
+
+    def __init__(self, free: int = 0) -> None:
+        self.owner: Any = None
+        self.depth = 0
+        self.free = free
+
+    def __str__(self) -> str:
+        return "<ロック>"
+
+
+class _Box:
+    """箱の中身。箱更新する は lock を持って計算して置きかえる"""
+
+    def __init__(self, v: Any) -> None:
+        import threading
+        self.v = v
+        self.lock = threading.Lock()
+
+    def __str__(self) -> str:
+        return "<箱>"
+
+
+def _handle(ctor: str, obj: Any) -> Record:
+    return Record(ctor, ctor, (THREAD_FIELD,), (obj,))
+
+
+def _need_handle(v: Any, ctor: str, cls: Any, what: str, line: int) -> Any:
+    if not (isinstance(v, Record) and v.ctor == ctor and isinstance(v.values[0], cls)):
+        raise SuruError(f"{what}は{ctor}でなければなりません(「{format_value(v)}」が渡されました)", line)
+    return v.values[0]
+
+
+def _need_action(v: Any, what: str, line: int) -> None:
+    if not isinstance(v, ACTION_TYPES):
+        raise SuruError(f"{what}は動作でなければなりません(「{format_value(v)}」が渡されました)", line)
+
+
+def _guarded(it: "Interpreter", m: Any, enter: Any, leave: Any) -> Any:
+    """持っている間だけ m を行う。エラーで抜けても必ず手放す"""
+    with _Sched.cv:
+        enter()
+    try:
+        return it.perform(m)
+    finally:
+        with _Sched.cv:
+            leave()
+            _Sched.cv.notify_all()
+
+
+def _locked(it: "Interpreter", a: dict, line: int) -> Any:
+    def perform(it2: "Interpreter") -> Any:
+        import threading
+        g = _need_handle(a["で"], "ロック", _Gate, "「排他実行する」の「で」", line)
+        _need_action(a[WO], "「排他実行する」の「を」", line)
+        me = threading.get_ident()
+
+        def enter() -> None:
+            _sched_wait(lambda: g.owner is None or g.owner == me, line)
+            g.owner = me
+            g.depth += 1
+
+        def leave() -> None:
+            g.depth -= 1
+            if g.depth == 0:
+                g.owner = None
+        return _guarded(it2, a[WO], enter, leave)
+    return Action("排他実行する", perform)
+
+
+def _slot_new(it: "Interpreter", a: dict, line: int) -> Any:
+    def perform(it2: "Interpreter") -> Any:
+        n = _num(a["で"], line)
+        if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+            raise SuruError(f"「{format_value(a['で'])}」は枠の数ではありません(1 以上の整数)", line)
+        return _handle("枠", _Gate(n))
+    return Action("枠作成する", perform)
+
+
+def _slotted(it: "Interpreter", a: dict, line: int) -> Any:
+    def perform(it2: "Interpreter") -> Any:
+        g = _need_handle(a["で"], "枠", _Gate, "「枠内実行する」の「で」", line)
+        _need_action(a[WO], "「枠内実行する」の「を」", line)
+
+        def enter() -> None:
+            _sched_wait(lambda: g.free > 0, line)
+            g.free -= 1
+
+        def leave() -> None:
+            g.free += 1
+        return _guarded(it2, a[WO], enter, leave)
+    return Action("枠内実行する", perform)
+
+
+def _box_update(it: "Interpreter", a: dict, line: int) -> Any:
+    def perform(it2: "Interpreter") -> Any:
+        b = _need_handle(a[WO], "箱", _Box, "「箱更新する」の「を」", line)
+        with b.lock:  # 純粋な関数なので、持ったまま計算して置きかえる(ほかのスレッドとぶつからない)
+            b.v = it2.apply(a["で"], [b.v], line)
+            return b.v
+    return Action("箱更新する", perform)
+
+
+def _box_set(it: "Interpreter", a: dict, line: int) -> Any:
+    def perform(it2: "Interpreter") -> Any:
+        b = _need_handle(a["へ"], "箱", _Box, "「箱書込する」の「へ」", line)
+        with b.lock:
+            b.v = a[WO]
+        return a[WO]
+    return Action("箱書込する", perform)
+
+
 THREAD_PRIMITIVES = [
     Builtin("並行開始する", [(WO, True)], _spawn),
     Builtin("合流する", [(WO, True)], _join),
@@ -3857,6 +3970,15 @@ THREAD_PRIMITIVES = [
     Builtin("通路受信する", [("から", True)], _chan_recv),
     Builtin("通路閉鎖する", [(WO, True)], _chan_close),
     Builtin("通路処理する", [(WO, True), ("で", True)], _chan_each),
+    Builtin("ロック作成する", [], lambda it, a, line: Action("ロック作成する", lambda it2: _handle("ロック", _Gate()))),
+    Builtin("排他実行する", [("で", True), (WO, True)], _locked),
+    Builtin("枠作成する", [("で", True)], _slot_new),
+    Builtin("枠内実行する", [("で", True), (WO, True)], _slotted),
+    Builtin("箱作成する", [("で", True)], lambda it, a, line: Action("箱作成する", lambda it2: _handle("箱", _Box(a["で"])))),
+    Builtin("箱読取する", [(WO, True)],
+            lambda it, a, line: Action("箱読取する", lambda it2: _need_handle(a[WO], "箱", _Box, "「箱読取する」の「を」", line).v)),
+    Builtin("箱更新する", [(WO, True), ("で", True)], _box_update),
+    Builtin("箱書込する", [(WO, True), ("へ", True)], _box_set),
 ]
 
 
