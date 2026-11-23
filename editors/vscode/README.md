@@ -19,9 +19,9 @@
 
 ## 入れ方
 
-1. 「する」本体を入れます: リポジトリの一番上で `pip install .`(`suru` コマンドが使えるようになります)。
+1. 「する」本体を入れます: `pip install suru-lang` か `brew install sugarsweetrobotics/suru/suru`(`suru` コマンドが使えるようになります。リポジトリからなら一番上で `pip install .`)。
    入れなくても、リポジトリのフォルダーを VS Code で開けば、一番上の `suru.py` を `python3` で動かします。
-2. 拡張を入れます。`suru-0.1.0.vsix` があれば、VS Code の拡張機能ビューの「…」→「VSIX からのインストール…」で選びます(コマンドなら `code --install-extension suru-0.1.0.vsix`)。
+2. 拡張を入れます。拡張機能ビューで「する」を検索して入れるか、`suru-0.1.0.vsix` があれば、VS Code の拡張機能ビューの「…」→「VSIX からのインストール…」で選びます(コマンドなら `code --install-extension suru-0.1.0.vsix`)。
 
 `.vsix` は次のように作れます(Node.js と Go が必要です)。`build_server.sh` が Linux・macOS・Windows 用の `suru-ls` を `server/` に作り、`.vsix` に同梱します。
 

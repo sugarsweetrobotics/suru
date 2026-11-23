@@ -10,11 +10,22 @@
     "url": "https://github.com/sugarsweetrobotics/suru",
     "directory": "editors/vscode"
   },
+  "homepage": "https://github.com/sugarsweetrobotics/suru/tree/main/editors/vscode",
+  "bugs": {
+    "url": "https://github.com/sugarsweetrobotics/suru/issues"
+  },
   "engines": {
     "vscode": "^1.82.0"
   },
   "categories": [
     "Programming Languages"
+  ],
+  "keywords": [
+    "suru",
+    "する",
+    "日本語",
+    "Japanese",
+    "programming language"
   ],
   "main": "./extension.js",
   "activationEvents": [],

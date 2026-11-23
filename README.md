@@ -11,10 +11,21 @@ python3 suru.py --翻訳 examples/basic.suru  # バイナリ examples/basic を�
 python3 -m pytest tests               # テスト
 ```
 
+### 入れ方
+
+| 方法 | 入れ方 | 入るもの |
+|---|---|---|
+| pip | `pip install suru-lang` | `suru` |
+| Homebrew(macOS・Linux) | `brew install sugarsweetrobotics/suru/suru` | `suru`・`suruc`・`suru-ls` |
+| バイナリ | [GitHub Releases](https://github.com/sugarsweetrobotics/suru/releases) の `suru-版-OS-CPU.tar.gz` | `suruc`・`suru-ls` |
+| VS Code | 拡張機能ビューで「する」を検索 | 拡張(`suru-ls` を同梱) |
+
+バイナリを作る(`suru --翻訳`、`suruc`)には、どの方法でも手元に clang が要ります。macOS では `xcode-select --install`、Ubuntu などでは `sudo apt install clang` で入ります。Windows 用は `suru-ls` だけです(作ったプログラムの実行時ライブラリが POSIX 向けなので、WSL を使ってください)。
+
 ### pip で入れる
 
 ```sh
-pip install git+https://github.com/sugarsweetrobotics/suru   # または、取ってきたフォルダで pip install .
+pip install suru-lang   # 最新のリポジトリからなら pip install git+https://github.com/sugarsweetrobotics/suru(取ってきたフォルダで pip install . も可)
 suru examples/basic.suru          # python3 suru.py と同じ(--検査・--検査なし・--翻訳 も使えます)
 suru --version
 ```
@@ -658,6 +669,18 @@ x を f で 番地余弦にする とは 外部の（f）
 1. **`「読書ロック」 を 読み込む` で、読む人は同時に、書く人はひとりだけにする。** `lib/読書ロック.suru` は、共有箱の外のもの(ファイル、バイト列の共有メモリ、C のメモリなど)をプロセスどうしで守るためのロックです(共有箱は中に同じロックを持っています)。`「/名前」 を 読書ロック内の読書ロック作成する`(同じ名前があれば作り直す)、`「/名前」 を 読書ロック内の読書ロック接続する`、`l で 動作 を 読書ロック内の読取実行する`(ほかの読む人と同時に。書く人がいれば待つ)、`l で 動作 を 読書ロック内の書込実行する`(ほかの人がいなくなるまで待つ)、`l を 読書ロック内の読書ロック解除する`、`l を 読書ロック内の読書ロック削除する`。どれも動作です。
 2. **ロックは動作を渡す形だけ。** 取ると手放すを別々には書けません。動作がエラーになったらロックを手放してから「読み書きロック『名前』で書く途中でエラーになりました」の実行時エラーにし、中でプロセスが落ちても SEM_UNDO で OS が戻します。書く人が待っている間は新しく読む人を入れません。
 3. **名前にひらがなを使わない。** ファイルの名前と関数の名前は漢字・カタカナで書くので、「読み書き」ではなく「読書」です。
+
+### リリースと配布の方法
+
+1. **4つの方法で配る。** PyPI(`suru-lang`)、GitHub Releases(OS ごとの `suruc`・`suru-ls`)、Homebrew の tap(`sugarsweetrobotics/homebrew-suru`)、VS Code Marketplace(拡張)です。どれも GitHub Actions がタグから作って公開します。手順と、初めに用意するもの(PyPI の Trusted Publishing、Marketplace の publisher など)は [docs/リリース.md](docs/リリース.md) にあります。
+
+2. **PyPI の名前は `suru-lang`。** `suru` はほかの人が使っていたので、パッケージの名前だけを変えました。入るコマンドとモジュールの名前は `suru` のままです。
+
+3. **タグは2種類。** `v0.1.0` の形のタグで本体(PyPI・GitHub Releases・Homebrew)を、`vscode-v0.4.0` の形のタグで VS Code 拡張を出します。拡張の版は本体と別に上げます。タグと `suru.py`・Go 版(`cmd/suruc`・`cmd/suru-ls`)の版が違えば、`packaging/check_version.py` が止めます。Go 版のバイナリの版は、ビルドのときに `-X main.version=…` でタグの版にします。
+
+4. **Windows 用は言語サーバーだけ。** 実行時ライブラリ(`runtime/suru_rt.c`)が POSIX(pthread・ソケット・シグナルなど)を使うので、Windows では `suruc` で作ったプログラムが動きません。Windows には VS Code 拡張のための `suru-ls` だけを配ります。
+
+5. **Homebrew はソースからビルドする。** formula(`packaging/homebrew/make_formula.py` が作る)は、タグのソースから Go で `suruc`・`suru-ls` を作り、Python 版の `suru` を libexec に置いてラッパーで動かします。clang は入れず、caveats で案内します(macOS では Xcode のコマンドラインツールに入っているので)。
 
 ## ライセンス
 

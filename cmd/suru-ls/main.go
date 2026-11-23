@@ -29,7 +29,8 @@ import (
 	"github.com/sugarsweetrobotics/suru/compiler"
 )
 
-const version = "0.1.0"
+// version はリリースのときに -ldflags "-X main.version=…" で書きかえる
+var version = "0.1.0"
 
 // --- JSON-RPC ---
 
