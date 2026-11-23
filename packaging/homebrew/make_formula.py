@@ -3,23 +3,25 @@
 # Copyright (c) 2026 sugarsweetrobotics
 """Homebrew の formula(suru.rb)を作る。
 
-    python3 packaging/homebrew/make_formula.py 0.1.0 <ソースの tar.gz の sha256> > suru.rb
+    python3 packaging/homebrew/make_formula.py [--repo 持ち主/suru] 0.1.0 <ソースの tar.gz の sha256> > suru.rb
 
-ソースは GitHub がタグから作る https://github.com/sugarsweetrobotics/suru/archive/refs/tags/v版.tar.gz。
+ソースは GitHub がタグから作る https://github.com/持ち主/suru/archive/refs/tags/v版.tar.gz。
+--repo を省くと、環境変数 GITHUB_REPOSITORY か sugarsweetrobotics/suru を使う。
 formula は Go 版の suruc・suru-ls をソースからビルドし、Python 版の suru も入れる。
 """
+import os
 import re
 import sys
 
 TEMPLATE = '''\
-# このファイルは sugarsweetrobotics/suru の packaging/homebrew/make_formula.py が作ったものです
+# このファイルは {repo} の packaging/homebrew/make_formula.py が作ったものです
 class Suru < Formula
   desc "日本語の関数型プログラミング言語「する」(インタプリタ・型検査・コンパイラ・言語サーバー)"
-  homepage "https://github.com/sugarsweetrobotics/suru"
-  url "https://github.com/sugarsweetrobotics/suru/archive/refs/tags/v{version}.tar.gz"
+  homepage "https://github.com/{repo}"
+  url "https://github.com/{repo}/archive/refs/tags/v{version}.tar.gz"
   sha256 "{sha256}"
   license all_of: ["GPL-3.0-or-later", "MIT"]
-  head "https://github.com/sugarsweetrobotics/suru.git", branch: "main"
+  head "https://github.com/{repo}.git", branch: "main"
 
   depends_on "go" => :build
   depends_on "python@3.13"
@@ -58,10 +60,17 @@ end
 
 
 def main(argv):
+    repo = os.environ.get("GITHUB_REPOSITORY") or "sugarsweetrobotics/suru"
+    if len(argv) >= 3 and argv[1] == "--repo":
+        repo = argv[2]
+        argv = argv[:1] + argv[3:]
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
     if len(argv) != 3 or not re.fullmatch(r"\d+\.\d+\.\d+\S*", argv[1]) or not re.fullmatch(r"[0-9a-f]{64}", argv[2]):
         print(__doc__.strip(), file=sys.stderr)
         return 2
-    sys.stdout.write(TEMPLATE.format(version=argv[1], sha256=argv[2]))
+    sys.stdout.write(TEMPLATE.format(repo=repo, version=argv[1], sha256=argv[2]))
     return 0
 
 

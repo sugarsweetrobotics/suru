@@ -682,6 +682,8 @@ x を f で 番地余弦にする とは 外部の（f）
 
 5. **Homebrew はソースからビルドする。** formula(`packaging/homebrew/make_formula.py` が作る)は、タグのソースから Go で `suruc`・`suru-ls` を作り、Python 版の `suru` を libexec に置いてラッパーで動かします。clang は入れず、caveats で案内します(macOS では Xcode のコマンドラインツールに入っているので)。
 
+6. **持ち主の名前に頼らない。** ワークフローは tap やリリースの案内に使う持ち主の名前を GitHub から受け取ります。organization などに移したときは、`packaging/move_owner.py` が URL・Go のモジュールの道・tap・publisher をまとめて書きかえます(手順は [docs/リリース.md](docs/リリース.md) の「organization などに移すとき」)。
+
 ## ライセンス
 
 - 本体(`suru.py`・`suru_check.py`・`suru_compile.py`、Go 版の `compiler/`・`cmd/`): [GPL-3.0-or-later](LICENSE)

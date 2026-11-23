@@ -65,9 +65,7 @@ jobs:
     if: github.ref_type == 'tag'
     needs: release
     runs-on: ubuntu-latest
-    environment:
-      name: marketplace
-      url: https://marketplace.visualstudio.com/items?itemName=sugarsweetrobotics.suru
+    environment: marketplace
     steps:
       - uses: actions/setup-node@v4
         with:
