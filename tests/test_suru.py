@@ -639,6 +639,14 @@ def test_表示するは動作を返しトップレベルで行う():
     assert out == ["a", "b"] and values == [2]
 
 
+def test_続表示するは改行を付けない():
+    from suru import Interpreter
+    out = []
+    it = Interpreter(out=lambda s: out.append(s + "\n"), write=out.append)
+    it.run("「あなた> 」 を 続表示する\n「こん」 を 続表示する\n「にちは」 を 表示する\n「a」を続表示する。それから、「b」を表示する。")
+    assert "".join(out) == "あなた> こんにちは\nab\n"
+
+
 def test_作っただけの動作は行われない():
     out, values = _io("（「a」 を 表示する） と 1")
     assert out == [] and values[0][1] == 1

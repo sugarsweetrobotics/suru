@@ -38,7 +38,7 @@ def interpreted(source: str, base_dir: str = ".", stdin: str = INPUT) -> str:
         except StopIteration:
             raise EOFError from None
 
-    it = suru.Interpreter(out=lambda s: out.append(s + "\n"), read=read)
+    it = suru.Interpreter(out=lambda s: out.append(s + "\n"), read=read, write=out.append)
     it.ctx.base_dir = base_dir
     it.run(source, emit=lambda v: out.append(it.format(v) + "\n"))
     return "".join(out)
@@ -66,6 +66,12 @@ f とは 10 を 割った数にすること
 f を 2 に 適用する
 （1 と 2 と 4） の それぞれ に （8 を 割った数にすること） を 適用する
 （1 と 2 と 3） を 0 から 加算すること で 畳み込みする
+""",
+    "改行なしの表示": """
+「あなた> 」 を 続表示する
+（1 と 2） を 続表示する
+「」 を 表示する
+「a」を続表示する。それから、「b」を表示する。
 """,
     "数の表示": """
 10 / 4

@@ -76,6 +76,7 @@ func consTyper(name string) typer {
 
 func init() {
 	builtin("表示する", []partReq{req(WO)}, func(c *Checker, a typedArgs, line Pos) Type { return act(newTVar()) })
+	builtin("続表示する", []partReq{req(WO)}, func(c *Checker, a typedArgs, line Pos) Type { return act(newTVar()) })
 	builtin("入力する", []partReq{opt(WO)}, func(c *Checker, a typedArgs, line Pos) Type { return act(STR) })
 	builtin("実行する", []partReq{req(WO)}, func(c *Checker, a typedArgs, line Pos) Type {
 		r := newTVar()
@@ -161,6 +162,7 @@ func init() {
 	}
 	builtinFuns = map[string]func() Type{
 		"表示する":   func() Type { return &TFun{[]TParam{{WO, newTVar()}}, act(newTVar())} },
+		"続表示する":  func() Type { return &TFun{[]TParam{{WO, newTVar()}}, act(newTVar())} },
 		"入力する":   func() Type { return &TFun{nil, act(STR)} },
 		"数値にする":  func() Type { return &TFun{[]TParam{{WO, STR}}, NUM} },
 		"絶対値にする": func() Type { return &TFun{[]TParam{{WO, NUM}}, NUM} },

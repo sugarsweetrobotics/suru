@@ -1701,6 +1701,11 @@ def _t_show(c, a, line):
     return act(TVar())
 
 
+@builtin("続表示する", {WO: True})
+def _t_show_cont(c, a, line):
+    return act(TVar())
+
+
 @builtin("入力する", {WO: False})
 def _t_input(c, a, line):
     return act(STR)
@@ -1830,6 +1835,7 @@ def _t_unit(c, a, line):
 # 関数の値(「加算すること」)として使うときの型
 BUILTIN_FUNS = {
     "表示する": lambda: TFun([(WO, TVar())], act(TVar())),
+    "続表示する": lambda: TFun([(WO, TVar())], act(TVar())),
     "入力する": lambda: TFun([], act(STR)),
     "数値にする": lambda: TFun([(WO, STR)], NUM),
     "絶対値にする": lambda: TFun([(WO, NUM)], NUM),

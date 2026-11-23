@@ -1551,7 +1551,8 @@ static V act_run(Act *a) {
         char *s = (char *)show(a->a);
         flockfile(stdout); /* ほかのスレッドの表示と混ざらないように */
         fputs(s, stdout);
-        fputc('\n', stdout);
+        if (a->b) fflush(stdout); /* 続表示する: 改行を付けず、すぐ見えるように出す */
+        else fputc('\n', stdout);
         funlockfile(stdout);
         free(s);
         return a->a;
@@ -1918,6 +1919,7 @@ V rt_call_ex(V fn, int32_t n, const int32_t *parts, const V *vals0, const int32_
 #define BI(name) static V name(void *up, V *a, int32_t pos)
 
 BI(b_show) { return mk_act(A_SHOW, "表示する", a[0], 0); }
+BI(b_show_cont) { return mk_act(A_SHOW, "続表示する", a[0], (V)1); }
 BI(b_input) { return mk_act(A_INPUT, "入力する", a[0] ? format_v(a[0]) : 0, pos); }
 BI(b_runall) {
     List *l = need_list(a[0], "「実行する」の「を」", pos);
@@ -2508,6 +2510,7 @@ typedef struct { const char *name; int32_t n; const int32_t *parts; const uint8_
 
 static const BuiltinDef BUILTINS[] = {
     {"表示する", 1, P1_WO, NULL, b_show},
+    {"続表示する", 1, P1_WO, NULL, b_show_cont},
     {"入力する", 1, P1_WO, R_OPT1, b_input},
     {"実行する", 1, P1_WO, NULL, b_runall},
     {"数値にする", 1, P1_WO, NULL, b_to_number},

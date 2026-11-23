@@ -3016,6 +3016,12 @@ ACTION_TYPES = (Action, Pure)
 _OUT_LOCK = __import__("threading").Lock()  # 「表示する」の出力(スレッドから同時に書くとき)
 
 
+def _write_stdout(text: str) -> None:
+    """「続表示する」: 改行を付けずに書いて、すぐ見えるように出す"""
+    sys.stdout.write(text)
+    sys.stdout.flush()
+
+
 @dataclass(frozen=True)
 class Record:
     """組の値。「（横 は 3 で 縦 は 4 の 点）」"""
@@ -3246,6 +3252,18 @@ def _show(it: "Interpreter", a: dict, line: int) -> Any:
     return Action("表示する", perform)
 
 
+def _show_cont(it: "Interpreter", a: dict, line: int) -> Any:
+    x = a[WO]
+
+    def perform(it2: "Interpreter") -> Any:
+        text = it2.format(x)
+        with _OUT_LOCK:
+            it2.write(text)
+        return x
+
+    return Action("続表示する", perform)
+
+
 def _input(it: "Interpreter", a: dict, line: int) -> Any:
     prompt = it.format(a[WO]) if WO in a else ""
 
@@ -3287,6 +3305,7 @@ def _run_all(it: "Interpreter", a: dict, line: int) -> Any:
 BUILTINS = [
     # x を 表示する / 「質問」を 入力する / 動作のリスト を 実行する: どれも動作を返す
     Builtin("表示する", [(WO, True)], _show),
+    Builtin("続表示する", [(WO, True)], _show_cont),
     Builtin("入力する", [(WO, False)], _input),
     Builtin("実行する", [(WO, True)], _run_all),
     Builtin("数値にする", [(WO, True)], _to_number),
@@ -4851,8 +4870,9 @@ def collect_runs(node: Any, out: list) -> list:
 
 
 class Interpreter:
-    def __init__(self, out: Any = None, read: Any = None) -> None:
+    def __init__(self, out: Any = None, read: Any = None, write: Any = None) -> None:
         self.out = out or print  # 「表示する」の出力先
+        self.write = write or _write_stdout  # 「続表示する」の出力先(改行を付けない)
         self.read = read or input  # 「入力する」の入力元
         # shared は組み込み関数・形・性質の関数(どのファイルからも見える)。globals はこのプログラムの定義
         self.shared = make_global_env()
