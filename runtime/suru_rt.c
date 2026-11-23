@@ -24,6 +24,9 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <signal.h>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -65,7 +68,7 @@ typedef struct Fn {
     int32_t wo, wo_list;
 } Fn;
 enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
-       A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
+       A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_FIFO_NEW, A_CH_FIFO_OPEN, A_CH_FIFO_DEL, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
        A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
@@ -1586,7 +1589,7 @@ static V act_run(Act *a) {
     }
     case A_CALL: return apply1(a->a, V_EMPTY, a->pos); /* 外部の関数を呼ぶ動作 */
     case A_PEEK: case A_POKE: case A_ERRNO: case A_FAIL: case A_ARGS: case A_EXIT: return mem_run(a);
-    case A_SPAWN: case A_JOIN: case A_NCPU: case A_CH_NEW: case A_CH_PIPE: case A_CH_SEND: case A_CH_RECV: case A_CH_CLOSE: case A_CH_EACH:
+    case A_SPAWN: case A_JOIN: case A_NCPU: case A_CH_NEW: case A_CH_PIPE: case A_CH_FIFO_NEW: case A_CH_FIFO_OPEN: case A_CH_FIFO_DEL: case A_CH_SEND: case A_CH_RECV: case A_CH_CLOSE: case A_CH_EACH:
     case A_LOCK_NEW: case A_LOCKED: case A_SLOT_NEW: case A_SLOTTED: case A_BOX_NEW: case A_BOX_GET: case A_BOX_UPDATE: case A_BOX_SET:
         return thread_run(a);
     case A_CHAIN: return apply1(a->b, perform(a->a), 0); /* 続きの動作は perform のループで行う */
@@ -2802,7 +2805,8 @@ static V thread_wait(ThreadCell *c) {
 enum { CH_LOCAL = 0, CH_PIPE = 1 };
 typedef struct {
     int64_t kind;
-    int64_t rfd, wfd;    /* CH_PIPE: パイプの読む口と書く口(閉じたら -1) */
+    int64_t rfd, wfd;    /* CH_PIPE: パイプの読む口と書く口(閉じたら -1、名前つきでまだ開いていなければ -2) */
+    const char *path;    /* 名前つきの通路(FIFO)の道。無名のパイプなら NULL */
     int64_t cap;         /* 0 なら、受け取られるまで送る側が待つ */
     int64_t closed;
     int64_t head, n, size; /* 輪の列(size = 容量。0 なら 1) */
@@ -2854,19 +2858,70 @@ static V pipe_new(int32_t pos) {
     ch->wfd = fd[1];
     return mk_handle("通路", ch, pos);
 }
+/* 名前つきの通路: 関係ないプログラムどうしで、ファイルの道(FIFO)を通して値を渡す。
+ * 開くのは初めて送る・受け取るとき(相手が開くまで待つ) */
+static V fifo_chan(const char *path, int32_t pos) {
+    signal(SIGPIPE, SIG_IGN);
+    Chan *ch = rt_alloc(sizeof(Chan));
+    ch->kind = CH_PIPE;
+    ch->rfd = ch->wfd = -2;
+    ch->path = strdup(path);
+    return mk_handle("通路", ch, pos);
+}
+static V fifo_new(V p, int32_t pos) {
+    Str *s = need_str(p, "「名前つき通路作成する」の「を」", pos);
+    struct stat st;
+    if (stat(s->s, &st) == 0) {
+        if (!S_ISFIFO(st.st_mode)) fail(pos, "『%s』はすでにあり、名前つきの通路ではありません", s->s);
+    } else if (mkfifo(s->s, 0600) != 0) {
+        fail(pos, "名前つきの通路『%s』を作れませんでした(%s)", s->s, strerror(errno));
+    }
+    return fifo_chan(s->s, pos);
+}
+static V fifo_open(V p, int32_t pos) {
+    Str *s = need_str(p, "「名前つき通路接続する」の「を」", pos);
+    struct stat st;
+    if (stat(s->s, &st) != 0) fail(pos, "名前つきの通路『%s』に接続できませんでした(%s)", s->s, strerror(errno));
+    if (!S_ISFIFO(st.st_mode)) fail(pos, "『%s』は名前つきの通路ではありません", s->s);
+    return fifo_chan(s->s, pos);
+}
+static V fifo_del(V p, int32_t pos) {
+    Str *s = need_str(p, "「名前つき通路削除する」の「を」", pos);
+    if (unlink(s->s) != 0) fail(pos, "名前つきの通路『%s』を消せませんでした(%s)", s->s, strerror(errno));
+    return mk_int(0, pos);
+}
+/* まだ開いていない口(-2)を開く。もう一方の口は使わない(-1) */
+static void fifo_open_end(Chan *c, int64_t *fd, int64_t *other, int flags, int32_t pos) {
+    if (*other == -2) *other = -1;
+    if (*fd != -2) return;
+    world_release();
+    int k;
+    do k = open(c->path, flags); while (k < 0 && errno == EINTR);
+    int e = errno;
+    world_acquire();
+    if (k < 0) fail(pos, "名前つきの通路『%s』を開けませんでした(%s)", c->path, strerror(e));
+    *fd = k;
+}
 static void pipe_close_fd(int64_t *fd) {
     if (*fd >= 0) close((int)*fd);
     *fd = -1;
 }
 static V pipe_send(Chan *c, V x, int32_t pos) {
-    if (c->closed || c->wfd < 0) fail(pos, "閉じた通路には送れません");
-    pipe_close_fd(&c->rfd);
+    if (c->closed || c->wfd == -1) fail(pos, "閉じた通路には送れません");
+    if (c->path) fifo_open_end(c, &c->wfd, &c->rfd, O_WRONLY, pos);
+    else pipe_close_fd(&c->rfd);
     Buf b = {0};
     buf_add(&b, "\0\0\0\0SURU\1", 9);
     ser_value(&b, x, 0, pos);
     uint32_t n = (uint32_t)(b.n - 4);
     for (int i = 0; i < 4; i++) b.s[i] = (char)((n >> (8 * i)) & 255);
     size_t off = 0;
+    /* 名前つきなら書く人が何人もいるので、1つの値を書き終えるまでほかの人を待たせる */
+    if (c->path) {
+        world_release();
+        while (flock((int)c->wfd, LOCK_EX) != 0 && errno == EINTR) {}
+        world_acquire();
+    }
     while (off < b.n) {
         world_release();
         ssize_t k = write((int)c->wfd, b.s + off, b.n - off);
@@ -2875,11 +2930,13 @@ static V pipe_send(Chan *c, V x, int32_t pos) {
         if (k < 0 && e == EINTR) continue;
         if (k < 0) {
             free(b.s);
+            if (c->path) flock((int)c->wfd, LOCK_UN);
             if (e == EPIPE) fail(pos, "受け取る相手がいないので、通路に送れません");
             fail(pos, "通路に送れませんでした(%s)", strerror(e));
         }
         off += (size_t)k;
     }
+    if (c->path) flock((int)c->wfd, LOCK_UN);
     free(b.s);
     return x;
 }
@@ -2899,8 +2956,9 @@ static int pipe_read_full(Chan *c, uint8_t *p, size_t n, int32_t pos) {
     return 1;
 }
 static V pipe_take(Chan *c, int32_t pos) {
-    if (c->rfd < 0) fail(pos, "この通路から受け取れません(このプロセスはこの通路に送っています)");
-    pipe_close_fd(&c->wfd);
+    if (c->rfd == -1) fail(pos, "この通路から受け取れません(このプロセスはこの通路に送っています)");
+    if (c->path) fifo_open_end(c, &c->rfd, &c->wfd, O_RDONLY, pos);
+    else pipe_close_fd(&c->wfd);
     uint8_t h[4];
     int r = pipe_read_full(c, h, 4, pos);
     if (r == 0) return 0;
@@ -3034,6 +3092,9 @@ static V thread_run(Act *a) {
         return chan_new(cap, a->pos);
     }
     case A_CH_PIPE: return pipe_new(a->pos);
+    case A_CH_FIFO_NEW: return fifo_new(a->a, a->pos);
+    case A_CH_FIFO_OPEN: return fifo_open(a->a, a->pos);
+    case A_CH_FIFO_DEL: return fifo_del(a->a, a->pos);
     case A_CH_SEND: return chan_send(need_chan(a->b, "「通路送信する」の「へ」", a->pos), a->a, a->pos);
     case A_CH_RECV: {
         V x = chan_take(need_chan(a->a, "「通路受信する」の「から」", a->pos), a->pos);
@@ -3118,6 +3179,9 @@ BI(t_join) { /* を: スレッドの組 → 合流する動作 */
 }
 BI(c_new) { return mk_act_pos(A_CH_NEW, "通路作成する", a[0], 0, pos); }    /* で */
 BI(c_pipe) { return mk_act_pos(A_CH_PIPE, "プロセス間通路作成する", 0, 0, pos); }
+BI(c_fifo_new) { return mk_act_pos(A_CH_FIFO_NEW, "名前つき通路作成する", a[0], 0, pos); }  /* を */
+BI(c_fifo_open) { return mk_act_pos(A_CH_FIFO_OPEN, "名前つき通路接続する", a[0], 0, pos); } /* を */
+BI(c_fifo_del) { return mk_act_pos(A_CH_FIFO_DEL, "名前つき通路削除する", a[0], 0, pos); }  /* を */
 BI(c_send) { return mk_act_pos(A_CH_SEND, "通路送信する", a[0], a[1], pos); } /* を, へ */
 BI(c_recv) { return mk_act_pos(A_CH_RECV, "通路受信する", a[0], 0, pos); }   /* から */
 BI(c_close) { return mk_act_pos(A_CH_CLOSE, "通路閉鎖する", a[0], 0, pos); } /* を */
@@ -3200,6 +3264,9 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"コア数取得する", 0, NULL, NULL, t_ncpu},
     {"通路作成する", 1, P1_DE, NULL, c_new},
     {"プロセス間通路作成する", 0, NULL, NULL, c_pipe},
+    {"名前つき通路作成する", 1, P1_WO, NULL, c_fifo_new},
+    {"名前つき通路接続する", 1, P1_WO, NULL, c_fifo_open},
+    {"名前つき通路削除する", 1, P1_WO, NULL, c_fifo_del},
     {"通路送信する", 2, P2_WO_HE, NULL, c_send},
     {"通路受信する", 1, P1_KARA, NULL, c_recv},
     {"通路閉鎖する", 1, P1_WO, NULL, c_close},

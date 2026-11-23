@@ -11,8 +11,10 @@ from __future__ import annotations
 
 __version__ = "0.1.0"
 
+import fcntl
 import math
 import os
+import stat
 import struct
 import sys
 import unicodedata
@@ -3871,9 +3873,11 @@ class _PipeChan:
     1つのプロセスでは向きは1つ: 初めて送ったら読む口を、初めて受け取ったら書く口を閉じる
     (書く口がすべて閉じると、受け取る側は「閉じた」と分かる)。runtime/suru_rt.c と同じ"""
 
-    def __init__(self, it: "Interpreter") -> None:
+    def __init__(self, it: "Interpreter", path: "str | None" = None) -> None:
         self.it = it
-        self.r, self.w = os.pipe()
+        self.path = path
+        # 名前つきの通路(FIFO)は、初めて送る・受け取るときに開く(-2 はまだ開いていない口)
+        self.r, self.w = (-2, -2) if path is not None else os.pipe()
         self.closed = False
 
     def __str__(self) -> str:
@@ -3883,14 +3887,31 @@ class _PipeChan:
         fd = getattr(self, which)
         if fd >= 0:
             os.close(fd)
-            setattr(self, which, -1)
+        setattr(self, which, -1)
+
+    def _open_end(self, which: str, other: str, flags: int, line: int) -> None:
+        """まだ開いていない口を開き(相手が開くまで待つ)、もう一方の口は使わないことにする"""
+        if self.path is None:
+            self._close(other)
+            return
+        if getattr(self, other) == -2:
+            setattr(self, other, -1)
+        if getattr(self, which) != -2:
+            return
+        try:
+            setattr(self, which, os.open(self.path, flags))
+        except OSError as e:
+            raise SuruError(f"名前つきの通路『{self.path}』を開けませんでした({e.strerror})", line) from None
 
     def send(self, x: Any, line: int) -> Any:
-        if self.closed or self.w < 0:
+        if self.closed or self.w == -1:
             raise SuruError("閉じた通路には送れません", line)
-        self._close("r")
+        self._open_end("w", "r", os.O_WRONLY, line)
         d = _serialize(x, line)
         data = len(d).to_bytes(4, "little") + d
+        # 名前つきなら書く人が何人もいるので、1つの値を書き終えるまでほかの人を待たせる
+        if self.path is not None:
+            fcntl.flock(self.w, fcntl.LOCK_EX)
         try:
             while data:
                 data = data[os.write(self.w, data):]
@@ -3898,6 +3919,9 @@ class _PipeChan:
             raise SuruError("受け取る相手がいないので、通路に送れません", line) from None
         except OSError as e:
             raise SuruError(f"通路に送れませんでした({e.strerror})", line) from None
+        finally:
+            if self.path is not None:
+                fcntl.flock(self.w, fcntl.LOCK_UN)
         return x
 
     def _read(self, n: int, line: int) -> bytes:
@@ -3913,9 +3937,9 @@ class _PipeChan:
         return out
 
     def take(self, line: int) -> tuple:
-        if self.r < 0:
+        if self.r == -1:
             raise SuruError("この通路から受け取れません(このプロセスはこの通路に送っています)", line)
-        self._close("w")
+        self._open_end("r", "w", os.O_RDONLY, line)
         h = self._read(4, line)
         if not h:
             return False, None
@@ -3930,6 +3954,38 @@ class _PipeChan:
     def close(self) -> None:
         self._close("w")
         self.closed = True
+
+
+def _fifo_chan(it: "Interpreter", p: Any, create: bool, line: int) -> Any:
+    """名前つきの通路(FIFO)。作成なら、なければ作る。runtime/suru_rt.c の fifo_new・fifo_open と同じ"""
+    name = "名前つき通路作成する" if create else "名前つき通路接続する"
+    if not isinstance(p, str):
+        raise SuruError(f"「{name}」の「を」は文字列でなければなりません(「{format_value(p)}」が渡されました)", line)
+    try:
+        st = os.stat(p)
+    except OSError as e:
+        if not create:
+            raise SuruError(f"名前つきの通路『{p}』に接続できませんでした({e.strerror})", line) from None
+        try:
+            os.mkfifo(p, 0o600)
+        except OSError as e2:
+            raise SuruError(f"名前つきの通路『{p}』を作れませんでした({e2.strerror})", line) from None
+    else:
+        if not stat.S_ISFIFO(st.st_mode):
+            if create:
+                raise SuruError(f"『{p}』はすでにあり、名前つきの通路ではありません", line)
+            raise SuruError(f"『{p}』は名前つきの通路ではありません", line)
+    return Record(CHAN_CTOR, CHAN_CTOR, (THREAD_FIELD,), (_PipeChan(it, p),))
+
+
+def _fifo_del(p: Any, line: int) -> int:
+    if not isinstance(p, str):
+        raise SuruError(f"「名前つき通路削除する」の「を」は文字列でなければなりません(「{format_value(p)}」が渡されました)", line)
+    try:
+        os.unlink(p)
+    except OSError as e:
+        raise SuruError(f"名前つきの通路『{p}』を消せませんでした({e.strerror})", line) from None
+    return 0
 
 
 def _need_chan(v: Any, what: str, line: int) -> _Chan:
@@ -4097,6 +4153,12 @@ THREAD_PRIMITIVES = [
     Builtin("通路作成する", [("で", True)], _chan_new),
     Builtin("プロセス間通路作成する", [], lambda it, a, line: Action(
         "プロセス間通路作成する", lambda it2: Record(CHAN_CTOR, CHAN_CTOR, (THREAD_FIELD,), (_PipeChan(it2),)))),
+    Builtin("名前つき通路作成する", [(WO, True)], lambda it, a, line: Action(
+        "名前つき通路作成する", lambda it2: _fifo_chan(it2, a[WO], True, line))),
+    Builtin("名前つき通路接続する", [(WO, True)], lambda it, a, line: Action(
+        "名前つき通路接続する", lambda it2: _fifo_chan(it2, a[WO], False, line))),
+    Builtin("名前つき通路削除する", [(WO, True)], lambda it, a, line: Action(
+        "名前つき通路削除する", lambda it2: _fifo_del(a[WO], line))),
     Builtin("通路送信する", [(WO, True), ("へ", True)],
             lambda it, a, line: Action("通路送信する", lambda it2: _need_chan(a["へ"], "「通路送信する」の「へ」", line).send(a[WO], line))),
     Builtin("通路受信する", [("から", True)], _chan_recv),
