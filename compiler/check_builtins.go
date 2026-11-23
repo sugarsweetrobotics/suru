@@ -281,6 +281,36 @@ func init() {
 		return lst(c.apply(a.must("で"), []Type{elem}, line, "「並列写像する」の「で」"))
 	})
 	simple("コア数取得する", nil, act(NUM))
+	chanPrim := func(name string, params func(x Type) []TParam, result func(x Type) Type) {
+		var parts []partReq
+		for _, p := range params(newTVar()) {
+			parts = append(parts, req(p.Part))
+		}
+		prim(name, parts, func() Type {
+			x := newTVar()
+			return &TFun{params(x), result(x)}
+		}, func(c *Checker, a typedArgs, line Pos) Type {
+			x := newTVar()
+			for _, p := range params(x) {
+				need(c, a, p.Part, p.T, line, name)
+			}
+			return result(x)
+		})
+	}
+	chanPrim("通路作成する", func(x Type) []TParam { return []TParam{{"で", NUM}} }, func(x Type) Type { return act(chanT(x)) })
+	chanPrim("通路送信する", func(x Type) []TParam { return []TParam{{WO, x}, {"へ", chanT(x)}} }, func(x Type) Type { return act(x) })
+	chanPrim("通路受信する", func(x Type) []TParam { return []TParam{{"から", chanT(x)}} }, func(x Type) Type { return act(x) })
+	chanPrim("通路閉鎖する", func(x Type) []TParam { return []TParam{{WO, chanT(x)}} }, func(x Type) Type { return act(chanT(x)) })
+	prim("通路処理する", []partReq{req(WO), req("で")}, func() Type {
+		x, y := newTVar(), newTVar()
+		return &TFun{[]TParam{{WO, chanT(x)}, {"で", &TFun{[]TParam{{WO, x}}, act(y)}}}, act(NUM)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		x := newTVar()
+		need(c, a, WO, chanT(x), line, "通路処理する")
+		r := c.apply(a.must("で"), []Type{x}, line, "「通路処理する」の「で」")
+		c.expect(r, act(newTVar()), line, "「通路処理する」の「で」の関数の値")
+		return act(NUM)
+	})
 	simple("切断する", []TParam{{WO, NUM}}, act(NUM))
 	prim("逆順にする", []partReq{req(WO)}, func() Type {
 		x := newTVar()

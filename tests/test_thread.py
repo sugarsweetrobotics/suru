@@ -75,6 +75,46 @@ k を 百倍積算する とは k * 100 を 積算する
 試す
 """
 
+
+CHANNEL = """「スレッド」 を 読み込んで 使う
+「標準」 を 読み込んで 使う
+数 の 通路 へ 数 を 生産する は 数 の 通路 の 動作
+c へ n を 生産する とは もし n = 0 ならば c を 通路閉鎖する そうでなければ c へ n を 一つ生産する
+数 の 通路 へ 数 を 一つ生産する は 数 の 通路 の 動作
+c へ n を 一つ生産する とは 手順
+  n を c へ 通路送信する
+  c へ n - 1 を 生産する
+数 を 二倍表示する は 数 の 動作
+x を 二倍表示する とは x * 2 を 表示する
+試す とは 手順
+  c とは 0 で 通路作成した 結果
+  p とは （c へ 5 を 生産する） を 並行開始した 結果
+  k とは c を 二倍表示すること で 通路処理した 結果
+  （「件数」 + （k を 文字列化する）） を 表示する
+  d とは 2 で 通路作成した 結果
+  10 を d へ 通路送信する
+  20 を d へ 通路送信する
+  d を 通路閉鎖する
+  d から 通路受信してから 表示する
+  d から 通路受信してから 表示する
+  （d から 通路受信する） を （-1 を 結果にする） で 試行してから 表示する
+  （30 を d へ 通路送信する） を （-2 を 結果にする） で 試行してから 表示する
+  e とは 1 で 通路作成した 結果
+  e から 通路受信する
+試す
+"""
+
+CHANNEL_OUT = "10\n8\n6\n4\n2\n件数5\n10\n20\n-1\n-2\n"
+
+# 2 つのスレッドがお互いを待つ: 合流しているスレッドの相手が、だれも送らない通路を待つ
+STUCK = """「スレッド」 を 読み込んで 使う
+試す とは 手順
+  c とは 0 で 通路作成した 結果
+  t とは （c から 通路受信する） を 並行開始した 結果
+  t を 合流する
+試す
+"""
+
 KINDS = ["interp"] + (["binary"] if suru_compile.find_cc() is not None else [])
 
 
@@ -126,3 +166,21 @@ def test_たくさんのスレッドで確保する(tmp_path, kind):
     want = [3 * (k * 100) * (k * 100 + 1) // 2 for k in range(1, 9)]
     lst = "（" + " と ".join(map(str, want)) + "）\n"
     assert r.stdout == lst + lst
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_通路(tmp_path, kind):
+    r = subprocess.run(build(CHANNEL, tmp_path, kind), capture_output=True, text=True, timeout=60)
+    assert r.returncode == 1
+    assert r.stdout == CHANNEL_OUT
+    lines = r.stderr.splitlines()
+    assert lines[0] == "エラー: 22行目 9文字目: 通路は閉じていて、もう値がありません"
+    assert lines[1] == "エラー: 23行目 13文字目: 閉じた通路には送れません"
+    assert lines[2] == "エラー: 25行目 8文字目: すべてのスレッドが待っていて、先に進めません(通路や合流の待ち)"
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_お互いに待つと止まらずにエラー(tmp_path, kind):
+    r = subprocess.run(build(STUCK, tmp_path, kind), capture_output=True, text=True, timeout=60)
+    assert r.returncode == 1
+    assert "先に進めません" in r.stderr

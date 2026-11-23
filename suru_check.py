@@ -1904,6 +1904,41 @@ def _t_pmap(c, a, line):
 _simple("コア数取得する", [], act(NUM))
 
 
+def _chan(t: Any) -> TCon:
+    return TCon("通路", (t,))  # lib/スレッド.suru の型
+
+
+def _chan_prim(name: str, params: Any, result: Any) -> None:
+    """型変数 甲 を1つ持つ通路の組み込み。params と result は 甲 を受け取って型を返す"""
+    def fun():
+        x = TVar()
+        return TFun(params(x), result(x))
+
+    def fn(c, a, line):
+        x = TVar()
+        for p, t in params(x):
+            _need(c, a, p, t, line, name)
+        return result(x)
+
+    prim(name, {p: True for p, _ in params(TVar())}, fun)(fn)
+
+
+_chan_prim("通路作成する", lambda x: [("で", NUM)], lambda x: act(_chan(x)))
+_chan_prim("通路送信する", lambda x: [(WO, x), ("へ", _chan(x))], lambda x: act(x))
+_chan_prim("通路受信する", lambda x: [("から", _chan(x))], lambda x: act(x))
+_chan_prim("通路閉鎖する", lambda x: [(WO, _chan(x))], lambda x: act(_chan(x)))
+
+
+@prim("通路処理する", {WO: True, "で": True},
+      lambda: (lambda x, y: TFun([(WO, _chan(x)), ("で", TFun([(WO, x)], act(y)))], act(NUM)))(TVar(), TVar()))
+def _t_chan_each(c, a, line):
+    x = TVar()
+    _need(c, a, WO, _chan(x), line, "通路処理する")
+    r = c.apply(a["で"], [x], line, "「通路処理する」の「で」")
+    c.expect(r, act(TVar()), line, "「通路処理する」の「で」の関数の値")
+    return act(NUM)
+
+
 def _seq_fun():
     a = TVar()
     return TFun([(WO, a)], a)

@@ -79,6 +79,9 @@ func act(t Type) *TCon { return &TCon{"動作", []Type{t}} }
 // threadT は lib/スレッド.suru の型「甲 の スレッド」
 func threadT(t Type) *TCon { return &TCon{"スレッド", []Type{t}} }
 
+// chanT は lib/スレッド.suru の型「甲 の 通路」
+func chanT(t Type) *TCon { return &TCon{"通路", []Type{t}} }
+
 func prune(t Type) Type {
 	for {
 		v, ok := t.(*TVar)

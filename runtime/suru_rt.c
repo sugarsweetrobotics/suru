@@ -65,7 +65,7 @@ typedef struct Fn {
     int32_t wo, wo_list;
 } Fn;
 enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_RECVLINE, A_RECV, A_SEND, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
-       A_SPAWN, A_JOIN, A_NCPU };
+       A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
@@ -145,6 +145,8 @@ typedef struct SThread {
     jmp_buf regs;                 /* 手放したときのレジスタ */
     uintptr_t start;              /* 始める動作(終わるまで GC から守る) */
     uintptr_t cell;               /* 結果を書くところ(ThreadCell) */
+    int (*wready)(void *);        /* 通路や合流で待っている間: 待つのを終えてよいか(NULL なら待っていない) */
+    void *warg;
     struct SThread *next;
 } SThread;
 static SThread main_thread;
@@ -1499,7 +1501,8 @@ static V act_run(Act *a) {
     }
     case A_CALL: return apply1(a->a, V_EMPTY, a->pos); /* 外部の関数を呼ぶ動作 */
     case A_PEEK: case A_POKE: case A_ERRNO: case A_FAIL: case A_ARGS: case A_EXIT: return mem_run(a);
-    case A_SPAWN: case A_JOIN: case A_NCPU: return thread_run(a);
+    case A_SPAWN: case A_JOIN: case A_NCPU: case A_CH_NEW: case A_CH_SEND: case A_CH_RECV: case A_CH_CLOSE: case A_CH_EACH:
+        return thread_run(a);
     case A_CHAIN: return apply1(a->b, perform(a->a), 0); /* 続きの動作は perform のループで行う */
     case A_FMAP: return apply1(a->b, perform(a->a), 0);
     }
@@ -2212,7 +2215,7 @@ BI(n_recv) { return mk_net(A_RECV, "受信する", a[0], a[1], pos); }  /* か�
 BI(n_send) { return mk_net(A_SEND, "送信する", a[0], a[1], pos); }  /* を, へ */
 BI(n_close) { return mk_net(A_CLOSE, "切断する", a[0], 0, pos); }
 
-static const int32_t P1_WO[] = {P_WO}, P2_WO_NI[] = {P_WO, P_NI}, P2_KARA_WO[] = {P_KARA, P_WO},
+static const int32_t P1_DE[] = {P_DE}, P1_WO[] = {P_WO}, P2_WO_NI[] = {P_WO, P_NI}, P2_KARA_WO[] = {P_KARA, P_WO},
                      P2_WO_DE[] = {P_WO, P_DE}, P2_KARA_DE[] = {P_KARA, P_DE}, P3_WO_KARA_DE[] = {P_WO, P_KARA, P_DE},
                      P2_GA_WO[] = {P_GA, P_WO}, P1_KARA[] = {P_KARA}, P2_WO_HE[] = {P_WO, P_HE}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P2_GA_DE[] = {P_GA, P_DE};
 static const uint8_t R_OPT1[] = {0}, R_1_OPT[] = {1, 0};
@@ -2524,7 +2527,36 @@ static V mem_run(Act *a) {
 
 /* スレッドの結果を書くところ(GC の領域。合流する動作と、動いているスレッドの両方から見える) */
 typedef struct { int64_t state; V result; char *msg; int32_t pos; } ThreadCell; /* state: 0 動いている、1 終わった、2 エラー */
-static pthread_cond_t thread_done_cv = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t world_change_cv = PTHREAD_COND_INITIALIZER;
+
+/* 通路や合流の状態を変えたら呼ぶ(待っているスレッドを起こす)。実行権を持って呼ぶ */
+static void world_changed(void) {
+    if (!world_multi) return;
+    pthread_mutex_lock(&world_mu);
+    pthread_cond_broadcast(&world_change_cv);
+    pthread_mutex_unlock(&world_mu);
+}
+
+/* ready(arg) が真になるまで、実行権を手放して待つ。実行権を持って呼び、持って戻る。
+ * ほかのスレッドがみな同じように待っていて、どれも進めないなら、ずっと終わらないのでエラーにする
+ * (外部の関数や入力で待っているスレッドは、そのうち進むかもしれないので数えない) */
+static void world_wait(int (*ready)(void *), void *arg, int32_t pos) {
+    while (!ready(arg)) {
+        int stuck = 1;
+        for (SThread *t = threads; t && stuck; t = t->next)
+            if (t != self_thread && !(t->wready && !t->wready(t->warg))) stuck = 0;
+        if (stuck) fail(pos, "すべてのスレッドが待っていて、先に進めません(通路や合流の待ち)");
+        SThread *me = self_thread;
+        me->warg = arg;
+        me->wready = ready;
+        world_release();
+        pthread_mutex_lock(&world_mu);
+        while (!ready(arg)) pthread_cond_wait(&world_change_cv, &world_mu);
+        pthread_mutex_unlock(&world_mu);
+        world_acquire();
+        me->wready = NULL;
+    }
+}
 #define THREAD_STACK ((size_t)256 << 20) /* 仮想のメモリなので、使った分だけ実際に使う */
 
 typedef struct { V f; List *xs, *out; int64_t lo, hi; int32_t pos; } MapTask;
@@ -2543,9 +2575,7 @@ static void thread_finish(SThread *t, ThreadCell *c) {
     SThread **pp = &threads;
     while (*pp != t) pp = &(*pp)->next;
     *pp = t->next;
-    pthread_mutex_lock(&world_mu);
-    pthread_cond_broadcast(&thread_done_cv);
-    pthread_mutex_unlock(&world_mu);
+    world_changed();
     (void)c;
 }
 
@@ -2619,19 +2649,80 @@ static ThreadCell *thread_start(V (*run)(V), V arg, int quiet, int32_t pos) {
 }
 
 /* 終わるまで待って結果を返す(エラーで終わっていたら同じエラー) */
+static int thread_done(void *arg) { return __atomic_load_n(&((ThreadCell *)arg)->state, __ATOMIC_ACQUIRE) != 0; }
 static V thread_wait(ThreadCell *c) {
-    if (c->state == 0) {
-        world_release();
-        pthread_mutex_lock(&world_mu);
-        while (__atomic_load_n(&c->state, __ATOMIC_ACQUIRE) == 0) pthread_cond_wait(&thread_done_cv, &world_mu);
-        pthread_mutex_unlock(&world_mu);
-        world_acquire();
-    }
+    world_wait(thread_done, c, c->pos);
     if (c->state == 2) {
         if (c->msg) fail_msg(c->pos, c->msg);
         fail(c->pos, "並行開始した動作はエラーで終わりました");
     }
     return c->result;
+}
+
+
+/* --- 通路: スレッドどうしで値を渡す列 ---
+ * 「通路」の組(lib/スレッド.suru)の中身は Chan を指す番地。kind で中身の種類を分ける(今はプロセスの中の列だけ。
+ * パイプなど別の種類は、同じ送る・受け取る・閉じるの口で足す) */
+enum { CH_LOCAL = 0 };
+typedef struct {
+    int64_t kind;
+    int64_t cap;         /* 0 なら、受け取られるまで送る側が待つ */
+    int64_t closed;
+    int64_t head, n, size; /* 輪の列(size = 容量。0 なら 1) */
+    int64_t sent, taken; /* 送った数・受け取った数 */
+    V *buf;
+} Chan;
+
+static Ctor *chan_ctor;
+static V chan_new(int64_t cap, int32_t pos) {
+    if (!chan_ctor && !(chan_ctor = find_ctor("通路"))) fail(pos, "「スレッド」を読み込んでいません");
+    Chan *ch = rt_alloc(sizeof(Chan));
+    ch->kind = CH_LOCAL;
+    ch->cap = cap;
+    ch->size = cap > 0 ? cap : 1;
+    ch->buf = rt_alloc(ch->size * sizeof(V));
+    Rec *r = rt_alloc(sizeof(Rec) + sizeof(V));
+    r->tag = T_REC;
+    r->c = chan_ctor;
+    r->v[0] = rt_ffi_from_ptr(ch);
+    return (V)(intptr_t)r;
+}
+static Chan *need_chan(V v, const char *what, int32_t pos) {
+    if (TAG(v) != T_REC || strcmp(AS(Rec, v)->c->name, "通路") != 0 || TAG(AS(Rec, v)->v[0]) != T_ADDR)
+        fail(pos, "%sは通路でなければなりません(「%s」が渡されました)", what, plain(v).s);
+    return (Chan *)AS(Addr, AS(Rec, v)->v[0])->p;
+}
+static int64_t ld(int64_t *p) { return __atomic_load_n(p, __ATOMIC_ACQUIRE); }
+static int ch_can_send(void *a) { Chan *c = a; return ld(&c->closed) || (ld(&c->n) < c->size && (c->cap > 0 || ld(&c->n) == 0)); }
+static int ch_can_recv(void *a) { Chan *c = a; return ld(&c->n) > 0 || ld(&c->closed); }
+typedef struct { Chan *c; int64_t my; } SendWait;
+static int ch_taken(void *a) { SendWait *w = a; return ld(&w->c->taken) >= w->my; }
+
+static V chan_send(Chan *c, V x, int32_t pos) {
+    if (c->closed) fail(pos, "閉じた通路には送れません");
+    world_wait(ch_can_send, c, pos);
+    if (c->closed) fail(pos, "閉じた通路には送れません");
+    c->buf[(c->head + c->n) % c->size] = x;
+    __atomic_store_n(&c->n, c->n + 1, __ATOMIC_RELEASE);
+    int64_t my = ++c->sent;
+    world_changed();
+    if (c->cap == 0) { /* 受け取られるまで待つ */
+        SendWait w = {c, my};
+        world_wait(ch_taken, &w, pos);
+    }
+    return x;
+}
+/* 値を1つ取り出す。閉じていて空なら 0 */
+static V chan_take(Chan *c, int32_t pos) {
+    world_wait(ch_can_recv, c, pos);
+    if (c->n == 0) return 0;
+    V x = c->buf[c->head];
+    c->buf[c->head] = 0;
+    c->head = (c->head + 1) % c->size;
+    __atomic_store_n(&c->n, c->n - 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&c->taken, c->taken + 1, __ATOMIC_RELEASE);
+    world_changed();
+    return x;
 }
 
 static long cpu_count(void) {
@@ -2657,6 +2748,30 @@ static V thread_run(Act *a) {
     }
     case A_JOIN: return thread_wait((ThreadCell *)(intptr_t)a->a);
     case A_NCPU: return mk_int(cpu_count(), a->pos);
+    case A_CH_NEW: {
+        V v = need_num(a->a, a->pos);
+        int64_t cap = IS_INT(v) ? INT_VAL(v) : -1;
+        if (cap < 0) fail(a->pos, "「%s」は通路の容量ではありません(0 以上の整数)", plain(v).s);
+        return chan_new(cap, a->pos);
+    }
+    case A_CH_SEND: return chan_send(need_chan(a->b, "「通路送信する」の「へ」", a->pos), a->a, a->pos);
+    case A_CH_RECV: {
+        V x = chan_take(need_chan(a->a, "「通路受信する」の「から」", a->pos), a->pos);
+        if (!x) fail(a->pos, "通路は閉じていて、もう値がありません");
+        return x;
+    }
+    case A_CH_CLOSE: {
+        Chan *c = need_chan(a->a, "「通路閉鎖する」の「を」", a->pos);
+        __atomic_store_n(&c->closed, 1, __ATOMIC_RELEASE);
+        world_changed();
+        return a->a;
+    }
+    case A_CH_EACH: { /* 閉じるまで、届いた値ごとに動作を行う。結果は行った数 */
+        Chan *c = need_chan(a->a, "「通路処理する」の「を」", a->pos);
+        int64_t k = 0;
+        for (V x; (x = chan_take(c, a->pos)); k++) perform(apply1(a->b, x, a->pos));
+        return mk_int(k, a->pos);
+    }
     }
     return 0;
 }
@@ -2671,6 +2786,11 @@ BI(t_join) { /* を: スレッドの組 → 合流する動作 */
         fail(pos, "「合流する」の「を」はスレッドでなければなりません(「%s」が渡されました)", plain(a[0]).s);
     return AS(Rec, a[0])->v[0];
 }
+BI(c_new) { return mk_act_pos(A_CH_NEW, "通路作成する", a[0], 0, pos); }    /* で */
+BI(c_send) { return mk_act_pos(A_CH_SEND, "通路送信する", a[0], a[1], pos); } /* を, へ */
+BI(c_recv) { return mk_act_pos(A_CH_RECV, "通路受信する", a[0], 0, pos); }   /* から */
+BI(c_close) { return mk_act_pos(A_CH_CLOSE, "通路閉鎖する", a[0], 0, pos); } /* を */
+BI(c_each) { return mk_act_pos(A_CH_EACH, "通路処理する", a[0], a[1], pos); } /* を, で */
 BI(t_ncpu) { return mk_act_pos(A_NCPU, "コア数取得する", 0, 0, pos); }
 BI(t_pmap) { /* を, で */
     List *xs = need_list(a[0], "「並列写像する」の「を」", pos);
@@ -2739,6 +2859,11 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"合流する", 1, P1_WO, NULL, t_join},
     {"並列写像する", 2, P2_WO_DE, NULL, t_pmap},
     {"コア数取得する", 0, NULL, NULL, t_ncpu},
+    {"通路作成する", 1, P1_DE, NULL, c_new},
+    {"通路送信する", 2, P2_WO_HE, NULL, c_send},
+    {"通路受信する", 1, P1_KARA, NULL, c_recv},
+    {"通路閉鎖する", 1, P1_WO, NULL, c_close},
+    {"通路処理する", 2, P2_WO_DE, NULL, c_each},
     /* 「通信」の組み込み */
     {"待受開始する", 1, P1_WO, NULL, n_listen},
     {"接続受付する", 1, P1_KARA, NULL, n_accept},

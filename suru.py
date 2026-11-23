@@ -3646,14 +3646,55 @@ NET_PRIMITIVES = [
 THREAD_STACK = 256 << 20  # 深い再帰のために(仮想のメモリなので、使った分だけ実際に使う)
 
 
+class _Sched:
+    """スレッドどうしの待ち合わせ。通路と合流の状態は cv を持って変え、変えたら notify_all する"""
+
+    import threading as _th
+
+    cv = _th.Condition()
+    alive: set = set()  # 動いているスレッド(と、プログラムを動かしているスレッド)
+    waiting: dict = {}  # 通路や合流で待っているスレッド → 待つのを終えてよいか
+
+
+def _sched_wait(ready: Any, line: int) -> None:
+    """ready() が真になるまで待つ(cv を持って呼ぶ)。ほかのスレッドがみな待っていて進めないならエラー
+    (外部の関数や入力で待っているスレッドは、そのうち進むかもしれないので数えない)"""
+    import threading
+    me = threading.get_ident()
+    _Sched.alive.add(me)
+    while not ready():
+        others = [t for t in _Sched.alive if t != me]
+        if all(t in _Sched.waiting and not _Sched.waiting[t]() for t in others):
+            raise SuruError("すべてのスレッドが待っていて、先に進めません(通路や合流の待ち)", line)
+        _Sched.waiting[me] = ready
+        try:
+            _Sched.cv.wait()
+        finally:
+            del _Sched.waiting[me]
+
+
 def _start_thread(target: Any) -> Any:
     import threading
+
+    def run() -> None:
+        try:
+            target()
+        finally:
+            with _Sched.cv:
+                _Sched.alive.discard(threading.get_ident())
+                _Sched.cv.notify_all()
+
     try:
         threading.stack_size(THREAD_STACK)
     except (ValueError, RuntimeError):
         pass
-    th = threading.Thread(target=target, daemon=True)  # プログラムの終わりでは待たない(コンパイルしたものと同じ)
-    th.start()
+    th = threading.Thread(target=run, daemon=True)  # プログラムの終わりでは待たない(コンパイルしたものと同じ)
+    with _Sched.cv:
+        _Sched.alive.add(threading.get_ident())
+        th.start()
+        while th.ident is None:
+            pass
+        _Sched.alive.add(th.ident)
     return th
 
 
@@ -3676,12 +3717,15 @@ def _spawn(it: "Interpreter", a: dict, line: int) -> Any:
                 sys.stderr.write("エラー: 再帰が深すぎます\n")
                 sys.stderr.flush()
                 box["error"] = True
+            with _Sched.cv:
+                box["done"] = True
 
         sys.stdout.flush()
-        th = _start_thread(run)
+        _start_thread(run)
 
         def join(it3: "Interpreter") -> Any:
-            th.join()
+            with _Sched.cv:
+                _sched_wait(lambda: "done" in box, line)
             if "error" in box:
                 raise SuruError("並行開始した動作はエラーで終わりました", line)
             return box["value"]
@@ -3693,6 +3737,7 @@ def _spawn(it: "Interpreter", a: dict, line: int) -> Any:
 
 
 THREAD_CTOR, THREAD_FIELD = "スレッド", "中身"
+CHAN_CTOR = "通路"
 
 
 def _join(it: "Interpreter", a: dict, line: int) -> Any:
@@ -3711,11 +3756,107 @@ def _ncpu(it: "Interpreter", a: dict, line: int) -> Any:
     return Action("コア数取得する", lambda it2: os.cpu_count() or 1)
 
 
+class _Chan:
+    """通路の中身(プロセスの中の列)。パイプなど別の種類も、同じ send・take・close の口で足す。
+    状態は _Sched.cv を持って変える"""
+
+    def __init__(self, cap: int) -> None:
+        import collections
+        self.cap, self.size = cap, max(cap, 1)
+        self.items: Any = collections.deque()
+        self.closed = False
+        self.sent = self.taken = 0
+
+    def __str__(self) -> str:
+        return "<通路>"
+
+    def send(self, x: Any, line: int) -> Any:
+        with _Sched.cv:
+            if self.closed:
+                raise SuruError("閉じた通路には送れません", line)
+            _sched_wait(lambda: self.closed or (len(self.items) < self.size and (self.cap > 0 or not self.items)), line)
+            if self.closed:
+                raise SuruError("閉じた通路には送れません", line)
+            self.items.append(x)
+            self.sent += 1
+            my = self.sent
+            _Sched.cv.notify_all()
+            if self.cap == 0:  # 受け取られるまで待つ
+                _sched_wait(lambda: self.taken >= my, line)
+        return x
+
+    def take(self, line: int) -> tuple:
+        """(値があったか, 値)。閉じていて空なら (False, None)"""
+        with _Sched.cv:
+            _sched_wait(lambda: bool(self.items) or self.closed, line)
+            if not self.items:
+                return False, None
+            x = self.items.popleft()
+            self.taken += 1
+            _Sched.cv.notify_all()
+            return True, x
+
+    def close(self) -> None:
+        with _Sched.cv:
+            self.closed = True
+            _Sched.cv.notify_all()
+
+
+def _need_chan(v: Any, what: str, line: int) -> _Chan:
+    if not (isinstance(v, Record) and v.ctor == CHAN_CTOR and isinstance(v.values[0], _Chan)):
+        raise SuruError(f"{what}は通路でなければなりません(「{format_value(v)}」が渡されました)", line)
+    return v.values[0]
+
+
+def _chan_new(it: "Interpreter", a: dict, line: int) -> Any:
+    def perform(it2: "Interpreter") -> Any:
+        cap = _num(a["で"], line)
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
+            raise SuruError(f"「{format_value(a['で'])}」は通路の容量ではありません(0 以上の整数)", line)
+        return Record(CHAN_CTOR, CHAN_CTOR, (THREAD_FIELD,), (_Chan(cap),))
+    return Action("通路作成する", perform)
+
+
+def _chan_recv(it: "Interpreter", a: dict, line: int) -> Any:
+    def perform(it2: "Interpreter") -> Any:
+        ok, x = _need_chan(a["から"], "「通路受信する」の「から」", line).take(line)
+        if not ok:
+            raise SuruError("通路は閉じていて、もう値がありません", line)
+        return x
+    return Action("通路受信する", perform)
+
+
+def _chan_close(it: "Interpreter", a: dict, line: int) -> Any:
+    def perform(it2: "Interpreter") -> Any:
+        _need_chan(a[WO], "「通路閉鎖する」の「を」", line).close()
+        return a[WO]
+    return Action("通路閉鎖する", perform)
+
+
+def _chan_each(it: "Interpreter", a: dict, line: int) -> Any:
+    def perform(it2: "Interpreter") -> Any:
+        c = _need_chan(a[WO], "「通路処理する」の「を」", line)
+        k = 0
+        while True:
+            ok, x = c.take(line)
+            if not ok:
+                return k
+            it2.perform(it2.apply(a["で"], [x], line))
+            k += 1
+    return Action("通路処理する", perform)
+
+
 THREAD_PRIMITIVES = [
     Builtin("並行開始する", [(WO, True)], _spawn),
     Builtin("合流する", [(WO, True)], _join),
     Builtin("並列写像する", [(WO, True), ("で", True)], _pmap),
     Builtin("コア数取得する", [], _ncpu),
+    Builtin("通路作成する", [("で", True)], _chan_new),
+    Builtin("通路送信する", [(WO, True), ("へ", True)],
+            lambda it, a, line: Action("通路送信する", lambda it2: _need_chan(a["へ"], "「通路送信する」の「へ」", line).send(a[WO], line))),
+    Builtin("通路受信する", [("から", True)], _chan_recv),
+    Builtin("通路閉鎖する", [(WO, True)], _chan_close),
+    Builtin("通路処理する", [(WO, True), ("で", True)], _chan_each),
 ]
 
 
