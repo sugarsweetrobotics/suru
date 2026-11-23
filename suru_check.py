@@ -1846,6 +1846,32 @@ def _t_deserialize(c, a, line):
     return TVar()
 
 
+def _t_fixed_ser():
+    x = TVar()
+    return TFun([(WO, x), ("で", x)], BYTES)
+
+
+@prim("固定直列化する", {WO: True, "で": True}, _t_fixed_ser)
+def _t_fixed_serialize(c, a, line):
+    x = TVar()
+    _need(c, a, WO, x, line, "固定直列化する")
+    _need(c, a, "で", x, line, "固定直列化する")
+    return BYTES
+
+
+def _t_fixed_de():
+    x = TVar()
+    return TFun([(WO, BYTES), ("で", x)], x)
+
+
+@prim("固定復元する", {WO: True, "で": True}, _t_fixed_de)
+def _t_fixed_deserialize(c, a, line):
+    x = TVar()
+    _need(c, a, WO, BYTES, line, "固定復元する")
+    _need(c, a, "で", x, line, "固定復元する")
+    return x
+
+
 _simple("バイト列取得する", [("から", ADDR), (WO, NUM)], act(BYTES))
 _simple("書込する", [(WO, BYTES), ("へ", ADDR)], act(NUM))
 _simple("エラー番号取得する", [], act(NUM))
