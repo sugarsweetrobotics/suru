@@ -4228,6 +4228,10 @@ class Interpreter:
         ctx = self.ctx.copy()
         program = parse_program(source, ctx)
         self.ctx = ctx
+        return self.run_program(program, emit)
+
+    def run_program(self, program: list, emit: Any = None, emit_stmt: Any = None) -> list[Any]:
+        """解析済みのプログラムを実行する。emit_stmt を渡すと、値ができるたびに (値, 文) で呼ぶ"""
         self.load_program(program, self.globals)
         results = []
         for s in program:
@@ -4240,6 +4244,8 @@ class Interpreter:
             results.append(v)
             if emit is not None:
                 emit(v)
+            if emit_stmt is not None:
+                emit_stmt(v, s)
         return results
 
     def load_program(self, program: list, env: Env) -> None:
@@ -4733,9 +4739,298 @@ def run(source: str) -> list[Any]:
 # ---------------------------------------------------------------------------
 
 
-def repl() -> None:
-    interp = Interpreter()
-    print("「する」対話モード。空行で入力を確定、Ctrl-D で終了します。")
+# 行がこの言葉で終われば、字下げした続きの行があるとみなし、空行で確定する
+REPL_BLOCK = (KW_TOWA, KW_GA, KW_THEN, KW_ELSE)
+# 行がこの言葉で終われば、次の行に続く
+REPL_CONTINUE = (KW_PROVISO, KW_SOREKARA, KW_TO, KW_KATSU, KW_MATAHA)
+# 対話モードのコマンド(「:」か全角の「：」で始める)。名前 → (別の名前, 説明)
+REPL_COMMANDS = {
+    "助け": (("help", "?"), "使い方を表示する"),
+    "型": (("type", "t"), "式の型を表示する(実行はしない)  例: :型 3 を 二乗する"),
+    "読む": (("load", "l"), "ファイルを読んで、その定義を使えるようにする  例: :読む 例.suru"),
+    "一覧": (("names",), "この対話で定義した名前と型を表示する"),
+    "終わる": (("quit", "q", "exit"), "対話モードを終わる(Ctrl-D でも終わる)"),
+}
+REPL_KEEP = (Define, TypeDef, TraitDecl, TraitImpl, TypeSig, Import, ExternLib)  # 次の入力の型の検査に残す文
+
+
+def history_path() -> str:
+    """対話モードの履歴を置くファイル。SURU_HISTORY で変えられる"""
+    if os.environ.get("SURU_HISTORY"):
+        return os.environ["SURU_HISTORY"]
+    state = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(state, "suru", "history")
+
+
+def _paren_depth(text: str) -> int:
+    """文字列・名前・コメントの外で、閉じていない括弧の数"""
+    depth, i, n = 0, 0, len(text)
+    while i < n:
+        c = text[i]
+        if c in ("「", NAME_OPEN):
+            j = text.find("」" if c == "「" else NAME_CLOSE, i + 1)
+            if j < 0:
+                return depth + 1  # 文字列が閉じていない
+            i = j + 1
+            continue
+        if c in COMMENT_STARTS:
+            j = text.find("\n", i)
+            if j < 0:
+                break
+            i = j
+        elif c in OPEN_PARENS:
+            depth += 1
+        elif c in CLOSE_PARENS:
+            depth -= 1
+        i += 1
+    return depth
+
+
+class Repl:
+    """対話モード。1つの入力(1行か、空行までの複数行)ごとに、型を調べてから実行し、値と型を表示する"""
+
+    def __init__(self, checking: bool = True, out: Any = None) -> None:
+        self.interp = Interpreter()
+        self.interp.ctx.base_dir = os.getcwd()
+        self.checking = checking
+        self.out = out or print
+        self.kept: list = []  # これまでに通った定義(次の入力の型の検査に使う)
+        self.defined: list[str] = []  # この対話で定義した名前(定義した順)
+
+    # --- 入力のまとまり ------------------------------------------------
+
+    @staticmethod
+    def complete(buf: list[str]) -> bool:
+        """ここまでの行で1つの入力として確定するか"""
+        text = "\n".join(buf)
+        if _paren_depth(text) > 0:
+            return False
+        if is_punct_line(text):
+            # 句読点の書き方: 「。」で終わるまで読む
+            return text.rstrip().endswith(PERIOD) or not text.strip()
+        first = buf[0].split()
+        if first and first[-1] in REPL_BLOCK:
+            return len(buf) > 1 and not buf[-1].strip()  # 字下げした続きの行は空行で確定
+        last = buf[-1].split()
+        return not (last and last[-1] in REPL_CONTINUE)
+
+    # --- 実行 ------------------------------------------------------------
+
+    def feed(self, source: str, base_dir: str | None = None) -> bool:
+        """1つの入力を実行して結果を表示する。うまくいけば True。
+        base_dir を渡すとファイルの読み込み(読み込むファイルはそこから探し、定義の型は表示しない)"""
+        if not source.strip():
+            return True
+        try:
+            return self._feed(source, base_dir)
+        except SuruError as e:
+            self.out(format_error(e, source))
+        except RecursionError:
+            self.out("エラー: 再帰が深すぎます")
+        except KeyboardInterrupt:
+            self.out("中断しました")
+        return False
+
+    def _parse(self, source: str, base_dir: str | None) -> tuple:
+        ctx = self.interp.ctx.copy()
+        if base_dir is not None:
+            ctx.base_dir = base_dir
+        return parse_program(source, ctx), ctx
+
+    def _check(self, program: list, ctx: ParseContext) -> tuple[dict, list]:
+        """型を調べて、(式の文の id → 型, 新しい定義の型の宣言) を返す"""
+        if not self.checking:
+            return {}, []
+        from suru_check import session_types
+
+        names = [s.name for s in program if isinstance(s, Define)]
+        # 定義し直した名前は、前の定義を外して調べる(対話モードでは後の定義で置き換わる)
+        old = [s for s in self.kept if not (isinstance(s, (Define, TypeSig)) and s.name in names)]
+        values = [s for s in program if not isinstance(s, (Define,) + TOP_LEVEL_ONLY)]
+        try:
+            types, sigs = session_types(old + program, ctx, values, list(dict.fromkeys(names)))
+        except Exception as e:  # suru_check は suru を別のモジュールとして読み込むので、名前で見分ける
+            if type(e).__name__ != "SuruError":
+                raise
+            raise SuruError(e.message, e.line) from None
+        return {id(s): t for s, t in zip(values, types)}, sigs
+
+    def _feed(self, source: str, base_dir: str | None) -> bool:
+        program, ctx = self._parse(source, base_dir)
+        types, sigs = self._check(program, ctx)
+        names = [s.name for s in program if isinstance(s, Define)]
+        if base_dir is not None:
+            ctx.base_dir = self.interp.ctx.base_dir
+        self.interp.ctx = ctx
+        self.kept = [s for s in self.kept if not (isinstance(s, (Define, TypeSig)) and s.name in names)]
+        self.kept += [s for s in program if isinstance(s, REPL_KEEP)]
+        for n in names:
+            if n in self.defined:
+                self.defined.remove(n)
+            self.defined.append(n)
+        if base_dir is None:
+            for sig in sigs:
+                self.out(sig)
+
+        def show(v: Any, s: Any) -> None:
+            text = self.interp.format(v)
+            t = types.get(id(s))
+            self.out(f"{text} は {t}" if t else text)
+
+        self.interp.run_program(program, emit_stmt=show)
+        return True
+
+    # --- コマンド --------------------------------------------------------
+
+    def command(self, line: str) -> bool:
+        """「:型 …」などを行う。終わるなら False"""
+        parts = line.strip()[1:].replace("　", " ").strip().split(None, 1)
+        name = parts[0] if parts else ""
+        arg = line.strip()[1:].strip(" 　")[len(name):].strip(" 　") if parts else ""
+        cmd = next((k for k, (alts, _) in REPL_COMMANDS.items() if name == k or name in alts), None)
+        if cmd is None:
+            self.out(f"エラー: 「:{name}」というコマンドはありません(:助け で一覧を表示します)")
+        elif cmd == "終わる":
+            return False
+        elif cmd == "助け":
+            self.out(self.help_text())
+        elif cmd == "型":
+            self.show_type(arg)
+        elif cmd == "読む":
+            self.load(arg)
+        elif cmd == "一覧":
+            self.show_names()
+        return True
+
+    @staticmethod
+    def help_text() -> str:
+        lines = ["式を入力すると、型を調べてから実行し、「値 は 型」を表示します。",
+                 "「とは」などで終わる行は続きがあるとみなし、空行で確定します。句読点の書き方は「。」で確定します。",
+                 "定義し直すと、前の定義と置き換わります。Ctrl-C で入力の取り消しや実行の中断ができます。",
+                 "コマンド(「:」は全角の「：」でも可):"]
+        for k, (alts, desc) in REPL_COMMANDS.items():
+            lines.append(f"  :{k}(:{' :'.join(alts)})  {desc}")
+        return "\n".join(lines)
+
+    def show_type(self, source: str) -> None:
+        if not source:
+            self.out("使い方: :型 式")
+            return
+        try:
+            program, ctx = self._parse(source, None)
+            checking, self.checking = self.checking, True
+            try:
+                types, sigs = self._check(program, ctx)
+            finally:
+                self.checking = checking
+        except SuruError as e:
+            self.out(format_error(e, source))
+            return
+        for sig in sigs:
+            self.out(sig)
+        for t in types.values():
+            self.out(t)
+
+    def load(self, path: str) -> None:
+        if not path:
+            self.out("使い方: :読む ファイル.suru")
+            return
+        path = os.path.expanduser(path.strip("「」\"'"))
+        if not os.path.exists(path) and os.path.exists(path + SOURCE_SUFFIX):
+            path += SOURCE_SUFFIX
+        try:
+            with open(path, encoding="utf-8") as f:
+                source = f.read()
+        except FileNotFoundError:
+            self.out(f"エラー: ファイル「{path}」が見つかりません")
+            return
+        except (OSError, UnicodeDecodeError):
+            self.out(f"エラー: ファイル「{path}」を読めません")
+            return
+        before = len(self.defined)
+        if self.feed(source, os.path.dirname(os.path.abspath(path))):
+            self.out(f"「{path}」を読みました(:一覧 で定義した名前と型を表示します)" if len(self.defined) > before
+                     else f"「{path}」を読みました")
+
+    def show_names(self) -> None:
+        if not self.defined:
+            self.out("まだ何も定義していません")
+            return
+        if not self.checking:
+            self.out("\n".join(self.defined))
+            return
+        from suru_check import session_types
+
+        try:
+            _, sigs = session_types(list(self.kept), self.interp.ctx.copy(), [], self.defined)
+        except Exception as e:
+            if type(e).__name__ != "SuruError":
+                raise
+            self.out("\n".join(self.defined))
+            return
+        self.out("\n".join(sigs))
+
+    # --- 補完 ------------------------------------------------------------
+
+    def candidates(self) -> list[str]:
+        names = set()
+        for env in (self.interp.shared, self.interp.globals):
+            names.update(n for n in env.vars if not n.startswith("\0"))
+        names.update(":" + k for k in REPL_COMMANDS)
+        names.update((KW_TOWA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, KW_SOREKARA, KW_RETURN, KW_LAMBDA, KW_IMPORT))
+        return sorted(names)
+
+
+def _setup_readline(r: Repl) -> None:
+    """行の編集・履歴・補完(Tab)を使えるようにする。readline がなければ何もしない"""
+    try:
+        import readline
+    except ImportError:
+        return
+    import atexit
+
+    path = history_path()
+    try:
+        readline.read_history_file(path)
+    except OSError:
+        pass
+    readline.set_history_length(1000)
+
+    def save() -> None:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            readline.write_history_file(path)
+        except OSError:
+            pass
+
+    atexit.register(save)
+    matches: list[str] = []
+
+    def completer(text: str, state: int) -> str | None:
+        if state == 0:
+            matches[:] = [n for n in r.candidates() if n.startswith(text)]
+        return matches[state] if state < len(matches) else None
+
+    readline.set_completer(completer)
+    readline.set_completer_delims(" \t\n　()（）[]［］「」、。")
+    if "libedit" in (readline.__doc__ or ""):
+        readline.parse_and_bind("bind ^I rl_complete")
+    else:
+        readline.parse_and_bind("tab: complete")
+
+
+def repl(files: list[str] | None = None, checking: bool = True) -> None:
+    if __name__ == "__main__":
+        # suru_check は「suru」として読み込んだ構文の木を調べるので、対話モードもそちらで動かす
+        import suru
+
+        return suru.repl(files, checking)
+    r = Repl(checking)
+    if sys.stdin.isatty():
+        _setup_readline(r)
+    print(f"「する」{__version__} 対話モード。:助け で使い方を表示します。Ctrl-D か :終わる で終わります。")
+    for path in files or ():
+        r.load(path)
     buf: list[str] = []
     while True:
         try:
@@ -4743,30 +5038,25 @@ def repl() -> None:
         except EOFError:
             print()
             return
-        # 「とは」で終わる行から始まる複数行の入力は、空行が来るまでまとめて読む
+        except KeyboardInterrupt:  # 入力の途中なら取り消す
+            print()
+            buf = []
+            continue
+        if not buf and line.strip()[:1] in (":", "："):
+            if not r.command(line):
+                return
+            continue
         buf.append(line)
-        text = "\n".join(buf)
-        if is_punct_line(text):
-            # 句読点の書き方: 「。」で終わるまで読む
-            if not text.rstrip().endswith(PERIOD):
-                continue
-        elif line.rstrip().endswith(KW_TOWA) or (len(buf) > 1 and line.strip()):
+        if not r.complete(buf):
             continue
         source = "\n".join(buf)
         buf = []
-        if not source.strip():
-            continue
-        try:
-            interp.run(source, emit=lambda v: print(interp.format(v)))
-        except SuruError as e:
-            print(format_error(e, source))
-        except RecursionError:
-            print("エラー: 再帰が深すぎます")
-
+        r.feed(source)
 
 CHECK_FLAGS = ("--検査", "--check")  # 型の検査だけを行う(実行はしない)
 NO_CHECK_FLAGS = ("--検査なし", "--no-check")  # 型の検査をせずに実行する
 COMPILE_FLAGS = ("--翻訳", "--compile")  # バイナリにコンパイルする(suru_compile.py)
+REPL_FLAGS = ("--対話", "-i")  # ファイルを読んでから対話モードを始める
 LINT_FLAGS = ("--点検", "--lint")  # lib/点検.suru(する で書いた点検)でファイルを調べる
 LINT_SOURCE = "「点検」 を 読み込む\n点検内の点検実行する\n"
 
@@ -4866,11 +5156,14 @@ def main(argv: list[str]) -> int:
         print("型の検査で問題は見つかりませんでした")
         return 0
     checking = True
-    if len(argv) >= 3 and argv[1] in NO_CHECK_FLAGS:
+    if len(argv) >= 2 and argv[1] in NO_CHECK_FLAGS:
         checking = False
         argv = argv[:1] + argv[2:]
+    if len(argv) >= 2 and argv[1] in REPL_FLAGS:
+        repl(argv[2:], checking)  # ファイルを読んでから対話モードを始める
+        return 0
     if len(argv) < 2:
-        repl()
+        repl(checking=checking)
         return 0
     with open(argv[1], encoding="utf-8") as f:
         source = f.read()
