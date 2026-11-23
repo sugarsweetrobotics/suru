@@ -71,7 +71,7 @@ typedef struct Fn {
 } Fn;
 enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_SENDB, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
        A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_FIFO_NEW, A_CH_FIFO_OPEN, A_CH_FIFO_DEL, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
-       A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET };
+       A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
@@ -1585,6 +1585,23 @@ static V act_run(Act *a) {
         if (!a->b) return caught_failure();
         return perform(a->b); /* fail_msg が try_top を戻している */
     }
+    case A_FINALLY: {
+        TryFrame f;
+        f.prev = try_top;
+        f.quiet = 1; /* 文は、後始末のあとで同じエラーを続けるときに書く */
+        try_top = &f;
+        if (setjmp(f.jb) == 0) {
+            V r = perform(a->a);
+            try_top = f.prev;
+            perform(a->b);
+            return r;
+        }
+        /* fail_msg が try_top を戻している。後始末のあとで同じエラーを続ける */
+        char *msg = fail_last_msg ? strdup(fail_last_msg) : strdup("");
+        int32_t pos = fail_last_pos;
+        perform(a->b);
+        fail_msg(pos, msg);
+    }
     case A_RUNALL: {
         List *l = AS(List, a->a);
         if (l->n == 0) return V_EMPTY;
@@ -2491,6 +2508,14 @@ BI(s_try) { /* を, で(「で」を省くと成否を返す) */
         if (t != T_ACT && t != T_PURE) fail(pos, "「試行する」の「%s」は動作でなければなりません(「%s」が渡されました)", parts[i], plain(a[i]).s);
     }
     return mk_act(A_TRY, "試行する", a[0], a[1]);
+}
+BI(s_finally) { /* を, で */
+    const char *parts[2] = {"を", "で"};
+    for (int i = 0; i < 2; i++) {
+        int t = TAG(a[i]);
+        if (t != T_ACT && t != T_PURE) fail(pos, "「後始末実行する」の「%s」は動作でなければなりません(「%s」が渡されました)", parts[i], plain(a[i]).s);
+    }
+    return mk_act(A_FINALLY, "後始末実行する", a[0], a[1]);
 }
 BI(n_listen) { return mk_net(A_LISTEN, "待受開始する", a[0], 0, pos); }
 BI(n_accept) { return mk_net(A_ACCEPT, "接続受付する", a[0], 0, pos); }
@@ -3551,6 +3576,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"文字にする", 1, P1_WO, NULL, s_chr},
     {"文字コードにする", 1, P1_WO, NULL, s_ord},
     {"試行する", 2, P2_WO_DE, R_1_OPT, s_try},
+    {"後始末実行する", 2, P2_WO_DE, NULL, s_finally},
     {"バイト列にする", 1, P1_WO, NULL, m_tobytes},
     {"バイト列組立する", 1, P1_WO, NULL, m_build},
     {"数列にする", 1, P1_WO, NULL, m_list},

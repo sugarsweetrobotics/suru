@@ -1356,3 +1356,44 @@ def test_同じ名前の局所の関数と外の関数():
            "（x を 受け取って x * 2 を 返すこと） を 局所呼出する\n"
            "（x を 受け取って x * 3 を 返すこと） を 引数優先する")
     assert _text(src) == ["2", "101", "15"]
+
+
+# --- 後始末実行する ---
+
+FINALLY = """「標準」 を 読み込んで 使う
+片付ける とは 「片付けた」 を 表示する
+成功例 とは （「本体」 を 表示する） を 片付ける で 後始末実行する
+失敗例 とは 手順
+  「途中」 を 表示する
+  「x」 を 数値にして 表示する
+始めする とは 手順
+  r とは 成功例 を 試行した 結果
+  r を 表示する
+  s とは （失敗例 を 片付ける で 後始末実行する） を 試行した 結果
+  s を 表示する
+始めする
+"""
+
+
+def test_後始末実行するは成功でも失敗でも後始末を行う():
+    out, _ = _io(FINALLY)
+    assert out == ["本体", "片付けた", "（値 は 「本体」 の 成功）", "途中", "片付けた", "（理由 は 「「x」は数値にできません」 の 失敗）"]
+
+
+def test_後始末実行するは後始末のあとで同じエラーを続ける():
+    from suru import SuruError
+    out = []
+    with pytest.raises(SuruError) as info:
+        _io_into(out, "「標準」 を 読み込んで 使う\n壊す とは 手順\n  「途中」 を 表示する\n  「x」 を 数値にして 表示する\n壊す を （「片付けた」 を 表示する） で 後始末実行する")
+    assert str(info.value) == "4行目 9文字目: 「x」は数値にできません" and out == ["途中", "片付けた"]
+
+
+def test_後始末実行するは動作だけを受け取る():
+    from suru import SuruError
+    with pytest.raises(SuruError, match="「後始末実行する」の「で」は動作でなければなりません"):
+        _text("「標準」 を 読み込んで 使う\n（「a」 を 表示する） を 1 で 後始末実行する")
+
+
+def _io_into(out, src):
+    from suru import Interpreter
+    Interpreter(out=out.append).run(src)

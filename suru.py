@@ -3678,6 +3678,7 @@ STD_PRIMITIVES = [
     Builtin("文字にする", [(WO, True)], lambda it, a, line: _chr(a[WO], line)),
     Builtin("文字コードにする", [(WO, True)], lambda it, a, line: _ord(a[WO], line)),
     Builtin("試行する", [(WO, True), ("で", False)], lambda it, a, line: _try(a[WO], a.get("で"), line)),
+    Builtin("後始末実行する", [(WO, True), ("で", True)], lambda it, a, line: _finally(a[WO], a["で"], line)),
     # バイト列と、外部の関数とのやりとり
     Builtin("バイト列にする", [(WO, True)], lambda it, a, line: _str(a[WO], "「バイト列にする」の「を」", line).encode("utf-8")),
     Builtin("バイト列組立する", [(WO, True)], lambda it, a, line: _bytes_of_list(a[WO], line)),
@@ -3842,6 +3843,25 @@ def _try(m: Any, alt: Any, line: int) -> Any:
         return it.perform(alt)
 
     return Action("試行する", perform)
+
+
+def _finally(m: Any, cleanup: Any, line: int) -> Any:
+    """「m を 後始末 で 後始末実行する」: m を行い、成功しても実行時エラーでも 後始末 を行う。
+    結果は m の結果。m がエラーなら、後始末のあとで同じエラーを続ける"""
+    for v, p in ((m, "を"), (cleanup, "で")):
+        if not isinstance(v, ACTION_TYPES):
+            raise SuruError(f"「後始末実行する」の「{p}」は動作でなければなりません(「{format_value(v)}」が渡されました)", line)
+
+    def perform(it: "Interpreter") -> Any:
+        try:
+            r = it.perform(m)
+        except (SuruError, RecursionError):
+            it.perform(cleanup)
+            raise
+        it.perform(cleanup)
+        return r
+
+    return Action("後始末実行する", perform)
 
 
 def _chr(v: Any, line: int) -> str:
