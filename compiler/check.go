@@ -420,6 +420,15 @@ type Checker struct {
 	record bool
 	file   string // 調べている読み込んだファイル(本体なら "")
 	uses   []Use
+	// 「した 中身」の失敗を返す先(一番内側が最後)
+	exits []*exitCtx
+}
+
+// exitCtx は「した 中身」の失敗を返す先: kind は 関数(t は値の型)・手順(t は結果の型)・なし
+type exitCtx struct {
+	kind string
+	t    Type
+	used bool
 }
 
 func newChecker(ctx *ParseContext, shapes *Shapes) *Checker {
@@ -1153,7 +1162,9 @@ func (c *Checker) inferDefine(d *Define, env *TEnv, local *TEnv, t *TFun, sg *Ty
 	if t == nil {
 		local, t = c.functionHead(d, env, nil)
 	}
+	c.exits = append(c.exits, &exitCtx{kind: "関数", t: t.Result})
 	result := c.infer(d.Body, local)
+	c.exits = c.exits[:len(c.exits)-1]
 	if sg != nil {
 		c.unifyOr(t.Result, result, d.Line, func(sa, sb string) string {
 			return "「" + displayName(d.Name) + "」の値は" + sa + "と宣言されていますが、" + sb + "になっています"
@@ -1275,7 +1286,13 @@ func (c *Checker) infer(node Node, env *TEnv) Type {
 		for _, p := range n.Params {
 			params = append(params, TParam{p.Part, c.bindParam(p, local)})
 		}
-		return &TFun{params, c.infer(n.Body, local)}
+		result := newTVar()
+		c.exits = append(c.exits, &exitCtx{kind: "関数", t: result})
+		c.unifyOr(result, c.infer(n.Body, local), n.Line, func(sa, sb string) string {
+			return "無名関数の値の型が合いません(" + sa + " と " + sb + ")"
+		})
+		c.exits = c.exits[:len(c.exits)-1]
+		return &TFun{params, result}
 	case *Call:
 		return c.inferCall(n, env)
 	case *Ref:
@@ -1312,6 +1329,9 @@ func (c *Checker) infer(node Node, env *TEnv) Type {
 		return c.inferMatch(n, env)
 	case *Run:
 		t := env.lookup(runKey(n))
+		if t == nil && n.Unwrap {
+			return c.inferRunUnwrap(n, env)
+		}
 		if t == nil {
 			c.fail(n.Line, "「した 結果」は手順の文の中で使ってください(関数の本体や条件分岐の枝の中では、そこを「手順（…）」で囲みます)")
 		}
@@ -1322,10 +1342,21 @@ func (c *Checker) infer(node Node, env *TEnv) Type {
 		c.monadElem(m, elem, env)
 		local := newTEnv(env)
 		local.set(Hole, elem)
+		c.exits = append(c.exits, &exitCtx{kind: "なし"})
 		k := c.infer(n.Cont, local)
+		c.exits = c.exits[:len(c.exits)-1]
 		return c.bind(m, elem, k, n.Line, "「してから」の前の値({t})は動作ではありません(純粋な値なら「して」を使います)", env)
 	case *Do:
-		return c.doType(n.Statements, 0, newTEnv(env), n.Line)
+		ex := &exitCtx{kind: "手順", t: newTVar()}
+		c.exits = append(c.exits, ex)
+		t := c.doType(n.Statements, 0, newTEnv(env), n.Line)
+		c.exits = c.exits[:len(c.exits)-1]
+		if ex.used {
+			c.unifyOr(t, act(ex.t), n.Line, func(sa, sb string) string {
+				return "「した 中身」を使う手順の値は" + sb + "になりますが、" + sa + "になっています"
+			})
+		}
+		return t
 	case *Sequel:
 		return c.infer(n.Expr, env)
 	}
@@ -2024,6 +2055,9 @@ func (c *Checker) doType(stmts []Node, i int, env *TEnv, line Pos) Type {
 		if env.lookup(key) != nil {
 			continue
 		}
+		if r.Unwrap {
+			return c.doUnwrapType(stmts, i, env, line, r, key)
+		}
 		m := c.infer(r.Call, env)
 		elem := newTVar()
 		c.monadElem(m, elem, env)
@@ -2056,6 +2090,79 @@ func (c *Checker) doType(stmts []Node, i int, env *TEnv, line Pos) Type {
 	}
 	k := c.doType(stmts, i+1, env, line)
 	return c.bind(v, newTVar(), k, sl, "手順の途中の文の値({t})は動作ではありません", env)
+}
+
+// unwrapTypes は「した 中身」が使える型(成否・有無)
+var unwrapTypes = []string{"成否", "有無"}
+
+// callName は「…した」の呼び出しの名前(「する」を除く)
+func callName(n Node) string {
+	if call, ok := n.(*Call); ok {
+		return strings.TrimSuffix(call.Name, Suru)
+	}
+	return ""
+}
+
+// unwrapType は「した 中身」: value(成否・有無)の中の値の型。失敗は target(返す先の型)として返す
+func (c *Checker) unwrapType(value, target Type, call Node, line Pos) Type {
+	name := callName(call)
+	kind := unwrapTypes[0]
+	for _, t := range []Type{prune(value), prune(target)} {
+		if tc, ok := t.(*TCon); ok && (tc.Name == unwrapTypes[0] || tc.Name == unwrapTypes[1]) {
+			kind = tc.Name
+			break
+		}
+	}
+	inner := newTVar()
+	var rest []Type
+	if kind == unwrapTypes[0] {
+		rest = []Type{newTVar()}
+	}
+	c.unifyOr(value, &TCon{kind, append([]Type{inner}, rest...)}, line, func(sa, sb string) string {
+		return "「" + name + "した 中身」: " + sa + "は成否でも有無でもありません"
+	})
+	c.unifyOr(target, &TCon{kind, append([]Type{newTVar()}, rest...)}, line, func(sa, sb string) string {
+		return "「" + name + "した 中身」の失敗を返す先の値は" + sa + "です(" + sb + "を返す関数か手順の中で使ってください)"
+	})
+	return inner
+}
+
+// inferRunUnwrap は関数の本体の中の「した 中身」(手順の文の中のものは doUnwrapType で扱う)
+func (c *Checker) inferRunUnwrap(n *Run, env *TEnv) Type {
+	kind := "なし"
+	var top *exitCtx
+	if len(c.exits) > 0 {
+		top = c.exits[len(c.exits)-1]
+		kind = top.kind
+	}
+	if kind == "手順" {
+		c.fail(n.Line, "「した 中身」は手順の文の中では条件分岐の枝の中に書けません(そこを「手順（…）」で囲みます)")
+	}
+	if kind != "関数" {
+		c.fail(n.Line, "「した 中身」の失敗を返す先がありません(成否か有無を返す関数か手順の中で使ってください)")
+	}
+	return c.unwrapType(c.infer(n.Call, env), top.t, n.Call, n.Line)
+}
+
+// doUnwrapType は手順の文の中の「した 中身」: 動作なら行ってから、その結果(成否・有無)の中の値を使う
+func (c *Checker) doUnwrapType(stmts []Node, i int, env *TEnv, line Pos, r *Run, key string) Type {
+	top := c.exits[len(c.exits)-1]
+	top.used = true
+	m := c.infer(r.Call, env)
+	pm := prune(m)
+	value := m
+	isAct := false
+	if tc, ok := pm.(*TCon); ok && tc.Name == "動作" {
+		isAct = true
+		value = tc.Args[0]
+	}
+	local := newTEnv(env)
+	local.set(key, c.unwrapType(value, top.t, r.Call, r.Line))
+	k := c.doType(stmts, i, local, line)
+	if isAct {
+		return c.bind(m, value, k, r.Line, "{t}は動作ではありません", env)
+	}
+	return k
 }
 
 // --- 入口 ---

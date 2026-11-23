@@ -151,6 +151,7 @@ POLITE_FORMS = {"します": SURU, "しまして": SHITE, "しましてから": 
 
 # 予約語ではなく、決まった位置でだけ特別な意味になる言葉
 RESULT = "結果"     # 「入力 の 結果 を 数値にする」「入力した 結果」
+CONTENT = "中身"    # 「安全除算した 中身」: 成功(有)なら中の値、失敗(無)ならその失敗を返す(Rust の ?)
 TEJUN = "手順"      # 「手順（文。文。…）」: 文を順に行う
 HOLE = "\0前の結果"  # 「してから」の後ろの関数に渡す値(内部の名前)
 
@@ -864,10 +865,12 @@ class Chain:
 
 @dataclass(eq=False)
 class Run:
-    """「入力した 結果」: 手順の中で動作を行った結果"""
+    """「入力した 結果」: 手順の中で動作を行った結果。
+    unwrap なら「…した 中身」: 成功(有)なら中の値、失敗(無)なら一番内側の関数か手順がその失敗を返す"""
 
     call: Any
     line: int
+    unwrap: bool = False
 
 
 @dataclass
@@ -1062,6 +1065,7 @@ class Import:
     module: Module
     line: int
     open: bool = False  # 「読み込んで 使う」: 中の名前を前置きなしでも使う
+    auto: bool = False  # 書かずに自動で読み込んだ基本(成否・有無)
 
 
 @dataclass
@@ -1119,6 +1123,7 @@ class ParseContext:
         self.base_dir = base_dir  # 「「数学」 を 読み込む」で探すフォルダ
         self.modules: dict[str, Any] = dict(modules or {})  # 読み込んだファイル(絶対パス → Module。読み込み中は None)
         self.packages: dict[str, str] | None = None  # プロジェクトの依存(名前 → フォルダ)。None なら初めて読み込むときに探す
+        self.in_prelude = False  # 基本.suru そのものを読んでいる(基本を自動で読み込まない)
 
     def copy(self) -> "ParseContext":
         c = ParseContext(self.ctors, self.types, self.base_dir, self.modules)
@@ -1448,12 +1453,12 @@ class ExprParser:
                 if tok.kind == "CALL" and tok.form == SHITA:
                     self.next()
                     res = self.peek()
-                    if res is None or res.kind != "WORD" or res.value != RESULT:
-                        raise SuruError(f"「{tok.value[:-len(SURU)]}した」の後には「結果」を書いてください", tok.line)
+                    if res is None or res.kind != "WORD" or res.value not in (RESULT, CONTENT):
+                        raise SuruError(f"「{tok.value[:-len(SURU)]}した」の後には「結果」か「中身」を書いてください", tok.line)
                     self.next()
                     if has_piped:
                         args = merge_piped(args, piped)
-                    value: Any = Run(Call(tok.value, args, tok.line), tok.line)
+                    value: Any = Run(Call(tok.value, args, tok.line), tok.line, res.value == CONTENT)
                     args, piped, has_piped = {}, None, False
                 elif tok.kind == "CALL" and tok.form != KOTO:
                     break
@@ -1514,7 +1519,7 @@ class ExprParser:
                 cont = self.pipeline(Var(HOLE, tok.line), True)
                 return Chain(piped, cont, tok.line)
             if tok.form == SHITA:
-                raise SuruError("「した」の後には「結果」を書いてください", tok.line)
+                raise SuruError("「した」の後には「結果」か「中身」を書いてください", tok.line)
 
     # --- パターンマッチ ---------------------------------------------------
     # もし 値 が パターン ならば 式 { 区切り パターン ならば 式 } [ そうでなければ 式 ]
@@ -2576,8 +2581,14 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         target = import_target(n)
         if target is not None:
             imports[id(n)] = Import(load_module(target[0], ctx, n.line.number), n.line.number, target[1])
-    if any(isinstance(i, Import) for i in imports.values()):
-        _join_in_nodes(nodes, {i.module.name for i in imports.values() if isinstance(i, Import)})
+    prelude = None
+    if not ctx.in_prelude and not any(isinstance(i, Import) and i.module.path == PRELUDE_PATH for i in imports.values()):
+        line = _prelude_line(nodes)
+        if line is not None:
+            prelude = Import(load_prelude(ctx, line), line, True, auto=True)
+    modules = {i.module.name for i in imports.values() if isinstance(i, Import)} | ({PRELUDE_NAME} if prelude else set())
+    if modules:
+        _join_in_nodes(nodes, modules)
     # 「3 と 4 の 点」を読むために、型の定義を先に集める(定義の順番は自由)
     for n in nodes:
         td = try_parse_typedef(n)
@@ -2586,11 +2597,42 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
     saved, _CTX = _CTX, ctx
     try:
         statements = [imports[id(n)] if id(n) in imports else parse_statement(n) for n in nodes]
+        if prelude is not None:
+            statements.insert(0, prelude)
         _check_open_imports(statements)
         _attach_externs(statements)
         return attach_provisos(statements)
     finally:
         _CTX = saved
+
+
+def _prelude_line(nodes: list) -> int | None:
+    """基本(成否・有無)の名前を書いた最初の行(なければ None。基本.suru そのものなら None)"""
+    if any(td is not None and td.name in PRELUDE_TYPES for td in map(try_parse_typedef, nodes)):
+        return None
+    return _prelude_word_line(nodes)
+
+
+def _prelude_word_line(nodes: list) -> int | None:
+    for n in nodes:
+        for k, t in enumerate(n.line.tokens):
+            if t.kind in ("WORD", "CALL") and not t.quoted and (
+                    t.value in PRELUDE_WORDS or t.value in PRELUDE_CALLS
+                    or t.value.startswith(PRELUDE_NAME + MODULE_SEP)
+                    # 「無」は「… は 無」なら外部の関数の型(C の void)
+                    or t.value == PRELUDE_NONE and not (k > 0 and is_kw(n.line.tokens[k - 1], KW_WA))):
+                return n.line.number
+        line = _prelude_word_line(n.children)
+        if line is not None:
+            return line
+    return None
+
+
+def load_prelude(ctx: ParseContext, line: int) -> Module:
+    """lib/基本.suru を読む(同じフォルダに 基本.suru があっても、いつも同梱のもの)"""
+    if PRELUDE_PATH in ctx.modules and ctx.modules[PRELUDE_PATH] is not None:
+        return ctx.modules[PRELUDE_PATH]
+    return _load_path(PRELUDE_PATH, PRELUDE_NAME, ctx, line, prelude=True)
 
 
 def module_names(module: Module) -> set:
@@ -2783,6 +2825,10 @@ def load_module(name: str, ctx: ParseContext, line: int) -> Module:
     if not os.path.exists(path):
         path = package_path(name, ctx, line) or os.path.abspath(
             os.path.join(LIB_DIR, name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX))
+    return _load_path(path, name, ctx, line)
+
+
+def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool = False) -> Module:
     stem = os.path.splitext(os.path.basename(path))[0]
     if not stem or _is_all_hiragana(stem) or any(_is_hiragana(c) for c in stem) or any(c in stem for c in " 　「」『』（）()、。"):
         raise SuruError(f"「{stem}」はファイルの名前に使えません(名前と同じく漢字・カタカナ・英字で書いてください)", line)
@@ -2799,6 +2845,7 @@ def load_module(name: str, ctx: ParseContext, line: int) -> Module:
     sub = ParseContext(ctx.ctors, ctx.types, os.path.dirname(path))
     sub.modules = ctx.modules
     sub.packages = ctx.packages
+    sub.in_prelude = prelude
     try:
         program = parse_program(source, sub)
         for s in program:
@@ -3228,6 +3275,13 @@ NET_NAME = "通信"
 NET_PATH = os.path.join(LIB_DIR, NET_NAME + SOURCE_SUFFIX)
 THREAD_NAME = "スレッド"
 THREAD_PATH = os.path.join(LIB_DIR, THREAD_NAME + SOURCE_SUFFIX)
+# 基本(成否・有無)は、その名前を書いたファイルが自動で「読み込んで 使う」
+PRELUDE_NAME = "基本"
+PRELUDE_PATH = os.path.join(LIB_DIR, PRELUDE_NAME + SOURCE_SUFFIX)
+PRELUDE_NONE = "無"
+PRELUDE_TYPES = ("成否", "有無")
+PRELUDE_WORDS = frozenset(("成否", "有無", "成功", "失敗", "有"))
+PRELUDE_CALLS = frozenset(("成否にする", "有無にする", "中断する"))  # 取出する は性質の関数なので入れない
 
 
 def _int(v: Any, what: str, line: int | None) -> int:
@@ -3656,6 +3710,15 @@ def _errno() -> int:
     import ctypes
 
     return ctypes.get_errno()
+
+
+def _abort(it: Any, a: dict, line: int) -> Any:
+    raise SuruError(_str(a[WO], "「中断する」の「を」", line), line)
+
+
+PRELUDE_PRIMITIVES = [
+    Builtin("中断する", [(WO, True)], _abort),
+]
 
 
 def _fail_action(v: Any, line: int) -> Action:
@@ -4419,7 +4482,8 @@ def extern_builtin(d: Define) -> Builtin:
     return Builtin(d.name, [(p, True) for p in parts], lambda it, a, line: call(a, line))
 
 # lib/ のファイルごとの組み込み(そのファイルの中と、読み込んだ側の「標準内の…」「通信内の…」で使える)
-LIB_PRIMITIVES = {STD_PATH: STD_PRIMITIVES, NET_PATH: NET_PRIMITIVES, THREAD_PATH: THREAD_PRIMITIVES}
+LIB_PRIMITIVES = {STD_PATH: STD_PRIMITIVES, NET_PATH: NET_PRIMITIVES, THREAD_PATH: THREAD_PRIMITIVES,
+                  PRELUDE_PATH: PRELUDE_PRIMITIVES}
 
 def make_global_env() -> Env:
     env = Env()
@@ -4458,6 +4522,64 @@ F_PARAMS = [(WO, "m"), ("で", "f")]
 
 def _run_key(node: Run) -> str:
     return f"\0した結果{id(node)}"
+
+
+SUCCESS_SHAPES = ("成功", "有")  # 「した 中身」で中の値を取り出す形
+FAILURE_SHAPES = ("失敗", "無")  # 「した 中身」でそのまま返す形
+UNWRAP_TYPES = ("成否", "有無")
+
+
+def is_top_unwrap_do(s: Any) -> bool:
+    """一番外に書いた手順で、「した 中身」を使うもの(その結果が失敗ならエラーで終わる)"""
+    return isinstance(s, Do) and any(r.unwrap for st in s.statements for r in collect_runs(st, []))
+
+
+def check_top_failure(v: Any) -> None:
+    """一番外の手順の結果が失敗なら、その理由のエラーで終わる(Rust の main が Err を返したとき)"""
+    if isinstance(v, Record) and v.type_name == "成否" and v.ctor == "失敗":
+        r = v.values[0]
+        raise SuruError(r if isinstance(r, str) else format_value(r))
+
+
+class EarlyExit(Exception):
+    """「…した 中身」が失敗(無)だったので、一番内側の関数からその値を返す"""
+
+    def __init__(self, value: Any, line: Any):
+        super().__init__("早期脱出")
+        self.value = value
+        self.line = line
+
+
+def _call_name(call: Any) -> str:
+    name = getattr(call, "name", "")
+    return name[: -len(SURU)] if name.endswith(SURU) else name
+
+
+def unwrap_value(v: Any, call: Any, line: Any) -> tuple[bool, Any]:
+    """「した 中身」: 成功(有)なら (真, 中の値)、失敗(無)なら (偽, その値)"""
+    if isinstance(v, Record) and v.type_name in UNWRAP_TYPES:
+        if v.ctor in SUCCESS_SHAPES:
+            return True, v.values[0]
+        if v.ctor in FAILURE_SHAPES:
+            return False, v
+    raise SuruError(f"「{_call_name(call)}した 中身」: 「{format_value(v)}」は成否でも有無でもありません", line)
+
+
+def has_pure_unwrap(node: Any) -> bool:
+    """関数の本体として計算するところ(無名関数・手順・関数の定義の中は除く)に「した 中身」があるか"""
+    if isinstance(node, (Lambda, Do)):
+        return False
+    if isinstance(node, Define):
+        return not node.is_function and has_pure_unwrap(node.body)
+    if isinstance(node, Run):
+        return node.unwrap or has_pure_unwrap(node.call)
+    if isinstance(node, (list, tuple)):
+        return any(has_pure_unwrap(x) for x in node)
+    if isinstance(node, dict):
+        return any(has_pure_unwrap(x) for x in node.values())
+    if hasattr(node, "__dataclass_fields__"):
+        return any(has_pure_unwrap(getattr(node, f)) for f in node.__dataclass_fields__)
+    return False
 
 
 def collect_runs(node: Any, out: list) -> list:
@@ -4531,9 +4653,14 @@ class Interpreter:
         for s in program:
             if isinstance(s, (Define,) + TOP_LEVEL_ONLY):
                 continue
-            v = self.eval(s, self.globals)
+            try:
+                v = self.eval(s, self.globals)
+            except EarlyExit as e:
+                raise SuruError("「した 中身」の失敗を返す先がありません(関数か手順の中で使ってください)", e.line) from None
             if isinstance(v, ACTION_TYPES):
-                self.perform(v)
+                r = self.perform(v)
+                if is_top_unwrap_do(s):
+                    check_top_failure(r)
                 continue
             results.append(v)
             if emit is not None:
@@ -4649,6 +4776,21 @@ class Interpreter:
         """手順の i 番目からを行う。「した 結果」は連鎖に、途中の文は「それから」に置きかえる"""
         s = stmts[i]
         runs = [r for r in collect_runs(s, []) if not self._has(env, _run_key(r))]
+        if runs and runs[0].unwrap:
+            r = runs[0]
+            m = self.eval(r.call, env)
+
+            def k_unwrap(v: Any) -> Any:
+                ok, x = unwrap_value(v, r.call, r.line)
+                if not ok:
+                    return Pure(x)  # 手順はここで終わり、失敗(無)を結果にする
+                local = Env(env)
+                local.vars[_run_key(r)] = x
+                return self.run_do(stmts, i, local, line)
+
+            if isinstance(m, ACTION_TYPES):
+                return self.chain(m, k_unwrap, r.line)
+            return k_unwrap(m)
         if runs:
             r = runs[0]
             m = self.eval(r.call, env)
@@ -4860,6 +5002,11 @@ class Interpreter:
                 if key in e.vars:
                     return e.vars[key]
                 e = e.parent
+            if node.unwrap:
+                ok, x = unwrap_value(self.eval(node.call, env), node.call, node.line)
+                if not ok:
+                    raise EarlyExit(x, node.line)
+                return x
             raise SuruError(
                 "「した 結果」は手順の文の中で使ってください(関数の本体や条件分岐の枝の中では、そこを「手順（…）」で囲みます)",
                 node.line,
@@ -4957,6 +5104,10 @@ class Interpreter:
             for s in node.statements:
                 if isinstance(s, Define):
                     self.define(s, local)
+            # 「した 中身」を使う値の定義は、使うときでなく、書いた順にここで計算する
+            for s in node.statements:
+                if isinstance(s, Define) and not s.is_function and has_pure_unwrap(s.body):
+                    local.vars[s.name] = self.eval(s.body, local)
             result = None
             for s in node.statements:
                 if not isinstance(s, Define):
@@ -5018,7 +5169,10 @@ class Interpreter:
         local = Env(fn.closure)
         for p, pat in fn.params:
             bind(local, pat, args[p], p, fn.name, line)
-        result = self.eval(fn.body, local)
+        try:
+            result = self.eval(fn.body, local)
+        except EarlyExit as e:
+            return e.value
         if is_predicate(fn.name) and not isinstance(result, bool):
             raise SuruError(f"述語「{fn.name}」は 真 か 偽 を返す必要があります(「{self.format(result)}」が返りました)", line)
         return result

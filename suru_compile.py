@@ -94,11 +94,14 @@ declare i64 @rt_call_ex(i64, i32, ptr, ptr, ptr, i32)
 declare i64 @rt_ref(i64, i32, ptr, ptr, ptr, i32)
 declare i64 @rt_chain_then(i64, i64, i32)
 declare i64 @rt_do_run(i64, i64, ptr, i32)
+declare i64 @rt_do_unwrap(i64, i64, ptr, i32)
+declare i64 @rt_unwrap(i64, ptr, i32)
 declare i64 @rt_do_seq(i64, i64, i32)
 declare i64 @rt_do_result(i64)
 declare i64 @rt_std(ptr)
 declare i64 @rt_global_cached(ptr, ptr, i32)
 declare void @rt_top(i64)
+declare void @rt_top_unwrap(i64)
 declare void @rt_safepoint()
 @rt_gc_stop = external global i32
 declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)
@@ -708,8 +711,14 @@ class Compiler:
                 sc.vars[d.name] = Binding("lfn", owner=fg, slot=k, info=info)
             else:
                 sc.vars[d.name] = Binding("slot", owner=fg, slot=k, lazy=True)
+        eager = [d for d in defines if not d.is_function and S.has_pure_unwrap(d.body)]
+        eager_ids = {id(d) for d in eager}
+        for d in eager:
+            sc.vars[d.name] = Binding("slot", owner=fg, slot=sc.vars[d.name].slot)
         for d in defines:
             b = sc.vars[d.name]
+            if id(d) in eager_ids:
+                continue
             if d.is_function:
                 self.gen_function(d.name, d.params, d.body, sc, fg, b.info)
                 fg.escapes = True
@@ -719,6 +728,9 @@ class Compiler:
                 fg.escapes = True
                 v = fg.call("i64", "@rt_lazy", f"ptr {z}, ptr %fr")
             fg.store_slot(b.slot, v)
+        # 「した 中身」を使う値の定義は、使うときでなく、書いた順にここで計算する
+        for d in eager:
+            fg.store_slot(sc.vars[d.name].slot, self.ex(d.body, sc, fg))
 
     def ex_Block(self, node: S.Block, sc: Scope, fg: FnGen) -> str:
         local = Scope(sc, fg)
@@ -849,6 +861,18 @@ class Compiler:
 
     def ex_Run(self, node: S.Run, sc: Scope, fg: FnGen) -> str:
         key = S._run_key(node)
+        if sc.lookup(key) is None and node.unwrap:
+            # 関数の本体の「した 中身」: 失敗(無)ならその値を関数から返す
+            v = self.ex(node.call, sc, fg)
+            x = fg.call("i64", "@rt_unwrap", f"i64 {v}, ptr {self.cstr(S._call_name(node.call))}, i32 {pos_of(node)}")
+            b = fg.tmp()
+            fg.emit(f"{b} = icmp eq i64 {x}, 0")
+            early, cont = fg.new_label(), fg.new_label()
+            fg.emit(f"br i1 {b}, label %{early}, label %{cont}")
+            fg.start(early)
+            fg.emit(f"ret i64 {v}")
+            fg.start(cont)
+            return x
         if sc.lookup(key) is None:
             fg.call("void", "@rt_run_outside", f"i32 {pos_of(node)}")
             fg.emit("unreachable")
@@ -868,6 +892,12 @@ class Compiler:
             r = runs[0]
             m = self.ex(r.call, sc, fg)
             key = S._run_key(r)
+            if r.unwrap:
+                def rest_u(local: Scope, kfg: FnGen) -> str:
+                    return self.do(stmts, i, local, kfg, line)
+
+                k = self.closure("続き", [(S.WO, key)], rest_u, sc, fg, check_pred=False)
+                return fg.call("i64", "@rt_do_unwrap", f"i64 {m}, i64 {k}, ptr {self.cstr(S._call_name(r.call))}, i32 {pos_of(r)}")
 
             def rest(local: Scope, kfg: FnGen) -> str:
                 return self.do(stmts, i, local, kfg, line)
@@ -973,7 +1003,7 @@ class Compiler:
             if isinstance(s, (S.Define,) + S.TOP_LEVEL_ONLY):
                 continue
             v = self.ex(s, top, ini)
-            ini.call("void", "@rt_top", f"i64 {v}")
+            ini.call("void", "@rt_top_unwrap" if S.is_top_unwrap_do(s) else "@rt_top", f"i64 {v}")
         ini.emit("ret i64 0")
         main = ini.finish("define internal i64 @suru_init(ptr %up)")
         self.functions.append(main)
