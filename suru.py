@@ -3802,8 +3802,74 @@ class _Chan:
             _Sched.cv.notify_all()
 
 
+class _PipeChan:
+    """パイプの通路: fork したプロセスどうしで値を渡す。値は直列化して、長さ(4 バイト)を前に付けて書く。
+    1つのプロセスでは向きは1つ: 初めて送ったら読む口を、初めて受け取ったら書く口を閉じる
+    (書く口がすべて閉じると、受け取る側は「閉じた」と分かる)。runtime/suru_rt.c と同じ"""
+
+    def __init__(self, it: "Interpreter") -> None:
+        self.it = it
+        self.r, self.w = os.pipe()
+        self.closed = False
+
+    def __str__(self) -> str:
+        return "<通路>"
+
+    def _close(self, which: str) -> None:
+        fd = getattr(self, which)
+        if fd >= 0:
+            os.close(fd)
+            setattr(self, which, -1)
+
+    def send(self, x: Any, line: int) -> Any:
+        if self.closed or self.w < 0:
+            raise SuruError("閉じた通路には送れません", line)
+        self._close("r")
+        d = _serialize(x, line)
+        data = len(d).to_bytes(4, "little") + d
+        try:
+            while data:
+                data = data[os.write(self.w, data):]
+        except BrokenPipeError:
+            raise SuruError("受け取る相手がいないので、通路に送れません", line) from None
+        except OSError as e:
+            raise SuruError(f"通路に送れませんでした({e.strerror})", line) from None
+        return x
+
+    def _read(self, n: int, line: int) -> bytes:
+        out = b""
+        while len(out) < n:
+            try:
+                k = os.read(self.r, n - len(out))
+            except OSError as e:
+                raise SuruError(f"通路から受け取れませんでした({e.strerror})", line) from None
+            if not k:
+                break
+            out += k
+        return out
+
+    def take(self, line: int) -> tuple:
+        if self.r < 0:
+            raise SuruError("この通路から受け取れません(このプロセスはこの通路に送っています)", line)
+        self._close("w")
+        h = self._read(4, line)
+        if not h:
+            return False, None
+        if len(h) < 4:
+            raise SuruError("通路の値が途中で切れています", line)
+        n = int.from_bytes(h, "little")
+        d = self._read(n, line)
+        if len(d) < n:
+            raise SuruError("通路の値が途中で切れています", line)
+        return True, _deserialize(self.it, d, line)
+
+    def close(self) -> None:
+        self._close("w")
+        self.closed = True
+
+
 def _need_chan(v: Any, what: str, line: int) -> _Chan:
-    if not (isinstance(v, Record) and v.ctor == CHAN_CTOR and isinstance(v.values[0], _Chan)):
+    if not (isinstance(v, Record) and v.ctor == CHAN_CTOR and isinstance(v.values[0], (_Chan, _PipeChan))):
         raise SuruError(f"{what}は通路でなければなりません(「{format_value(v)}」が渡されました)", line)
     return v.values[0]
 
@@ -3965,6 +4031,8 @@ THREAD_PRIMITIVES = [
     Builtin("並列写像する", [(WO, True), ("で", True)], _pmap),
     Builtin("コア数取得する", [], _ncpu),
     Builtin("通路作成する", [("で", True)], _chan_new),
+    Builtin("プロセス間通路作成する", [], lambda it, a, line: Action(
+        "プロセス間通路作成する", lambda it2: Record(CHAN_CTOR, CHAN_CTOR, (THREAD_FIELD,), (_PipeChan(it2),)))),
     Builtin("通路送信する", [(WO, True), ("へ", True)],
             lambda it, a, line: Action("通路送信する", lambda it2: _need_chan(a["へ"], "「通路送信する」の「へ」", line).send(a[WO], line))),
     Builtin("通路受信する", [("から", True)], _chan_recv),
