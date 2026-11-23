@@ -123,6 +123,8 @@ KW_SOREKARA = "それから"  # 前の文に続けて行う: 「やあ」を表�
 KW_KATSU = "かつ"      # 真偽の「かつ」、パターンの条件: 半径 の 円 かつ 半径 > 10 ならば …
 KW_MATAHA = "または"   # 真偽の「または」
 DESU = "です"       # 文末の飾り: 「p とは 3 と 4 の 点 です。」の「です」は読み捨てる
+KW_HENSU = "返す"    # 関数の型の宣言の終わりの飾り: 「数 を 階乗する は 数 を 返す」の「を 返す」は読み捨てる
+KW_HENSU_POLITE = "返します"
 RESERVED_MARKS = {"・": "中黒「・」"}
 MODULE_MARK = "内"  # 読み込んだファイルの中の名前: 数学内の円周率
 MODULE_SEP = MODULE_MARK + "の"
@@ -136,7 +138,7 @@ KW_EXTERN = "外部の"  # 外部の「m」 を 読み込む / x を 余弦に�
 
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
-    KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA, DESU,
+    KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA, DESU, KW_HENSU, KW_HENSU_POLITE,
     KW_IMPORT, KW_IMPORT_POLITE, KW_IMPORT_TE, KW_USE, KW_USE_POLITE,
 }
 KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU}
@@ -265,7 +267,7 @@ def _classify(word: str, line: int, quoted: bool = False) -> list[Token]:
     for p in PARTICLES:
         rest = word[len(p):]
         if word.startswith(p) and rest and not _is_hiragana(rest[0]):
-            if rest == KW_RETURN:
+            if rest in (KW_RETURN, KW_HENSU, KW_HENSU_POLITE):
                 return [Token("PART", p, line), Token("KW", rest, line)]
             call = _classify_call(rest, line)
             if call is not None:
@@ -385,7 +387,7 @@ def _find_name_close(text: str, i: int, line: int) -> int:
 
 OPERATOR_CHARS = {c for op in OPERATORS for c in unicodedata.normalize("NFKC", op)} | set(OPERATORS)
 # 漢字とひらがなが混ざった決まった言葉(名前の切り出しより先に照合する)
-MIXED_WORDS = ("受け取って", "返すこと", "長さ", "残り", KW_IMPORT_POLITE, KW_IMPORT, KW_IMPORT_TE, KW_USE_POLITE, KW_USE)
+MIXED_WORDS = ("受け取って", "返すこと", KW_HENSU_POLITE, KW_HENSU, "長さ", "残り", KW_IMPORT_POLITE, KW_IMPORT, KW_IMPORT_TE, KW_USE_POLITE, KW_USE)
 # ひらがなを含む組み込み関数の名前(「する」の前の部分)。名前として切り出す
 MIXED_NAMES = ("畳み込み",)
 # ひらがなの並びを分けるときの辞書。長いものから順に照合する
@@ -2255,6 +2257,17 @@ def _is_type_word(tok: Token) -> bool:
     )
 
 
+RETURNS_ONLY_FUN = "「を 返す」は関数の型の宣言の終わりにだけ書けます(「数 を 階乗する は 数 を 返す」)"
+
+
+def drop_returns(right: list[Token]) -> tuple[list[Token], bool]:
+    """型の宣言の「は」より後ろの終わりの飾り「を 返す」「を 返します」を取り除く"""
+    if len(right) >= 3 and right[-2].kind == "PART" and right[-2].value == WO and right[-1].kind == "KW" \
+            and right[-1].value in (KW_HENSU, KW_HENSU_POLITE):
+        return right[:-2], True
+    return right, False
+
+
 def try_parse_type_sig(tokens: list[Token]) -> TypeSig | None:
     """「数 を 階乗する は 数」「税率 は 数」なら型の宣言を返す(そうでなければ None)"""
     ha = find_top_level(tokens, KW_WA)
@@ -2263,8 +2276,9 @@ def try_parse_type_sig(tokens: list[Token]) -> TypeSig | None:
     left, right = tokens[:ha], tokens[ha + 1 :]
     line = tokens[0].line
     last = left[-1]
+    right, returns = drop_returns(right)
     if last.kind == "CALL" and last.form == SURU and not last.negated:
-        # 関数: 「型 助詞 型 助詞 … 名前する は 型」
+        # 関数: 「型 助詞 型 助詞 … 名前する は 型」(後ろに「を 返す」を付けてもよい)
         params = []
         i = 0
         while i < len(left) - 1:
@@ -2281,6 +2295,8 @@ def try_parse_type_sig(tokens: list[Token]) -> TypeSig | None:
         # 値: 「税率 は 数」(「点 は 比較可能」は性質の実装)
         if len(right) == 1 and not _is_type_word(right[0]):
             return None
+        if returns:
+            raise SuruError(RETURNS_ONLY_FUN, line)
         return TypeSig(_check_name(left[0]), None, parse_type_all(right, line), line)
     return None
 
