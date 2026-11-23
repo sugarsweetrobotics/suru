@@ -36,6 +36,7 @@ func CompileSource(source, baseDir, path string, check bool) (ir string, err *Su
 			TypeCheck(program, ctx)
 		}
 		checkDefinitions(program, ctx)
+		setLineBase(ctx, source)
 		ir = newCompiler(ctx, source).compile(program, path)
 	})
 	return

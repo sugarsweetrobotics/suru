@@ -639,6 +639,14 @@ def test_表示するは動作を返しトップレベルで行う():
     assert out == ["a", "b"] and values == [2]
 
 
+def test_続表示するは改行を付けない():
+    from suru import Interpreter
+    out = []
+    it = Interpreter(out=lambda s: out.append(s + "\n"), write=out.append)
+    it.run("「あなた> 」 を 続表示する\n「こん」 を 続表示する\n「にちは」 を 表示する\n「a」を続表示する。それから、「b」を表示する。")
+    assert "".join(out) == "あなた> こんにちは\nab\n"
+
+
 def test_作っただけの動作は行われない():
     out, values = _io("（「a」 を 表示する） と 1")
     assert out == [] and values[0][1] == 1
@@ -1226,6 +1234,17 @@ def test_通信でこちらからつなぐ():
     assert out == CLIENT_OUT
 
 
+def test_バイト列受信するは文字の途中で切れても壊さない():
+    from net_helper import CLIENT_BYTES, CLIENT_BYTES_OUT, answer_once, free_port
+
+    port = free_port()
+    t = answer_once(port)
+    out: list = []
+    Interpreter(out=out.append).run(CLIENT_BYTES.replace("PORT", str(port)))
+    t.join(10)
+    assert out == CLIENT_BYTES_OUT
+
+
 def test_つなげない相手はエラー():
     from net_helper import free_port
 
@@ -1315,3 +1334,158 @@ def test_HTTPのサーバーは失敗しても止まらない():
     wait_http(port)
     abuse(port)
     assert http(port)[::2] == (200, "こんにちは")
+
+
+# --- 受け取った関数を名前+「する」で呼ぶ ---
+
+PARAM_FOLD = """文字列 の リスト を 甲 から （甲 を 文字列 で 受け取って 甲 を 返すこと） で 順畳込する は 甲
+行 を 初め から 処理 で 順畳込する とは
+  もし 行 が 空 ならば 初め
+  そうでなければ （行 の 残り） を （初め を 行 の 先頭 で 処理する） から 処理 で 順畳込する
+数 を 文字列 で 足込する とは 数 + （文字列 を 数値にする）
+"""
+
+
+def test_受け取った関数を名前で呼ぶ():
+    assert _text(PARAM_FOLD + "（「1」 と 「2」 と 「3」） を 0 から 足込すること で 順畳込する\n"
+               "（「a」 と 「b」） を 「」 から （s を t で 受け取って s + t + 「!」 を 返すこと） で 順畳込する") == ["6", "a!b!"]
+
+
+def test_受け取った関数を名前で呼ぶ_無名関数と手順と部分適用():
+    out, _ = _io("変換 を 二回表示する とは 手順\n  1 を 変換して 表示する\n  2 を 変換して 表示する\n"
+                 "（x を 受け取って x * 10 を 返すこと） を 二回表示する\n"
+                 "a を b に 掛数する とは a * b\n"
+                 "（3 に 掛数すること） を 二回表示する")
+    assert out == ["10", "20", "3", "6"]
+
+
+def test_同じ名前の局所の関数と外の関数():
+    src = ("処理 を 呼出する とは 1 を 処理する\n"
+           "処理 を 局所呼出する とは\n  x を 処理する とは x + 100\n  1 を 処理する\n"
+           "表示 を 引数優先する とは 5 を 表示する\n"
+           "（x を 受け取って x * 2 を 返すこと） を 呼出する\n"
+           "（x を 受け取って x * 2 を 返すこと） を 局所呼出する\n"
+           "（x を 受け取って x * 3 を 返すこと） を 引数優先する")
+    assert _text(src) == ["2", "101", "15"]
+
+
+# --- 後始末実行する ---
+
+FINALLY = """「標準」 を 読み込んで 使う
+片付ける とは 「片付けた」 を 表示する
+成功例 とは （「本体」 を 表示する） を 片付ける で 後始末実行する
+失敗例 とは 手順
+  「途中」 を 表示する
+  「x」 を 数値にして 表示する
+始めする とは 手順
+  r とは 成功例 を 試行した 結果
+  r を 表示する
+  s とは （失敗例 を 片付ける で 後始末実行する） を 試行した 結果
+  s を 表示する
+始めする
+"""
+
+
+def test_後始末実行するは成功でも失敗でも後始末を行う():
+    out, _ = _io(FINALLY)
+    assert out == ["本体", "片付けた", "（値 は 「本体」 の 成功）", "途中", "片付けた", "（理由 は 「「x」は数値にできません」 の 失敗）"]
+
+
+def test_後始末実行するは後始末のあとで同じエラーを続ける():
+    from suru import SuruError
+    out = []
+    with pytest.raises(SuruError) as info:
+        _io_into(out, "「標準」 を 読み込んで 使う\n壊す とは 手順\n  「途中」 を 表示する\n  「x」 を 数値にして 表示する\n壊す を （「片付けた」 を 表示する） で 後始末実行する")
+    assert str(info.value) == "4行目 9文字目: 「x」は数値にできません" and out == ["途中", "片付けた"]
+
+
+def test_後始末実行するは動作だけを受け取る():
+    from suru import SuruError
+    with pytest.raises(SuruError, match="「後始末実行する」の「で」は動作でなければなりません"):
+        _text("「標準」 を 読み込んで 使う\n（「a」 を 表示する） を 1 で 後始末実行する")
+
+
+def _io_into(out, src):
+    from suru import Interpreter
+    Interpreter(out=out.append).run(src)
+
+
+def test_入力確認するは入力の終わりで無():
+    out, _ = _io("""文字列 の 有無 を 応答する は 文字列 の 動作
+（s の 有） を 応答する とは 手順
+  「> 」 + s を 表示する
+  「? 」 を 入力確認してから 応答する
+無 を 応答する とは 「おしまい」 を 表示する
+「? 」 を 入力確認してから 応答する
+""", ["a", "b"])
+    assert out == ["? ", "> a", "? ", "> b", "? ", "おしまい"]
+
+
+def test_もしの枝のした結果は選んだ枝だけ行う():
+    out, _ = _io("""n を 質問する とは 手順
+  答 とは もし n > 1 ならば 「大? 」 を 入力した 結果 そうでなければ 「小」
+  追加 とは もし n > 5 ならば 「x」 そうでなければ もし n > 1 ならば 「中? 」 を 入力した 結果 そうでなければ 「-」
+  答 + 追加 を 表示する
+方法 を 処理する とは 手順
+  本文 とは もし 方法 が 「HEAD」 ならば 「」 そうでなければ 「本文? 」 を 入力した 結果
+  本文 の 長さ を 結果にする
+1 を 質問する
+3 を 質問する
+「HEAD」 を 処理してから 表示する
+「GET」 を 処理してから 表示する
+""", ["3", "4", "abc"])
+    assert out == ["小-", "大? ", "中? ", "34", "0", "本文? ", "3"]
+
+
+# --- 読み込んだファイルの中の実行時エラーは、ファイルの名前と行 ---
+
+PARTS = "x を 壊数する とは\n  x を 数値にする\n"
+PARTS_MAIN = "# 本体\n\n「部品」 を 読み込む\n（「a」 を 部品内の壊数する） + 1\n"
+PARTS_ERR = "エラー: 「部品.suru」の2行目 7文字目: 「a」は数値にできません\n    x を 数値にする\n         ^"
+
+
+def test_読み込んだファイルの中の実行時エラーはファイルの名前を付ける(tmp_path):
+    from suru import format_error
+    (tmp_path / "部品.suru").write_text(PARTS, encoding="utf-8")
+    with pytest.raises(SuruError) as info:
+        _run_in(tmp_path, PARTS_MAIN)
+    assert str(info.value) == "「部品.suru」の2行目 7文字目: 「a」は数値にできません"
+    assert format_error(info.value, PARTS_MAIN) == PARTS_ERR
+    with pytest.raises(SuruError, match="^「基本.suru」の[0-9]+行目 [0-9]+文字目: 無を取り出しました$"):
+        _run_in(tmp_path, "無 を 取出する")
+
+
+# --- 型の名前はファイルごと ---
+
+TYPE_A = """応答 とは 状態 と 本文 の 組
+応答 は 表示可能
+  r を 文字列化する とは 「甲の応答 」 + （r の 状態 を 文字列化する）
+x を 甲作成する とは （x と 「甲」 の 応答）
+（s と b の 応答） を 甲状態取得する とは s
+"""
+TYPE_B = """応答 とは 番号 の 応答 か 空応答
+x を 乙作成する とは x の 応答
+（n の 応答） を 乙番号取得する とは n
+空応答 を 乙番号取得する とは 0
+"""
+
+
+def test_型の名前はファイルごとに分かれる(tmp_path):
+    _files(tmp_path, 甲=TYPE_A, 乙=TYPE_B)
+    head = "「甲」 を 読み込む\n「乙」 を 読み込む\n"
+    assert _run_in(tmp_path, head + "1 を 甲内の甲作成する\n（2 を 乙内の乙作成する） を 乙内の乙番号取得する\n"
+                   "（3 と 「x」 の 甲内の応答） の 本文\n（5 の 乙内の応答）\n乙内の空応答 を 乙内の乙番号取得する\n"
+                   "（3 と 「x」 の 甲内の応答） を 甲内の甲状態取得する") == ["甲の応答 1", "2", "x", "（番号 は 5 の 応答）", "0", "3"]
+    # 片方だけ読み込めば、前置きなしでも書ける
+    assert _run_in(tmp_path, "「乙」 を 読み込む\n（5 の 応答） を 乙内の乙番号取得する\n空応答") == ["5", "空応答"]
+    with pytest.raises(SuruError, match="「応答」は「甲」と「乙」の両方にある型か形の名前です。「甲内の応答」のように"):
+        _run_in(tmp_path, head + "（5 の 応答）")
+
+
+def test_型の名前はファイルごとに分かれる_型の検査(tmp_path):
+    from suru_check import check
+    _files(tmp_path, 甲=TYPE_A, 乙=TYPE_B)
+    head = "「甲」 を 読み込む\n「乙」 を 読み込む\n"
+    check(head + "甲内の応答 を 表示用にする は 文字列\nr を 表示用にする とは r の 本文\n（1 と 「a」 の 甲内の応答） を 表示用にする\n", str(tmp_path))
+    with pytest.raises(SuruError, match="乙内の応答"):
+        check(head + "甲内の応答 を 表示用にする は 文字列\nr を 表示用にする とは r の 本文\n（1 の 乙内の応答） を 表示用にする\n", str(tmp_path))

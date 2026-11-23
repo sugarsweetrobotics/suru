@@ -308,7 +308,7 @@ func nameAt(lines []string, pos Pos, name string) Pos {
 	if i < 0 {
 		return pos
 	}
-	return Pos{pos.Line, from + len([]rune(string(rs[from:])[:i])) + 1}
+	return Pos{pos.Line, from + len([]rune(string(rs[from:])[:i])) + 1, pos.File}
 }
 
 var spanForms = []string{"しましてから", Dearukoto, Shitekara, "しまして", Koto, "します", Dearu, Denai, Shite, Shita, Suru}

@@ -18,6 +18,7 @@ import stat
 import struct
 import sys
 import unicodedata
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,15 +27,27 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 
+_POS_SRC: str | None = None  # 読み込んだファイルを解析している間は、そのファイルの道(Pos.src に入れる)
+SOURCES: dict[str, str] = {}  # 読み込んだファイルの道 → 中身(エラーの行を見せるため)
+
+
 class Pos(int):
-    """行番号。int として使えるが、何文字目か(col)も覚えている"""
+    """行番号。int として使えるが、何文字目か(col)と、読み込んだファイルの中ならその道(src)も覚えている"""
 
     col: int | None
+    src: str | None
 
     def __new__(cls, line: int, col: int | None = None) -> "Pos":
         obj = int.__new__(cls, line)
         obj.col = col
+        obj.src = _POS_SRC
         return obj
+
+
+def _file_of(line: Any) -> str:
+    """読み込んだファイルの中の位置なら「「部品.suru」の」(本体のファイルなら「」)"""
+    src = getattr(line, "src", None)
+    return f"「{os.path.basename(src)}」の" if src else ""
 
 
 def _where(line: int | None) -> str:
@@ -49,7 +62,7 @@ class SuruError(Exception):
         self.line = line
         self.col = getattr(line, "col", None)
         self.message = message
-        super().__init__(f"{_where(line)}: {message}" if line else message)
+        super().__init__(f"{_file_of(line)}{_where(line)}: {message}" if line else message)
 
 
 def _display_width(text: str) -> int:
@@ -59,6 +72,9 @@ def _display_width(text: str) -> int:
 def format_error(e: "SuruError", source: str | None = None) -> str:
     """エラーの文と、分かれば該当する行と位置の印(^)を返す"""
     out = f"エラー: {e}"
+    src = getattr(e.line, "src", None)
+    if src:
+        source = SOURCES.get(src)
     lines = source.splitlines() if source is not None else []
     if e.line and 0 < e.line <= len(lines):
         text = lines[e.line - 1].replace("\t", "    ")
@@ -166,6 +182,7 @@ class Token:
     form: str = ""  # CALL のとき "する" / "して" / "すること"
     quoted: bool = False  # 『』で囲んだ名前
     negated: bool = False  # 「…でない」
+    qualified: bool = False  # 読み込んだファイルの型か形の名前に、そのファイルの前置きを付けたもの(「部品内の点」)
 
     def __repr__(self) -> str:
         return f"{self.kind}:{self.value}{('/' + self.form) if self.form else ''}"
@@ -706,7 +723,7 @@ def split_lines(source: str) -> list[Line]:
         if not is_punct_line(raw) and not _opens_punct(raws, k):
             tokens = tokenize_line(raw, number)
             if tokens:
-                lines.append(Line(indent, tokens, number))
+                lines.append(Line(indent, tokens, Pos(number)))
             k += 1
             continue
         # 句読点の書き方: 「。」で文が終わるまで次の行も読む
@@ -1057,6 +1074,7 @@ class Module:
     path: str
     program: list
     private: frozenset = frozenset()  # 「… は 非公開とする」で外から見えない名前
+    source: str = field(default="", repr=False, compare=False)  # ファイルの中身(コンパイルした実行ファイルのエラーの表示に使う)
 
 
 @dataclass
@@ -1128,6 +1146,8 @@ class ParseContext:
         self.modules: dict[str, Any] = dict(modules or {})  # 読み込んだファイル(絶対パス → Module。読み込み中は None)
         self.packages: dict[str, str] | None = None  # プロジェクトの依存(名前 → フォルダ)。None なら初めて読み込むときに探す
         self.in_prelude = False  # 基本.suru そのものを読んでいる(基本を自動で読み込まない)
+        # 読み込んだファイル(lib/ のものを除く)を解析しているときは「部品内の」。そのファイルの型と形の名前に付ける
+        self.qualify = ""
 
     def copy(self) -> "ParseContext":
         c = ParseContext(self.ctors, self.types, self.base_dir, self.modules)
@@ -2190,7 +2210,7 @@ def parse_statement(node: Node) -> Any:
     if len(head) == 3 and head[0].kind == "WORD" and is_kw(head[1], KW_TOIU) and is_kw(head[2], KW_SEISHITSU):
         return parse_trait_decl(node, head[0], after)
     name, params, is_function = parse_definition_head(head, node.line.number)
-    if MODULE_SEP in name:
+    if MODULE_SEP in name and not head[0].qualified:
         raise SuruError(f"「{name}」: 読み込んだファイルの中の名前は定義できません", head[0].line)
     after_t = nosep(after)
     if len(after_t) == 1 and after_t[0].kind == "WORD" and after_t[0].value == TEJUN and not after_t[0].quoted and node.children:
@@ -2373,6 +2393,8 @@ def _check_name(tok: Token) -> str:
         raise SuruError(f"名前に「{tok.value}」は使えません", tok.line)
     if not tok.quoted and _is_all_hiragana(tok.value):
         raise hiragana_name_error(tok.value, tok.line)
+    if tok.qualified:
+        return tok.value
     if MODULE_SEP in tok.value:
         raise SuruError(f"「{tok.value}」: 読み込んだファイルの中の名前は定義できません", tok.line)
     return tok.value
@@ -2603,6 +2625,7 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
     modules = {i.module.name for i in imports.values() if isinstance(i, Import)} | ({PRELUDE_NAME} if prelude else set())
     if modules:
         _join_in_nodes(nodes, modules)
+    _qualify_type_names(nodes, ctx)
     # 「3 と 4 の 点」を読むために、型の定義を先に集める(定義の順番は自由)
     for n in nodes:
         td = try_parse_typedef(n)
@@ -2616,10 +2639,73 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         _check_open_imports(statements)
         _attach_externs(statements)
         statements = attach_provisos(statements)
-        name_unwraps([s for s in statements if not isinstance(s, (Import, ExternLib))])
+        body = [s for s in statements if not isinstance(s, (Import, ExternLib))]
+        name_unwraps(body)
+        resolve_param_calls(body, frozenset())
+        split_branch_runs(body)
         return statements
     finally:
         _CTX = saved
+
+
+def short_type_name(name: str) -> str:
+    """表示する型と形の名前: 読み込んだファイルの前置き(「部品内の」)を除く"""
+    return name.rpartition(MODULE_SEP)[2]
+
+
+def _is_lib_path(path: str) -> bool:
+    return os.path.dirname(os.path.abspath(path)) == os.path.abspath(LIB_DIR)
+
+
+def _qualify_type_names(nodes: list, ctx: ParseContext) -> None:
+    """型と形の名前は、ファイルごとに分ける。読み込んだファイル(lib/ のものを除く)の型「点」は、中では「点」、
+    外では「部品内の点」が本当の名前。外でも、ほかのファイルの型とぶつからなければ「点」と書ける。
+    字句の名前を本当の名前に置きかえる(ぶつかる名前を前置きなしで書いたらエラー)"""
+    own: dict[str, str] = {}
+    for n in nodes:
+        td = try_parse_typedef(n)
+        if td is not None:
+            for name in [td.name] + [c for c, _ in td.ctors]:
+                own[name] = ctx.qualify + name
+    candidates: dict[str, dict] = {}  # 前置きなしの名前 → {本当の名前: それを持つファイルの名前}
+    full: dict[str, str] = {}  # 「部品内の点」 → 本当の名前
+    for m in ctx.modules.values():
+        if m is None:
+            continue
+        for s in m.program:
+            if isinstance(s, TypeDef):
+                for canon in [s.name] + [c for c, _ in s.ctors]:
+                    name = short_type_name(canon)
+                    full[m.name + MODULE_SEP + name] = canon
+                    candidates.setdefault(name, {}).setdefault(canon, m.name)
+    short = {k: next(iter(v)) for k, v in candidates.items() if len(v) == 1}
+    owners = {k: list(v.values()) for k, v in candidates.items() if len(v) > 1}
+    if not own and not short and not full:
+        return
+
+    def fix(tokens: list) -> list:
+        out = []
+        for t in tokens:
+            if t.kind == "WORD":
+                v = t.value
+                canon = own.get(v)
+                if canon is None and v in owners:
+                    names = "と".join(f"「{x}」" for x in owners[v])
+                    raise SuruError(f"「{v}」は{names}の両方にある型か形の名前です。「{owners[v][0]}{MODULE_SEP}{v}」のように"
+                                    "ファイルの名前を付けて書いてください", t.line)
+                if canon is None:
+                    canon = short.get(v) or full.get(v)
+                if canon is not None and (canon != v or MODULE_SEP in canon):
+                    t = Token(t.kind, canon, t.line, t.form, t.quoted, t.negated, MODULE_SEP in canon)
+            out.append(t)
+        return out
+
+    def walk(ns: list) -> None:
+        for n in ns:
+            n.line.tokens = fix(n.line.tokens)
+            walk(n.children)
+
+    walk(nodes)
 
 
 def _prelude_line(nodes: list) -> int | None:
@@ -2900,6 +2986,10 @@ def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool
     sub.modules = ctx.modules
     sub.packages = ctx.packages
     sub.in_prelude = prelude
+    sub.qualify = "" if _is_lib_path(path) else stem + MODULE_SEP
+    global _POS_SRC
+    saved_src, _POS_SRC = _POS_SRC, path
+    SOURCES[path] = source
     try:
         program = parse_program(source, sub)
         for s in program:
@@ -2907,9 +2997,11 @@ def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool
                 raise SuruError("読み込むファイルには定義だけを書いてください", first_line_of(s))
     except SuruError as e:
         raise SuruError(f"「{stem}{SOURCE_SUFFIX}」の{_where(e.line) if e.line else ''}: {e.message}", line) from None
+    finally:
+        _POS_SRC = saved_src
     ctx.ctors.update(sub.ctors)
     ctx.types.update(sub.types)
-    module = Module(stem, path, program, private_names(program))
+    module = Module(stem, path, program, private_names(program), source)
     ctx.modules[path] = module
     return module
 
@@ -3016,6 +3108,12 @@ ACTION_TYPES = (Action, Pure)
 _OUT_LOCK = __import__("threading").Lock()  # 「表示する」の出力(スレッドから同時に書くとき)
 
 
+def _write_stdout(text: str) -> None:
+    """「続表示する」: 改行を付けずに書いて、すぐ見えるように出す"""
+    sys.stdout.write(text)
+    sys.stdout.flush()
+
+
 @dataclass(frozen=True)
 class Record:
     """組の値。「（横 は 3 で 縦 は 4 の 点）」"""
@@ -3077,9 +3175,9 @@ def format_value(v: Any, nested: bool = False, fmt: Any = None) -> str:
     fmt = fmt or (lambda x: format_value(x, True))
     if isinstance(v, Record):
         if not v.fields:
-            return v.ctor
+            return short_type_name(v.ctor)
         inner = " で ".join(f"{f} は {fmt(x)}" for f, x in zip(v.fields, v.values))
-        return f"（{inner} の {v.ctor}）"
+        return f"（{inner} の {short_type_name(v.ctor)}）"
     if v is True:
         return "真"
     if v is False:
@@ -3246,6 +3344,18 @@ def _show(it: "Interpreter", a: dict, line: int) -> Any:
     return Action("表示する", perform)
 
 
+def _show_cont(it: "Interpreter", a: dict, line: int) -> Any:
+    x = a[WO]
+
+    def perform(it2: "Interpreter") -> Any:
+        text = it2.format(x)
+        with _OUT_LOCK:
+            it2.write(text)
+        return x
+
+    return Action("続表示する", perform)
+
+
 def _input(it: "Interpreter", a: dict, line: int) -> Any:
     prompt = it.format(a[WO]) if WO in a else ""
 
@@ -3287,6 +3397,7 @@ def _run_all(it: "Interpreter", a: dict, line: int) -> Any:
 BUILTINS = [
     # x を 表示する / 「質問」を 入力する / 動作のリスト を 実行する: どれも動作を返す
     Builtin("表示する", [(WO, True)], _show),
+    Builtin("続表示する", [(WO, True)], _show_cont),
     Builtin("入力する", [(WO, False)], _input),
     Builtin("実行する", [(WO, True)], _run_all),
     Builtin("数値にする", [(WO, True)], _to_number),
@@ -3339,7 +3450,7 @@ PRELUDE_NONE = "無"
 PRELUDE_TRY = "試行する"
 PRELUDE_TYPES = ("成否", "有無")
 PRELUDE_WORDS = frozenset(("成否", "有無", "成功", "失敗", "有"))
-PRELUDE_CALLS = frozenset(("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する", "試算する"))  # 取出する は性質の関数なので入れない
+PRELUDE_CALLS = frozenset(("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する", "入力確認する", "試算する"))  # 取出する は性質の関数なので入れない
 
 
 def _int(v: Any, what: str, line: int | None) -> int:
@@ -3657,6 +3768,7 @@ STD_PRIMITIVES = [
     Builtin("文字にする", [(WO, True)], lambda it, a, line: _chr(a[WO], line)),
     Builtin("文字コードにする", [(WO, True)], lambda it, a, line: _ord(a[WO], line)),
     Builtin("試行する", [(WO, True), ("で", False)], lambda it, a, line: _try(a[WO], a.get("で"), line)),
+    Builtin("後始末実行する", [(WO, True), ("で", True)], lambda it, a, line: _finally(a[WO], a["で"], line)),
     # バイト列と、外部の関数とのやりとり
     Builtin("バイト列にする", [(WO, True)], lambda it, a, line: _str(a[WO], "「バイト列にする」の「を」", line).encode("utf-8")),
     Builtin("バイト列組立する", [(WO, True)], lambda it, a, line: _bytes_of_list(a[WO], line)),
@@ -3779,6 +3891,7 @@ PRELUDE_PRIMITIVES = [
     Builtin("失敗説明する", [(WO, True), ("で", True)], lambda it, a, line: _explain(it, a, line)),
     Builtin("失敗詳細にする", [(WO, True)], lambda it, a, line: _detail(it, a, line)),
     Builtin("数値確認する", [(WO, True)], lambda it, a, line: _number_check(it, a, line)),
+    Builtin("入力確認する", [(WO, False)], lambda it, a, line: _input_check(it, a, line)),
     Builtin("試算する", [(WO, True)], lambda it, a, line: _calc_try(it, a, line)),
 ]
 
@@ -3821,6 +3934,25 @@ def _try(m: Any, alt: Any, line: int) -> Any:
         return it.perform(alt)
 
     return Action("試行する", perform)
+
+
+def _finally(m: Any, cleanup: Any, line: int) -> Any:
+    """「m を 後始末 で 後始末実行する」: m を行い、成功しても実行時エラーでも 後始末 を行う。
+    結果は m の結果。m がエラーなら、後始末のあとで同じエラーを続ける"""
+    for v, p in ((m, "を"), (cleanup, "で")):
+        if not isinstance(v, ACTION_TYPES):
+            raise SuruError(f"「後始末実行する」の「{p}」は動作でなければなりません(「{format_value(v)}」が渡されました)", line)
+
+    def perform(it: "Interpreter") -> Any:
+        try:
+            r = it.perform(m)
+        except (SuruError, RecursionError):
+            it.perform(cleanup)
+            raise
+        it.perform(cleanup)
+        return r
+
+    return Action("後始末実行する", perform)
 
 
 def _chr(v: Any, line: int) -> str:
@@ -3931,6 +4063,14 @@ def _recv(net: _Net, a: dict, line: int) -> str:
     return net.reader(a["から"], line).read(n).decode("utf-8", "replace")
 
 
+def _recv_bytes(net: _Net, a: dict, line: int) -> bytes:
+    """「接続 から n を バイト列受信する」: n バイトまでをバイト列のまま(文字の途中で切れても壊さない)"""
+    n = _num(a[WO], line)
+    if not isinstance(n, int) or n < 0:
+        raise SuruError(f"「{format_value(a[WO])}」は受信するバイト数ではありません", line)
+    return net.reader(a["から"], line).read(n)
+
+
 def _send(net: _Net, a: dict, line: int) -> int:
     data = _str(a[WO], "「送信する」の「を」", line).encode("utf-8")
     net.get(a["へ"], "接続", line).sendall(data)
@@ -3960,6 +4100,7 @@ NET_PRIMITIVES = [
     Builtin("接続する", [("に", True), ("で", True)], _net_action("接続する", _connect)),
     Builtin("行受信する", [("から", True)], _net_action("行受信する", _recv_line)),
     Builtin("受信する", [("から", True), (WO, True)], _net_action("受信する", _recv)),
+    Builtin("バイト列受信する", [("から", True), (WO, True)], _net_action("バイト列受信する", _recv_bytes)),
     Builtin("送信する", [(WO, True), ("へ", True)], _net_action("送信する", _send)),
     Builtin("バイト列送信する", [(WO, True), ("へ", True)], _net_action("バイト列送信する", _send_bytes)),
     Builtin("切断する", [(WO, True)], _net_action("切断する", _close)),
@@ -4728,6 +4869,19 @@ def _number_check(it: Any, a: dict, line: int) -> Any:
         return Record("失敗", "成否", ("理由",), (e.message,))
 
 
+def _input_check(it: Any, a: dict, line: int) -> Any:
+    """「入力確認する」: 1行読めれば 文字列 の 有、入力の終わり(Ctrl-D)なら 無 の動作"""
+    prompt = it.format(a[WO]) if WO in a else ""
+
+    def perform(it2: "Interpreter") -> Any:
+        try:
+            return Record("有", "有無", ("値",), (it2.read(prompt),))
+        except EOFError:
+            return Record("無", "有無", (), ())
+
+    return Action("入力確認する", perform)
+
+
 def _calc_try(it: Any, a: dict, line: int) -> Any:
     """「f を 試算する」: 引数を全部渡した関数の値 f を呼び、成功なら 値 の 成功、実行時エラーなら エラーの文 の 失敗"""
     f = a[WO]
@@ -4805,6 +4959,161 @@ def name_unwraps(node: Any, fn: str = TOP_FN) -> None:
             name_unwraps(getattr(node, f), fn)
 
 
+def pattern_names(pat: Any, out: set) -> set:
+    """パターン(引数の名前・名前のリスト・形のパターン)が付ける名前"""
+    if isinstance(pat, str):
+        out.add(pat)
+    elif isinstance(pat, PBind):
+        out.add(pat.name)
+    elif isinstance(pat, (list, tuple)):
+        for x in pat:
+            pattern_names(x, out)
+    elif isinstance(pat, (PSeq, PCtor)):
+        pattern_names(pat.items, out)
+    elif isinstance(pat, PNamed):
+        for _, x in pat.fields:
+            pattern_names(x, out)
+    return out
+
+
+def resolve_param_calls(node: Any, local: frozenset) -> None:
+    """「累 を 行 で 処理する」: 関数を受け取った引数(や局所の名前)「処理」を、名前+「する」で呼ぶ。
+    同じ名前の局所の関数「処理する」があればそちらを使い、引数の名前は関数の外の定義より先に見る"""
+    if isinstance(node, (Call, Ref)):
+        stem = node.name[:-len(SURU)] if node.name.endswith(SURU) else ""
+        if stem and node.name not in local and stem in local:
+            node.name = stem
+    elif isinstance(node, Define):
+        if node.params:
+            local = local | pattern_names([p for _, p in node.params], set())
+    elif isinstance(node, Lambda):
+        local = local | pattern_names([p for _, p in node.params], set())
+    elif isinstance(node, (Block, Do)):
+        local = local | {d.name for d in node.statements if isinstance(d, Define)}
+    elif isinstance(node, Match):
+        resolve_param_calls(node.subject, local)
+        for pat, cond, expr in node.cases:
+            inner = local | pattern_names(pat, set())
+            resolve_param_calls(cond, inner)
+            resolve_param_calls(expr, inner)
+        resolve_param_calls(node.default, local)
+        return
+    if isinstance(node, (list, tuple)):
+        for x in node:
+            resolve_param_calls(x, local)
+    elif isinstance(node, dict):
+        for x in node.values():
+            resolve_param_calls(x, local)
+    elif hasattr(node, "__dataclass_fields__") and not isinstance(node, (Module, Token)):
+        for f in node.__dataclass_fields__:
+            resolve_param_calls(getattr(node, f), local)
+def _has_run(node: Any) -> bool:
+    """手順の文として行うところ(条件分岐の枝も含む。無名関数・手順・関数の定義の中は除く)に「した 結果」があるか"""
+    if isinstance(node, (Lambda, Do, Module, Token)):
+        return False
+    if isinstance(node, Define):
+        return not node.is_function and _has_run(node.body)
+    if isinstance(node, Run):
+        return True
+    if isinstance(node, (list, tuple)):
+        return any(_has_run(x) for x in node)
+    if isinstance(node, dict):
+        return any(_has_run(x) for x in node.values())
+    if hasattr(node, "__dataclass_fields__"):
+        return any(_has_run(getattr(node, f)) for f in node.__dataclass_fields__)
+    return False
+
+
+def _branch_if(node: Any) -> Any:
+    """文の中の、枝に「した 結果」がある「もし」(If か Match。先に行うところから探す。なければ None)"""
+    if isinstance(node, (Lambda, Do, Module, Token)):
+        return None
+    if isinstance(node, Define):
+        return None if node.is_function else _branch_if(node.body)
+    if isinstance(node, If):
+        found = _branch_if(node.cond)
+        if found is not None:
+            return found
+        return node if _has_run(node.then) or _has_run(node.other) else None
+    if isinstance(node, Match):
+        found = _branch_if(node.subject)
+        if found is not None:
+            return found
+        return node if any(_has_run(e) for _, _, e in node.cases) or _has_run(node.default) else None
+    if isinstance(node, (list, tuple)):
+        items = list(node)
+    elif isinstance(node, dict):
+        items = list(node.values())
+    elif hasattr(node, "__dataclass_fields__"):
+        items = [getattr(node, f) for f in node.__dataclass_fields__]
+    else:
+        return None
+    for x in items:
+        found = _branch_if(x)
+        if found is not None:
+            return found
+    return None
+
+
+def _replace_node(node: Any, target: Any, repl: Any) -> Any:
+    """node の中の target を repl にした木(変わったところだけ作り直す)"""
+    if node is target:
+        return repl
+    if isinstance(node, (Lambda, Do, Module, Token)):
+        return node
+    if isinstance(node, list):
+        out = [_replace_node(x, target, repl) for x in node]
+        return node if all(a is b for a, b in zip(out, node)) else out
+    if isinstance(node, tuple):
+        out = tuple(_replace_node(x, target, repl) for x in node)
+        return node if all(a is b for a, b in zip(out, node)) else out
+    if isinstance(node, dict):
+        out = {k: _replace_node(x, target, repl) for k, x in node.items()}
+        return node if all(out[k] is node[k] for k in node) else out
+    if hasattr(node, "__dataclass_fields__"):
+        changes = {}
+        for f in node.__dataclass_fields__:
+            v = getattr(node, f)
+            w = _replace_node(v, target, repl)
+            if w is not v:
+                changes[f] = w
+        return dataclasses.replace(node, **changes) if changes else node
+    return node
+
+
+def split_branch_runs(node: Any) -> None:
+    """手順の文の「もし」の枝に「した 結果」があれば、そこで手順を分ける:
+    「…（もし c ならば A そうでなければ B）…」と残りの文は「もし c ならば 手順（…A…、残り） そうでなければ 手順（…B…、残り）」。
+    選んだ枝の「した 結果」だけを行う"""
+    if isinstance(node, Do):
+        for i, s in enumerate(node.statements):
+            t = _branch_if(s)
+            if t is None:
+                continue
+            rest = node.statements[i + 1:]
+            line = first_line_of(s) or node.line
+
+            def branch(e: Any) -> Any:
+                return Do([_replace_node(s, t, e)] + rest, line)
+
+            if isinstance(t, If):
+                split = If(t.cond, branch(t.then), branch(t.other))
+            else:
+                split = dataclasses.replace(t, cases=[(p, g, branch(e)) for p, g, e in t.cases],
+                                            default=None if t.default is None else branch(t.default))
+            node.statements = node.statements[:i] + [split]
+            break
+    if isinstance(node, (list, tuple)):
+        for x in node:
+            split_branch_runs(x)
+    elif isinstance(node, dict):
+        for x in node.values():
+            split_branch_runs(x)
+    elif hasattr(node, "__dataclass_fields__") and not isinstance(node, (Module, Token)):
+        for f in node.__dataclass_fields__:
+            split_branch_runs(getattr(node, f))
+
+
 def has_pure_unwrap(node: Any) -> bool:
     """関数の本体として計算するところ(無名関数・手順・関数の定義の中は除く)に「した 中身」があるか"""
     if isinstance(node, (Lambda, Do)):
@@ -4851,8 +5160,9 @@ def collect_runs(node: Any, out: list) -> list:
 
 
 class Interpreter:
-    def __init__(self, out: Any = None, read: Any = None) -> None:
+    def __init__(self, out: Any = None, read: Any = None, write: Any = None) -> None:
         self.out = out or print  # 「表示する」の出力先
+        self.write = write or _write_stdout  # 「続表示する」の出力先(改行を付けない)
         self.read = read or input  # 「入力する」の入力元
         # shared は組み込み関数・形・性質の関数(どのファイルからも見える)。globals はこのプログラムの定義
         self.shared = make_global_env()

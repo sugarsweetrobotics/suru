@@ -226,3 +226,12 @@ def test_代わりのファイル(kind, tmp_path):
     r = run_lint(kind, tmp_path, "--代わり", "中身.txt", "本当/a.suru", "good.suru")
     assert r.returncode == 1, r.stderr
     assert r.stdout == "本当/a.suru:2:1: 未使用の読み込み: 「数学」を読み込んでいますが、中の名前を使っていません\n"
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_フォルダの中のファイルの読み込みは最後の名前で使う(kind, tmp_path):
+    (tmp_path / "庫").mkdir()
+    (tmp_path / "庫" / "部品.suru").write_text("x を 二倍する とは x * 2\n", encoding="utf-8")
+    (tmp_path / "本体.suru").write_text("「庫/部品」 を 読み込む\n3 を 部品内の二倍して 表示する\n", encoding="utf-8")
+    r = run_lint(kind, tmp_path, "本体.suru")
+    assert (r.returncode, r.stdout) == (0, ""), r.stdout + r.stderr

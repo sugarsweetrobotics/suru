@@ -76,6 +76,7 @@ func consTyper(name string) typer {
 
 func init() {
 	builtin("表示する", []partReq{req(WO)}, func(c *Checker, a typedArgs, line Pos) Type { return act(newTVar()) })
+	builtin("続表示する", []partReq{req(WO)}, func(c *Checker, a typedArgs, line Pos) Type { return act(newTVar()) })
 	builtin("入力する", []partReq{opt(WO)}, func(c *Checker, a typedArgs, line Pos) Type { return act(STR) })
 	builtin("実行する", []partReq{req(WO)}, func(c *Checker, a typedArgs, line Pos) Type {
 		r := newTVar()
@@ -161,6 +162,7 @@ func init() {
 	}
 	builtinFuns = map[string]func() Type{
 		"表示する":   func() Type { return &TFun{[]TParam{{WO, newTVar()}}, act(newTVar())} },
+		"続表示する":  func() Type { return &TFun{[]TParam{{WO, newTVar()}}, act(newTVar())} },
 		"入力する":   func() Type { return &TFun{nil, act(STR)} },
 		"数値にする":  func() Type { return &TFun{[]TParam{{WO, STR}}, NUM} },
 		"絶対値にする": func() Type { return &TFun{[]TParam{{WO, NUM}}, NUM} },
@@ -280,6 +282,11 @@ func init() {
 		need(c, a, WO, resultT(newTVar(), newTVar()), line, "失敗詳細にする")
 		return STR
 	})
+	prim("入力確認する", []partReq{opt(WO)}, func() Type {
+		return &TFun{nil, act(&TCon{"有無", []Type{STR}})}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		return act(&TCon{"有無", []Type{STR}})
+	})
 	prim("数値確認する", []partReq{req(WO)}, func() Type {
 		return &TFun{[]TParam{{WO, STR}}, resultT(NUM, STR)}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
@@ -310,12 +317,22 @@ func init() {
 		need(c, a, "で", act(x), line, "試行する")
 		return act(x)
 	})
+	prim("後始末実行する", []partReq{req(WO), req("で")}, func() Type {
+		x := newTVar()
+		return &TFun{[]TParam{{WO, act(x)}, {"で", act(newTVar())}}, act(x)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		x := newTVar()
+		need(c, a, WO, act(x), line, "後始末実行する")
+		need(c, a, "で", act(newTVar()), line, "後始末実行する")
+		return act(x)
+	})
 	// 通信(「通信」の組み込み)。待受口と接続は番号
 	simple("待受開始する", []TParam{{WO, NUM}}, act(NUM))
 	simple("接続受付する", []TParam{{"から", NUM}}, act(NUM))
 	simple("接続する", []TParam{{"に", STR}, {"で", NUM}}, act(NUM))
 	simple("行受信する", []TParam{{"から", NUM}}, act(STR))
 	simple("受信する", []TParam{{"から", NUM}, {WO, NUM}}, act(STR))
+	simple("バイト列受信する", []TParam{{"から", NUM}, {WO, NUM}}, act(bytesT))
 	simple("送信する", []TParam{{WO, STR}, {"へ", NUM}}, act(NUM))
 	simple("バイト列送信する", []TParam{{WO, bytesT}, {"へ", NUM}}, act(NUM))
 	// スレッド(「スレッド」の組み込み)。並行開始した結果は、合流する(待って結果を返す)動作

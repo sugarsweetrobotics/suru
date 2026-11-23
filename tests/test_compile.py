@@ -38,7 +38,7 @@ def interpreted(source: str, base_dir: str = ".", stdin: str = INPUT) -> str:
         except StopIteration:
             raise EOFError from None
 
-    it = suru.Interpreter(out=lambda s: out.append(s + "\n"), read=read)
+    it = suru.Interpreter(out=lambda s: out.append(s + "\n"), read=read, write=out.append)
     it.ctx.base_dir = base_dir
     it.run(source, emit=lambda v: out.append(it.format(v) + "\n"))
     return "".join(out)
@@ -66,6 +66,62 @@ f とは 10 を 割った数にすること
 f を 2 に 適用する
 （1 と 2 と 4） の それぞれ に （8 を 割った数にすること） を 適用する
 （1 と 2 と 3） を 0 から 加算すること で 畳み込みする
+""",
+    "改行なしの表示": """
+「あなた> 」 を 続表示する
+（1 と 2） を 続表示する
+「」 を 表示する
+「a」を続表示する。それから、「b」を表示する。
+""",
+    "受け取った関数を名前で呼ぶ": """
+文字列 の リスト を 甲 から （甲 を 文字列 で 受け取って 甲 を 返すこと） で 順畳込する は 甲
+行 を 初め から 処理 で 順畳込する とは
+  もし 行 が 空 ならば 初め
+  そうでなければ （行 の 残り） を （初め を 行 の 先頭 で 処理する） から 処理 で 順畳込する
+数 を 文字列 で 足込する とは 数 + （文字列 を 数値にする）
+（「1」 と 「2」 と 「3」） を 0 から 足込すること で 順畳込する
+（「a」 と 「b」） を 「」 から （s を t で 受け取って s + t + 「!」 を 返すこと） で 順畳込する
+処理 を 局所呼出する とは
+  x を 処理する とは x + 100
+  1 を 処理する
+（x を 受け取って x * 2 を 返すこと） を 局所呼出する
+表示 を 引数優先する とは 5 を 表示する
+（x を 受け取って x * 3 を 返すこと） を 引数優先する
+""",
+    "後始末実行する": """
+「標準」 を 読み込んで 使う
+片付ける とは 「片付けた」 を 表示する
+成功例 とは （「本体」 を 表示する） を 片付ける で 後始末実行する
+失敗例 とは 手順
+  「途中」 を 表示する
+  「x」 を 数値にして 表示する
+始めする とは 手順
+  r とは 成功例 を 試行した 結果
+  r を 表示する
+  s とは （失敗例 を 片付ける で 後始末実行する） を 試行した 結果
+  s を 表示する
+始めする
+""",
+    "入力確認する": """
+文字列 の 有無 を 応答する は 文字列 の 動作
+（s の 有） を 応答する とは 手順
+  「> 」 + s を 表示する
+  「? 」 を 入力確認してから 応答する
+無 を 応答する とは 「おしまい」 を 表示する
+「? 」 を 入力確認してから 応答する
+""",
+    "もしの枝のした結果": """
+n を 質問する とは 手順
+  答 とは もし n > 1 ならば 「大? 」 を 入力した 結果 そうでなければ 「小」
+  追加 とは もし n > 5 ならば 「x」 そうでなければ もし n > 1 ならば 「中? 」 を 入力した 結果 そうでなければ 「-」
+  答 + 追加 を 表示する
+方法 を 処理する とは 手順
+  本文 とは もし 方法 が 「HEAD」 ならば 「」 そうでなければ 「本文? 」 を 入力した 結果
+  本文 の 長さ を 結果にする
+1 を 質問する
+3 を 質問する
+「HEAD」 を 処理してから 表示する
+「GET」 を 処理してから 表示する
 """,
     "数の表示": """
 10 / 4
@@ -250,6 +306,16 @@ def test_通信でこちらからつなぐのをコンパイルする(tmp_path):
     assert bad.returncode == 1 and "「接続する」で通信に失敗しました" in bad.stderr
 
 
+def test_バイト列受信するをコンパイルする(tmp_path):
+    from net_helper import CLIENT_BYTES, CLIENT_BYTES_OUT, answer_once, free_port
+
+    port = free_port()
+    t = answer_once(port)
+    r = compiled(CLIENT_BYTES.replace("PORT", str(port)), tmp_path)
+    t.join(10)
+    assert r.returncode == 0 and r.stdout == "".join(s + "\n" for s in CLIENT_BYTES_OUT)
+
+
 @pytest.mark.parametrize("which", ["HTTP_SERVER", "HTTP_ACTION_SERVER"])
 def test_HTTPのサーバーをコンパイルして答えてもらう(which, tmp_path):
     import net_helper as N
@@ -410,3 +476,22 @@ u に i を 足込する とは u を （i * 7 % 1000） から i へ 表内の�
 
 def test_表はインタプリタと同じ(tmp_path):
     assert same(TABLE, tmp_path) == "10\n0\n真\n偽\n（「a」 と 「b」 と 「c」）\n（10 と 2 と 3）\n3\n1000\n1\n真\n（「y」 と 「z」）\n"
+
+
+def test_読み込んだファイルの中の実行時エラーはファイルの名前を付ける(tmp_path):
+    from test_suru import PARTS, PARTS_ERR, PARTS_MAIN
+
+    (tmp_path / "部品.suru").write_text(PARTS, encoding="utf-8")
+    r = compiled(PARTS_MAIN, tmp_path, str(tmp_path))
+    assert r.returncode == 1 and r.stderr == PARTS_ERR + "\n"
+
+
+def test_型の名前はファイルごとに分かれる(tmp_path):
+    from test_suru import TYPE_A, TYPE_B
+
+    (tmp_path / "甲.suru").write_text(TYPE_A, encoding="utf-8")
+    (tmp_path / "乙.suru").write_text(TYPE_B, encoding="utf-8")
+    out = same("「甲」 を 読み込む\n「乙」 を 読み込む\n1 を 甲内の甲作成する\n（2 を 乙内の乙作成する） を 乙内の乙番号取得する\n"
+               "（5 の 乙内の応答）\n乙内の空応答 を 乙内の乙番号取得する\n（（3 と 「x」 の 甲内の応答） を 甲内の甲状態取得する）\n",
+               tmp_path, str(tmp_path))
+    assert out == "甲の応答 1\n2\n（番号 は 5 の 応答）\n0\n3\n"

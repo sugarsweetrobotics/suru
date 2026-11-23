@@ -132,16 +132,20 @@ type ParseContext struct {
 	Types   *TypeMap
 	BaseDir string
 	Modules map[string]*Module // 絶対パス → Module(読み込み中は nil)
+	// Order は読み込みを始めた順の道(suru.py の ctx.modules の順。どの ParseContext でも同じものを指す)
+	Order   *[]string
 	Loading map[string]bool
 	// Packages はプロジェクトの依存(名前 → Package)。nil なら、初めて読み込むときに BaseDir から探す
 	Packages map[string]Package
 	// InPrelude は 基本.suru そのものを読んでいるとき(基本を自動で読み込まない)
 	InPrelude bool
+	// Qualify は読み込んだファイル(lib/ のものを除く)を解析しているときの「部品内の」。そのファイルの型と形の名前に付ける
+	Qualify string
 }
 
 func NewParseContext(baseDir string) *ParseContext {
 	return &ParseContext{Ctors: newCtorMap(), Types: newTypeMap(), BaseDir: baseDir,
-		Modules: map[string]*Module{}, Loading: map[string]bool{}}
+		Modules: map[string]*Module{}, Loading: map[string]bool{}, Order: &[]string{}}
 }
 
 func (c *ParseContext) add(td *TypeDef) {
@@ -1674,7 +1678,7 @@ func parseStatement(node *LNode) Node {
 		return parseTraitDecl(node, head[0], after)
 	}
 	name, params, isFunction := parseDefinitionHead(head, node.Line.Number)
-	if strings.Contains(name, ModuleSep) {
+	if strings.Contains(name, ModuleSep) && !head[0].Qualified {
 		raise(head[0].Line, "「"+name+"」: 読み込んだファイルの中の名前は定義できません")
 	}
 	afterT := nosep(after)
@@ -1910,10 +1914,113 @@ func checkName(t *Token) string {
 	if !t.Quoted && isAllHiragana(t.S) {
 		panic(hiraganaNameError(t.S, t.Line))
 	}
+	if t.Qualified {
+		return t.S
+	}
 	if strings.Contains(t.S, ModuleSep) {
 		raise(t.Line, "「"+t.S+"」: 読み込んだファイルの中の名前は定義できません")
 	}
 	return t.S
+}
+
+// ShortTypeName は表示する型と形の名前: 読み込んだファイルの前置き(「部品内の」)を除く
+func ShortTypeName(name string) string {
+	if i := strings.LastIndex(name, ModuleSep); i >= 0 {
+		return name[i+len(ModuleSep):]
+	}
+	return name
+}
+
+func isLibPath(path string) bool {
+	if strings.HasPrefix(path, embeddedLibPrefix) {
+		return true
+	}
+	if LibDir == "" {
+		return false
+	}
+	lib, err1 := filepath.Abs(LibDir)
+	dir, err2 := filepath.Abs(filepath.Dir(path))
+	return err1 == nil && err2 == nil && lib == dir
+}
+
+// qualifyTypeNames: 型と形の名前は、ファイルごとに分ける(suru.py の _qualify_type_names と同じ)。
+// 読み込んだファイル(lib/ のものを除く)の型「点」は、中では「点」、外では「部品内の点」が本当の名前。
+// 外でも、ほかのファイルの型とぶつからなければ「点」と書ける。字句の名前を本当の名前に置きかえる
+func qualifyTypeNames(nodes []*LNode, ctx *ParseContext) {
+	own := map[string]string{}
+	for _, n := range nodes {
+		if td := tryParseTypedef(n); td != nil {
+			own[td.Name] = ctx.Qualify + td.Name
+			for _, c := range td.Ctors {
+				own[c.Name] = ctx.Qualify + c.Name
+			}
+		}
+	}
+	type cand struct{ canon, mod string }
+	candidates := map[string][]cand{} // 前置きなしの名前 → 本当の名前とそれを持つファイル(見つけた順)
+	full := map[string]string{}       // 「部品内の点」 → 本当の名前
+	add := func(m *Module, canon string) {
+		name := ShortTypeName(canon)
+		full[m.Name+ModuleSep+name] = canon
+		for _, c := range candidates[name] {
+			if c.canon == canon {
+				return
+			}
+		}
+		candidates[name] = append(candidates[name], cand{canon, m.Name})
+	}
+	if ctx.Order != nil {
+		for _, p := range *ctx.Order {
+			m := ctx.Modules[p]
+			if m == nil {
+				continue
+			}
+			for _, s := range m.Program {
+				if td, ok := s.(*TypeDef); ok {
+					add(m, td.Name)
+					for _, c := range td.Ctors {
+						add(m, c.Name)
+					}
+				}
+			}
+		}
+	}
+	if len(own) == 0 && len(candidates) == 0 {
+		return
+	}
+	var fix func(ns []*LNode)
+	fix = func(ns []*LNode) {
+		for _, n := range ns {
+			for i, t := range n.Line.Tokens {
+				if t.Kind != "WORD" {
+					continue
+				}
+				v := t.S
+				canon, ok := own[v]
+				if !ok {
+					if cs := candidates[v]; len(cs) > 1 {
+						names := make([]string, len(cs))
+						for k, c := range cs {
+							names[k] = "「" + c.mod + "」"
+						}
+						raise(t.Line, "「"+v+"」は"+strings.Join(names, "と")+"の両方にある型か形の名前です。「"+cs[0].mod+ModuleSep+v+"」のようにファイルの名前を付けて書いてください")
+					} else if len(cs) == 1 {
+						canon, ok = cs[0].canon, true
+					} else {
+						canon, ok = full[v]
+					}
+				}
+				if ok && (canon != v || strings.Contains(canon, ModuleSep)) {
+					nt := *t
+					nt.S = canon
+					nt.Qualified = strings.Contains(canon, ModuleSep)
+					n.Line.Tokens[i] = &nt
+				}
+			}
+			fix(n.Children)
+		}
+	}
+	fix(nodes)
 }
 
 func tryParseTypedef(node *LNode) *TypeDef {
@@ -2167,6 +2274,7 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 	if len(modNames) > 0 {
 		joinInNodes(nodes, setOf(modNames...))
 	}
+	qualifyTypeNames(nodes, ctx)
 	for _, n := range nodes {
 		if td := tryParseTypedef(n); td != nil {
 			ctx.add(td)
@@ -2194,9 +2302,121 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 		case *Import, *ExternLib:
 		default:
 			nameUnwraps(st, topFn)
+			resolveParamCalls(st, nil)
+			splitBranchRuns(st)
 		}
 	}
 	return statements
+}
+
+// patternNames はパターン(引数の名前・名前のリスト・形のパターン)が付ける名前を out に足す
+func patternNames(pat Node, out map[string]bool) {
+	switch p := pat.(type) {
+	case *PBind:
+		out[p.Name] = true
+	case *PSeq:
+		for _, x := range p.Items {
+			patternNames(x, out)
+		}
+	case *PCtor:
+		for _, x := range p.Items {
+			patternNames(x, out)
+		}
+	case *PNamed:
+		for _, f := range p.Fields {
+			patternNames(f.Value, out)
+		}
+	}
+}
+
+func paramNames(params []Param, local map[string]bool) map[string]bool {
+	out := map[string]bool{}
+	for k := range local {
+		out[k] = true
+	}
+	for _, p := range params {
+		switch {
+		case p.Pat != nil:
+			patternNames(p.Pat, out)
+		case p.List:
+			for _, x := range p.Names {
+				out[x] = true
+			}
+		default:
+			out[p.Name] = true
+		}
+	}
+	return out
+}
+
+func withNames(local map[string]bool, names []string) map[string]bool {
+	out := map[string]bool{}
+	for k := range local {
+		out[k] = true
+	}
+	for _, x := range names {
+		out[x] = true
+	}
+	return out
+}
+
+func defNames(statements []Node) []string {
+	var out []string
+	for _, st := range statements {
+		if d, ok := st.(*Define); ok {
+			out = append(out, d.Name)
+		}
+	}
+	return out
+}
+
+// resolveParamCalls は「累 を 行 で 処理する」: 関数を受け取った引数(や局所の名前)「処理」を、名前+「する」で呼ぶ。
+// 同じ名前の局所の関数「処理する」があればそちらを使い、引数の名前は関数の外の定義より先に見る(suru.py と同じ)
+func resolveParamCalls(node Node, local map[string]bool) {
+	fix := func(name *string) {
+		if strings.HasSuffix(*name, Suru) && len(*name) > len(Suru) {
+			stem := strings.TrimSuffix(*name, Suru)
+			if !local[*name] && local[stem] {
+				*name = stem
+			}
+		}
+	}
+	switch n := node.(type) {
+	case nil:
+		return
+	case *Import, *Module:
+		return
+	case *Call:
+		fix(&n.Name)
+	case *Ref:
+		fix(&n.Name)
+	case *Define:
+		if len(n.Params) > 0 {
+			local = paramNames(n.Params, local)
+		}
+	case *Lambda:
+		local = paramNames(n.Params, local)
+	case *Block:
+		local = withNames(local, defNames(n.Statements))
+	case *Do:
+		local = withNames(local, defNames(n.Statements))
+	case *Match:
+		resolveParamCalls(n.Subject, local)
+		for _, c := range n.Cases {
+			inner := map[string]bool{}
+			for k := range local {
+				inner[k] = true
+			}
+			patternNames(c.Pat, inner)
+			resolveParamCalls(c.Guard, inner)
+			resolveParamCalls(c.Body, inner)
+		}
+		resolveParamCalls(n.Default, local)
+		return
+	}
+	for _, ch := range node.Children() {
+		resolveParamCalls(ch, local)
+	}
 }
 
 // 関数の外と無名関数の「した 中身」の経路の名前
@@ -2260,7 +2480,7 @@ func parseExternArgs(toks []*Token) []ExternArg {
 const PreludeName = "基本"
 
 var preludeWords = setOf("成否", "有無", "成功", "失敗", "有")
-var preludeCalls = setOf("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する", "試算する") // 取出する は性質の関数なので入れない
+var preludeCalls = setOf("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する", "入力確認する", "試算する") // 取出する は性質の関数なので入れない
 
 func hasPreludeImport(imports map[*LNode]Node) bool {
 	for _, i := range imports {
@@ -2694,8 +2914,16 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 		raise(line, "ファイル「"+file+"」が見つかりません")
 	}
 	ctx.Loading[path] = true
-	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude}
+	if ctx.Order != nil {
+		*ctx.Order = append(*ctx.Order, path)
+	}
+	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude, Order: ctx.Order}
+	if !isLibPath(path) {
+		sub.Qualify = stem + ModuleSep
+	}
 	var program []Node
+	savedFile := curPosFile
+	curPosFile = path
 	err := try(func() {
 		program = ParseProgram(source, sub)
 		for _, s := range program {
@@ -2704,6 +2932,7 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 			}
 		}
 	})
+	curPosFile = savedFile
 	if err != nil {
 		w := ""
 		if err.Line.Line != 0 {
@@ -2713,7 +2942,7 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 	}
 	ctx.Ctors.Update(sub.Ctors)
 	ctx.Types.Update(sub.Types)
-	m := &Module{stem, path, program, privateNames(program)}
+	m := &Module{stem, path, program, privateNames(program), source}
 	delete(ctx.Loading, path)
 	ctx.Modules[path] = m
 	return m

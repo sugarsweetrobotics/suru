@@ -115,12 +115,24 @@ class CompileError(Exception):
     pass
 
 
+# 読み込んだファイルの行は、本体の行の後ろに続けて番号を振る(道 → 足す数)。実行時ライブラリの suru_files で戻す
+LINE_BASE: dict[str, int] = {}
+
+
+def line_count(text: str) -> int:
+    return text.count("\n") + 1
+
+
 def pos_of(node_or_line: Any) -> int:
     line = node_or_line if isinstance(node_or_line, int) else getattr(node_or_line, "line", 0)
     if not isinstance(line, int):
         return 0
     col = getattr(line, "col", None) or 0
-    return int(line) | (min(col, 0x7FF) << 20)
+    n = int(line)
+    src = getattr(line, "src", None)
+    if n and src:
+        n += LINE_BASE.get(src, 0)
+    return min(n, 0xFFFFF) | (min(col, 0x7FF) << 20)
 
 
 def ir_bytes(data: bytes) -> str:
@@ -1019,10 +1031,31 @@ class Compiler:
         consts = "\n".join(self.consts_init)
         entry = f"define void @suru_main() {{\nentry:\n{consts}\n  %r = call i64 @suru_init(ptr null)\n  ret void\n}}"
         src = self.source.encode("utf-8")
-        source = f'@suru_source = constant [{len(src) + 1} x i8] c"{ir_bytes(src)}\\00"'
+        source = f'@suru_source = constant [{len(src) + 1} x i8] c"{ir_bytes(src)}\\00"\n' + self.files_table()
         links = [LINK_MARK + lib for lib in self.link_libs]
         ffi = [self.ffi_decls[k] for k in sorted(self.ffi_decls)]
         return "\n".join(["; 「する」のコンパイラが作った LLVM IR"] + links + [DECLS] + ffi + [source] + self.globals + self.functions + [entry, self.roots_table()]) + "\n"
+
+    def files_table(self) -> str:
+        """読み込んだファイル(読み込んだ順)の、行の番号に足した数・名前・中身(実行時エラーの表示に使う)"""
+        mods = [m for m in self.ctx.modules.values() if m is not None]
+        bases, names, srcs = [], [], []
+        for m in mods:
+            bases.append(f"i32 {LINE_BASE.get(m.path, 0)}")
+            names.append(f"ptr {self.cstr(os.path.basename(m.path))}")
+            data = m.source.encode("utf-8")
+            g = f"@fs.{self.uid()}"
+            self.globals.append(f'{g} = private unnamed_addr constant [{len(data) + 1} x i8] c"{ir_bytes(data)}\\00"')
+            srcs.append(f"ptr {g}")
+        n = len(mods)
+
+        def arr(t: str, items: list) -> str:
+            return f"[{', '.join(items)}]" if items else "zeroinitializer"
+
+        return (f"@suru_file_base = constant [{n} x i32] {arr('i32', bases)}\n"
+                f"@suru_file_name = constant [{n} x ptr] {arr('ptr', names)}\n"
+                f"@suru_file_src = constant [{n} x ptr] {arr('ptr', srcs)}\n"
+                f"@suru_nfiles = constant i64 {n}")
 
     def roots_table(self) -> str:
         """GC の根: 値を入れる大域変数の一覧(runtime/suru_rt.c の suru_roots)"""
@@ -1040,6 +1073,12 @@ def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check
         type_check(source, base_dir)
     ctx = S.ParseContext(base_dir=base_dir)
     program = S.parse_program(source, ctx)
+    LINE_BASE.clear()
+    base = line_count(source)
+    for m in ctx.modules.values():
+        if m is not None:
+            LINE_BASE[m.path] = base
+            base += line_count(m.source)
     # 定義の登録で見つかる間違い(名前の重なりなど)はインタプリタと同じように調べる
     it = S.Interpreter()
     it.ctx = ctx

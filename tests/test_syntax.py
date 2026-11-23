@@ -309,7 +309,9 @@ def dumper(tmp_path_factory):
 
 
 def su_dump(dumper, path: pathlib.Path, ctors: dict = CTORS, types: dict = TYPES, program: bool = False) -> list[str]:
-    args = [f"{c}={len(fs)}" for c, (_, fs) in ctors.items()] + [f"型:{t}" for t in types]
+    # lib/構文.suru は型の名前をファイルごとに分けない(前置きなしの名前で比べる)
+    args = ([f"{suru.short_type_name(c)}={len(fs)}" for c, (_, fs) in ctors.items()]
+            + [f"型:{suru.short_type_name(t)}" for t in types])
     args += ["--文"] if program else []
     r = subprocess.run([*dumper, str(path), *args], capture_output=True, text=True, timeout=600)
     assert r.returncode == 0, r.stderr
@@ -356,7 +358,18 @@ def py_program(source: str, base_dir: str) -> tuple[list[str], "suru.ParseContex
         out = [dump(s) for s in suru.parse_program(source, ctx) if not (isinstance(s, suru.Import) and s.auto)]
     except suru.SuruError:
         out = ["誤り"]
-    return out, ctx
+    return shorten(out, ctx), ctx
+
+
+def shorten(lines: list[str], ctx: "suru.ParseContext") -> list[str]:
+    """読み込んだファイルの型と形の本当の名前(「数学内の長方形」)を、前置きなしの名前にする(lib/構文.suru と比べるため)"""
+    names = sorted((n for n in list(ctx.ctors) + list(ctx.types) if suru.MODULE_SEP in n), key=len, reverse=True)
+    out = []
+    for line in lines:
+        for n in names:
+            line = re.sub(rf"(?<![^\s(\[:]){re.escape(n)}(?=[\s)\]@]|$)", suru.short_type_name(n), line)
+        out.append(line)
+    return out
 
 
 @pytest.mark.parametrize("path", FILES, ids=lambda p: f"{p.parent.name}/{p.name}")
@@ -374,7 +387,10 @@ def test_例とライブラリの行の構文木が同じ(dumper, path):
     source = path.read_text(encoding="utf-8")
     ctx = suru.ParseContext(base_dir=str(path.parent))
     suru.parse_program(source, ctx)
-    ctx = suru.ParseContext(ctors=ctx.ctors, types=ctx.types)
+    sh = suru.short_type_name
+    # 1行ずつ読むときは型の名前をファイルごとに分けないので、前置きなしの名前で比べる
+    ctx = suru.ParseContext(ctors={sh(c): (sh(t), fs) for c, (t, fs) in ctx.ctors.items()},
+                            types={sh(t): [sh(c) for c in cs] for t, cs in ctx.types.items()})
     assert su_dump(dumper, path, ctx.ctors, ctx.types) == py_dump(source, ctx)
 
 

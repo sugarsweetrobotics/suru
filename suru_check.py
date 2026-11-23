@@ -1701,6 +1701,11 @@ def _t_show(c, a, line):
     return act(TVar())
 
 
+@builtin("続表示する", {WO: True})
+def _t_show_cont(c, a, line):
+    return act(TVar())
+
+
 @builtin("入力する", {WO: False})
 def _t_input(c, a, line):
     return act(STR)
@@ -1830,6 +1835,7 @@ def _t_unit(c, a, line):
 # 関数の値(「加算すること」)として使うときの型
 BUILTIN_FUNS = {
     "表示する": lambda: TFun([(WO, TVar())], act(TVar())),
+    "続表示する": lambda: TFun([(WO, TVar())], act(TVar())),
     "入力する": lambda: TFun([], act(STR)),
     "数値にする": lambda: TFun([(WO, STR)], NUM),
     "絶対値にする": lambda: TFun([(WO, NUM)], NUM),
@@ -1987,6 +1993,11 @@ def _t_detail(c, a, line):
     return STR
 
 
+@prim("入力確認する", {WO: False}, lambda: TFun([], act(TCon("有無", (STR,)))))
+def _t_input_check(c, a, line):
+    return act(TCon("有無", (STR,)))
+
+
 @prim("数値確認する", {WO: True}, lambda: TFun([(WO, STR)], _result_t(NUM, STR)))
 def _t_numcheck(c, a, line):
     _need(c, a, WO, STR, line, "数値確認する")
@@ -2010,12 +2021,21 @@ def _t_try(c, a, line):
         return act(TCon("成否", (x, STR)))  # 「で」を省くと、実行時エラーを失敗(エラーの文)にする
     _need(c, a, "で", act(x), line, "試行する")
     return act(x)
+@prim("後始末実行する", {WO: True, "で": True}, lambda: (lambda x: TFun([(WO, act(x)), ("で", act(TVar()))], act(x)))(TVar()))
+def _t_finally(c, a, line):
+    x = TVar()
+    _need(c, a, WO, act(x), line, "後始末実行する")
+    _need(c, a, "で", act(TVar()), line, "後始末実行する")
+    return act(x)
+
+
 # 通信(「通信」の組み込み)。待受口と接続は番号
 _simple("待受開始する", [(WO, NUM)], act(NUM))
 _simple("接続受付する", [("から", NUM)], act(NUM))
 _simple("接続する", [("に", STR), ("で", NUM)], act(NUM))
 _simple("行受信する", [("から", NUM)], act(STR))
 _simple("受信する", [("から", NUM), (WO, NUM)], act(STR))
+_simple("バイト列受信する", [("から", NUM), (WO, NUM)], act(BYTES))
 _simple("送信する", [(WO, STR), ("へ", NUM)], act(NUM))
 _simple("バイト列送信する", [(WO, BYTES), ("へ", NUM)], act(NUM))
 _simple("切断する", [(WO, NUM)], act(NUM))
