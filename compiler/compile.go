@@ -85,11 +85,14 @@ declare i64 @rt_call_ex(i64, i32, ptr, ptr, ptr, i32)
 declare i64 @rt_ref(i64, i32, ptr, ptr, ptr, i32)
 declare i64 @rt_chain_then(i64, i64, i32)
 declare i64 @rt_do_run(i64, i64, ptr, i32)
+declare i64 @rt_do_unwrap(i64, i64, ptr, i32)
+declare i64 @rt_unwrap(i64, ptr, i32)
 declare i64 @rt_do_seq(i64, i64, i32)
 declare i64 @rt_do_result(i64)
 declare i64 @rt_std(ptr)
 declare i64 @rt_global_cached(ptr, ptr, i32)
 declare void @rt_top(i64)
+declare void @rt_top_unwrap(i64)
 declare void @rt_safepoint()
 @rt_gc_stop = external global i32
 declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)
@@ -559,6 +562,19 @@ func (c *Compiler) ex(node Node, sc *scope, fg *fnGen) string {
 		return fg.call("i64", "@rt_chain_then", fmt.Sprintf("i64 %s, i64 %s, i32 %d", m, k, posOf(n.Line)))
 	case *Run:
 		key := runKey(n)
+		if sc.lookup(key) == nil && n.Unwrap {
+			// 関数の本体の「した 中身」: 失敗(無)ならその値を関数から返す
+			v := c.ex(n.Call, sc, fg)
+			x := fg.call("i64", "@rt_unwrap", fmt.Sprintf("i64 %s, ptr %s, i32 %d", v, c.cstr(callName(n.Call)), posOf(n.Line)))
+			b := fg.tmp()
+			fg.emit(fmt.Sprintf("%s = icmp eq i64 %s, 0", b, x))
+			early, cont := fg.newLabel(), fg.newLabel()
+			fg.emit(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", b, early, cont))
+			fg.start(early)
+			fg.emit("ret i64 " + v)
+			fg.start(cont)
+			return x
+		}
 		if sc.lookup(key) == nil {
 			fg.call("void", "@rt_run_outside", fmt.Sprintf("i32 %d", posOf(n.Line)))
 			fg.emit("unreachable")
@@ -970,8 +986,20 @@ func (c *Compiler) localDefines(defines []*Define, sc *scope, fg *fnGen) {
 			sc.set(d.Name, &binding{kind: "slot", owner: fg, slot: k, lazy: true})
 		}
 	}
+	eager := map[*Define]bool{}
+	var eagerOrder []*Define
+	for _, d := range defines {
+		if !d.IsFunction && hasPureUnwrap(d.Body) {
+			eager[d] = true
+			eagerOrder = append(eagerOrder, d)
+			sc.set(d.Name, &binding{kind: "slot", owner: fg, slot: sc.vars[d.Name].slot})
+		}
+	}
 	for _, d := range defines {
 		b := sc.vars[d.Name]
+		if eager[d] {
+			continue
+		}
 		var v string
 		if d.IsFunction {
 			c.genFunction(d.Name, d.Params, exprBody{d.Body}, sc, fg, b.info, true)
@@ -983,6 +1011,10 @@ func (c *Compiler) localDefines(defines []*Define, sc *scope, fg *fnGen) {
 			v = fg.call("i64", "@rt_lazy", fmt.Sprintf("ptr %s, ptr %%fr", z))
 		}
 		fg.storeSlot(b.slot, v)
+	}
+	// 「した 中身」を使う値の定義は、使うときでなく、書いた順にここで計算する
+	for _, d := range eagerOrder {
+		fg.storeSlot(sc.vars[d.Name].slot, c.ex(d.Body, sc, fg))
 	}
 }
 
@@ -1148,6 +1180,42 @@ func collectRuns(node Node, out []*Run) []*Run {
 	return out
 }
 
+// hasPureUnwrap は、関数の本体として計算するところ(無名関数・手順・関数の定義の中は除く)に「した 中身」があるか
+func hasPureUnwrap(node Node) bool {
+	switch n := node.(type) {
+	case nil:
+		return false
+	case *Lambda, *Do:
+		return false
+	case *Define:
+		return !n.IsFunction && hasPureUnwrap(n.Body)
+	case *Run:
+		return n.Unwrap || hasPureUnwrap(n.Call)
+	}
+	for _, ch := range node.Children() {
+		if hasPureUnwrap(ch) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTopUnwrapDo は一番外に書いた手順で「した 中身」を使うものか(その結果が失敗ならエラーで終わる)
+func isTopUnwrapDo(s Node) bool {
+	d, ok := s.(*Do)
+	if !ok {
+		return false
+	}
+	for _, st := range d.Statements {
+		for _, r := range collectRuns(st, nil) {
+			if r.Unwrap {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *Compiler) do(stmts []Node, i int, sc *scope, fg *fnGen, line Pos) string {
 	s := stmts[i]
 	var runs []*Run
@@ -1162,6 +1230,9 @@ func (c *Compiler) do(stmts []Node, i int, sc *scope, fg *fnGen, line Pos) strin
 		key := runKey(r)
 		rest := genBody(func(local *scope, kfg *fnGen) string { return c.do(stmts, i, local, kfg, line) })
 		k := c.closure("続き", []Param{{Part: WO, Name: key}}, rest, sc, fg, false)
+		if r.Unwrap {
+			return fg.call("i64", "@rt_do_unwrap", fmt.Sprintf("i64 %s, i64 %s, ptr %s, i32 %d", m, k, c.cstr(callName(r.Call)), posOf(r.Line)))
+		}
 		name := ""
 		if call, ok := r.Call.(*Call); ok {
 			name = strings.TrimSuffix(call.Name, Suru)
@@ -1330,7 +1401,11 @@ func (c *Compiler) compile(program []Node, path string) string {
 			continue
 		}
 		v := c.ex(s, top, ini)
-		ini.call("void", "@rt_top", "i64 "+v)
+		if isTopUnwrapDo(s) {
+			ini.call("void", "@rt_top_unwrap", "i64 "+v)
+		} else {
+			ini.call("void", "@rt_top", "i64 "+v)
+		}
 	}
 	ini.emit("ret i64 0")
 	main := ini.finish("define internal i64 @suru_init(ptr %up)")

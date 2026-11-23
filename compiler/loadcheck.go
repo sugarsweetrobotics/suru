@@ -48,6 +48,9 @@ var threadPrimitives = []builtinInfo{
 	{"箱作成する", nil}, {"箱読取する", nil}, {"箱更新する", nil}, {"箱書込する", nil},
 }
 
+// 基本.suru の中と「基本内の…」(自動で読み込んだときは前置きなしでも)で使える組み込み
+var preludePrimitives = []builtinInfo{{"中断する", nil}}
+
 // libPrimitives は lib/ のファイルごとの組み込み(suru.py の LIB_PRIMITIVES)
 // (同梱のものでも、LibDir(SURU_LIB)のフォルダから読んだものでも)
 func libPrimitives(path string) []builtinInfo {
@@ -58,6 +61,8 @@ func libPrimitives(path string) []builtinInfo {
 		return netPrimitives
 	case isLibFile(path, ThreadPath):
 		return threadPrimitives
+	case isLibFile(path, PreludePath):
+		return preludePrimitives
 	}
 	return nil
 }
