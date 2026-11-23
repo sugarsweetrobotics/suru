@@ -103,12 +103,70 @@ declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)
 
 func compileError(msg string) { panic(&SuruError{Message: msg}) }
 
+// lineBase: 読み込んだファイルの行は、本体の行の後ろに続けて番号を振る(道 → 足す数)。実行時ライブラリの suru_files で戻す
+var lineBase = map[string]int{}
+
+func lineCount(text string) int { return strings.Count(text, "\n") + 1 }
+
 func posOf(p Pos) int {
 	col := p.Col
 	if col > 0x7FF {
 		col = 0x7FF
 	}
-	return p.Line | (col << 20)
+	n := p.Line
+	if n != 0 && p.File != "" {
+		n += lineBase[p.File]
+	}
+	if n > 0xFFFFF {
+		n = 0xFFFFF
+	}
+	return n | (col << 20)
+}
+
+// loadedModules は読み込んだファイル(読み込みを始めた順)
+func loadedModules(ctx *ParseContext) []*Module {
+	var out []*Module
+	if ctx.Order == nil {
+		return out
+	}
+	for _, p := range *ctx.Order {
+		if m := ctx.Modules[p]; m != nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// setLineBase は読み込んだファイルごとの、行の番号に足す数を決める
+func setLineBase(ctx *ParseContext, source string) {
+	lineBase = map[string]int{}
+	base := lineCount(source)
+	for _, m := range loadedModules(ctx) {
+		lineBase[m.Path] = base
+		base += lineCount(m.Source)
+	}
+}
+
+// filesTable は読み込んだファイルの、行の番号に足した数・名前・中身(実行時エラーの表示に使う)
+func (c *Compiler) filesTable() string {
+	mods := loadedModules(c.ctx)
+	var bases, names, srcs []string
+	for _, m := range mods {
+		bases = append(bases, fmt.Sprintf("i32 %d", lineBase[m.Path]))
+		names = append(names, "ptr "+c.cstr(pathBase(m.Path)))
+		g := fmt.Sprintf("@fs.%d", c.uid())
+		c.globals = append(c.globals, fmt.Sprintf(`%s = private unnamed_addr constant [%d x i8] c"%s\00"`, g, len(m.Source)+1, irBytes(m.Source)))
+		srcs = append(srcs, "ptr "+g)
+	}
+	arr := func(items []string) string {
+		if len(items) == 0 {
+			return "zeroinitializer"
+		}
+		return "[" + strings.Join(items, ", ") + "]"
+	}
+	n := len(mods)
+	return fmt.Sprintf("@suru_file_base = constant [%d x i32] %s\n@suru_file_name = constant [%d x ptr] %s\n@suru_file_src = constant [%d x ptr] %s\n@suru_nfiles = constant i64 %d",
+		n, arr(bases), n, arr(names), n, arr(srcs), n)
 }
 
 func irBytes(data string) string {
@@ -1435,7 +1493,7 @@ func (c *Compiler) compile(program []Node, path string) string {
 	main := ini.finish("define internal i64 @suru_init(ptr %up)")
 	c.functions = append(c.functions, main)
 	entry := "define void @suru_main() {\nentry:\n" + strings.Join(c.consts, "\n") + "\n  %r = call i64 @suru_init(ptr null)\n  ret void\n}"
-	source := fmt.Sprintf(`@suru_source = constant [%d x i8] c"%s\00"`, len(c.source)+1, irBytes(c.source))
+	source := fmt.Sprintf(`@suru_source = constant [%d x i8] c"%s\00"`, len(c.source)+1, irBytes(c.source)) + "\n" + c.filesTable()
 	var b strings.Builder
 	size := len(decls) + len(source) + len(entry) + 256
 	for _, g := range c.globals {

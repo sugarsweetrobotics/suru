@@ -1234,6 +1234,17 @@ def test_通信でこちらからつなぐ():
     assert out == CLIENT_OUT
 
 
+def test_バイト列受信するは文字の途中で切れても壊さない():
+    from net_helper import CLIENT_BYTES, CLIENT_BYTES_OUT, answer_once, free_port
+
+    port = free_port()
+    t = answer_once(port)
+    out: list = []
+    Interpreter(out=out.append).run(CLIENT_BYTES.replace("PORT", str(port)))
+    t.join(10)
+    assert out == CLIENT_BYTES_OUT
+
+
 def test_つなげない相手はエラー():
     from net_helper import free_port
 
@@ -1397,3 +1408,48 @@ def test_後始末実行するは動作だけを受け取る():
 def _io_into(out, src):
     from suru import Interpreter
     Interpreter(out=out.append).run(src)
+
+
+def test_入力確認するは入力の終わりで無():
+    out, _ = _io("""文字列 の 有無 を 応答する は 文字列 の 動作
+（s の 有） を 応答する とは 手順
+  「> 」 + s を 表示する
+  「? 」 を 入力確認してから 応答する
+無 を 応答する とは 「おしまい」 を 表示する
+「? 」 を 入力確認してから 応答する
+""", ["a", "b"])
+    assert out == ["? ", "> a", "? ", "> b", "? ", "おしまい"]
+
+
+def test_もしの枝のした結果は選んだ枝だけ行う():
+    out, _ = _io("""n を 質問する とは 手順
+  答 とは もし n > 1 ならば 「大? 」 を 入力した 結果 そうでなければ 「小」
+  追加 とは もし n > 5 ならば 「x」 そうでなければ もし n > 1 ならば 「中? 」 を 入力した 結果 そうでなければ 「-」
+  答 + 追加 を 表示する
+方法 を 処理する とは 手順
+  本文 とは もし 方法 が 「HEAD」 ならば 「」 そうでなければ 「本文? 」 を 入力した 結果
+  本文 の 長さ を 結果にする
+1 を 質問する
+3 を 質問する
+「HEAD」 を 処理してから 表示する
+「GET」 を 処理してから 表示する
+""", ["3", "4", "abc"])
+    assert out == ["小-", "大? ", "中? ", "34", "0", "本文? ", "3"]
+
+
+# --- 読み込んだファイルの中の実行時エラーは、ファイルの名前と行 ---
+
+PARTS = "x を 壊数する とは\n  x を 数値にする\n"
+PARTS_MAIN = "# 本体\n\n「部品」 を 読み込む\n（「a」 を 部品内の壊数する） + 1\n"
+PARTS_ERR = "エラー: 「部品.suru」の2行目 7文字目: 「a」は数値にできません\n    x を 数値にする\n         ^"
+
+
+def test_読み込んだファイルの中の実行時エラーはファイルの名前を付ける(tmp_path):
+    from suru import format_error
+    (tmp_path / "部品.suru").write_text(PARTS, encoding="utf-8")
+    with pytest.raises(SuruError) as info:
+        _run_in(tmp_path, PARTS_MAIN)
+    assert str(info.value) == "「部品.suru」の2行目 7文字目: 「a」は数値にできません"
+    assert format_error(info.value, PARTS_MAIN) == PARTS_ERR
+    with pytest.raises(SuruError, match="^「基本.suru」の[0-9]+行目 [0-9]+文字目: 無を取り出しました$"):
+        _run_in(tmp_path, "無 を 取出する")

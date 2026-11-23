@@ -132,6 +132,8 @@ type ParseContext struct {
 	Types   *TypeMap
 	BaseDir string
 	Modules map[string]*Module // 絶対パス → Module(読み込み中は nil)
+	// Order は読み込みを始めた順の道(suru.py の ctx.modules の順。どの ParseContext でも同じものを指す)
+	Order   *[]string
 	Loading map[string]bool
 	// Packages はプロジェクトの依存(名前 → Package)。nil なら、初めて読み込むときに BaseDir から探す
 	Packages map[string]Package
@@ -141,7 +143,7 @@ type ParseContext struct {
 
 func NewParseContext(baseDir string) *ParseContext {
 	return &ParseContext{Ctors: newCtorMap(), Types: newTypeMap(), BaseDir: baseDir,
-		Modules: map[string]*Module{}, Loading: map[string]bool{}}
+		Modules: map[string]*Module{}, Loading: map[string]bool{}, Order: &[]string{}}
 }
 
 func (c *ParseContext) add(td *TypeDef) {
@@ -2195,6 +2197,7 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 		default:
 			nameUnwraps(st, topFn)
 			resolveParamCalls(st, nil)
+			splitBranchRuns(st)
 		}
 	}
 	return statements
@@ -2371,7 +2374,7 @@ func parseExternArgs(toks []*Token) []ExternArg {
 const PreludeName = "基本"
 
 var preludeWords = setOf("成否", "有無", "成功", "失敗", "有")
-var preludeCalls = setOf("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する", "試算する") // 取出する は性質の関数なので入れない
+var preludeCalls = setOf("成否にする", "有無にする", "中断する", "失敗説明する", "失敗詳細にする", "数値確認する", "入力確認する", "試算する") // 取出する は性質の関数なので入れない
 
 func hasPreludeImport(imports map[*LNode]Node) bool {
 	for _, i := range imports {
@@ -2805,8 +2808,13 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 		raise(line, "ファイル「"+file+"」が見つかりません")
 	}
 	ctx.Loading[path] = true
-	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude}
+	if ctx.Order != nil {
+		*ctx.Order = append(*ctx.Order, path)
+	}
+	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude, Order: ctx.Order}
 	var program []Node
+	savedFile := curPosFile
+	curPosFile = path
 	err := try(func() {
 		program = ParseProgram(source, sub)
 		for _, s := range program {
@@ -2815,6 +2823,7 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 			}
 		}
 	})
+	curPosFile = savedFile
 	if err != nil {
 		w := ""
 		if err.Line.Line != 0 {
@@ -2824,7 +2833,7 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 	}
 	ctx.Ctors.Update(sub.Ctors)
 	ctx.Types.Update(sub.Types)
-	m := &Module{stem, path, program, privateNames(program)}
+	m := &Module{stem, path, program, privateNames(program), source}
 	delete(ctx.Loading, path)
 	ctx.Modules[path] = m
 	return m

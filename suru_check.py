@@ -1993,6 +1993,11 @@ def _t_detail(c, a, line):
     return STR
 
 
+@prim("入力確認する", {WO: False}, lambda: TFun([], act(TCon("有無", (STR,)))))
+def _t_input_check(c, a, line):
+    return act(TCon("有無", (STR,)))
+
+
 @prim("数値確認する", {WO: True}, lambda: TFun([(WO, STR)], _result_t(NUM, STR)))
 def _t_numcheck(c, a, line):
     _need(c, a, WO, STR, line, "数値確認する")
@@ -2030,6 +2035,7 @@ _simple("接続受付する", [("から", NUM)], act(NUM))
 _simple("接続する", [("に", STR), ("で", NUM)], act(NUM))
 _simple("行受信する", [("から", NUM)], act(STR))
 _simple("受信する", [("から", NUM), (WO, NUM)], act(STR))
+_simple("バイト列受信する", [("から", NUM), (WO, NUM)], act(BYTES))
 _simple("送信する", [(WO, STR), ("へ", NUM)], act(NUM))
 _simple("バイト列送信する", [(WO, BYTES), ("へ", NUM)], act(NUM))
 _simple("切断する", [(WO, NUM)], act(NUM))

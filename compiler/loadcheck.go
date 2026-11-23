@@ -36,7 +36,7 @@ var stdPrimitives = []builtinInfo{
 
 // 通信.suru の中と「通信内の…」でだけ使える組み込み
 var netPrimitives = []builtinInfo{
-	{"待受開始する", nil}, {"接続受付する", nil}, {"接続する", nil}, {"行受信する", nil}, {"受信する", nil},
+	{"待受開始する", nil}, {"接続受付する", nil}, {"接続する", nil}, {"行受信する", nil}, {"受信する", nil}, {"バイト列受信する", nil},
 	{"送信する", nil}, {"バイト列送信する", nil}, {"切断する", nil},
 }
 
@@ -49,7 +49,7 @@ var threadPrimitives = []builtinInfo{
 }
 
 // 基本.suru の中と「基本内の…」(自動で読み込んだときは前置きなしでも)で使える組み込み
-var preludePrimitives = []builtinInfo{{"中断する", nil}, {"失敗説明する", nil}, {"失敗詳細にする", nil}, {"数値確認する", nil}, {"試算する", nil}}
+var preludePrimitives = []builtinInfo{{"中断する", nil}, {"失敗説明する", nil}, {"失敗詳細にする", nil}, {"数値確認する", nil}, {"入力確認する", nil}, {"試算する", nil}}
 
 // libPrimitives は lib/ のファイルごとの組み込み(suru.py の LIB_PRIMITIVES)
 // (同梱のものでも、LibDir(SURU_LIB)のフォルダから読んだものでも)

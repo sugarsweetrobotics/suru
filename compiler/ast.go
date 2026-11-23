@@ -255,6 +255,7 @@ type Module struct {
 	Path    string
 	Program []Node
 	Private map[string]bool // 「… は 非公開とする」で外から見えない名前
+	Source  string          // ファイルの中身(コンパイルした実行ファイルのエラーの表示に使う)
 }
 
 // Visibility は「確保する と 解放する は 非公開とする」: 読み込んだ側から見えるか

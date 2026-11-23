@@ -19,9 +19,19 @@ import (
 type Pos struct {
 	Line int
 	Col  int
+	// File は読み込んだファイルの中の位置なら、そのファイルの道(本体のファイルなら "")
+	File string
 }
 
 func (p Pos) IsZero() bool { return p.Line == 0 }
+
+// fileOf は読み込んだファイルの中の位置なら「「部品.suru」の」(本体のファイルなら "")
+func fileOf(p Pos) string {
+	if p.File == "" {
+		return ""
+	}
+	return "「" + pathBase(p.File) + "」の"
+}
 
 func where(p Pos) string {
 	if p.Col != 0 {
@@ -38,7 +48,7 @@ type SuruError struct {
 
 func (e *SuruError) Error() string {
 	if e.Line.Line != 0 {
-		return where(e.Line) + ": " + e.Message
+		return fileOf(e.Line) + where(e.Line) + ": " + e.Message
 	}
 	return e.Message
 }

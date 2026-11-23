@@ -71,7 +71,7 @@ typedef struct Fn {
 } Fn;
 enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_SENDB, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
        A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_FIFO_NEW, A_CH_FIFO_OPEN, A_CH_FIFO_DEL, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
-       A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY };
+       A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY, A_INPUT_OPT, A_RECVB };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
@@ -591,6 +591,24 @@ static void buf_printf(Buf *b, const char *fmt, ...) {
 /* ------------------------------------------------------------------ */
 
 static const char *source_text = "";
+/* 読み込んだファイル(コンパイラが作る表)。その行は、本体の行の後ろに続けて番号を振ってある */
+extern const int32_t suru_file_base[];
+extern const char *const suru_file_name[];
+extern const char *const suru_file_src[];
+extern const int64_t suru_nfiles;
+/* 行の番号を、そのファイルの中の行に戻す。読み込んだファイルならその名前と中身も返す(本体なら名前は NULL) */
+static int local_line(int line, const char **name, const char **src) {
+    *name = NULL;
+    *src = source_text;
+    for (int64_t i = suru_nfiles - 1; i >= 0; i--) {
+        if (line > suru_file_base[i]) {
+            *name = suru_file_name[i];
+            *src = suru_file_src[i];
+            return line - suru_file_base[i];
+        }
+    }
+    return line;
+}
 
 static int display_width(const char *s, size_t n) {
     int w = 0;
@@ -622,8 +640,11 @@ static V caught_failure(void); /* 受け止めた実行時エラーの失敗(後
 __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
     fflush(stdout);
     int line = pos & 0xfffff, col = (pos >> 20) & 0x7ff;
+    const char *fname, *ftext;
+    line = local_line(line, &fname, &ftext);
     Buf b = {0};
     buf_cat(&b, "エラー: ");
+    if (line && fname) buf_printf(&b, "「%s」の", fname);
     if (line) {
         if (col) buf_printf(&b, "%d行目 %d文字目: ", line, col);
         else buf_printf(&b, "%d行目: ", line);
@@ -645,7 +666,7 @@ __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
     }
     /* 該当する行と位置の印 */
     if (line) {
-        const char *p = source_text;
+        const char *p = ftext;
         for (int k = 1; k < line && p; k++) {
             p = strchr(p, '\n');
             if (p) p++;
@@ -1541,6 +1562,7 @@ static V dispatch(Fn *m, V *args, int32_t pos) {
 /* ------------------------------------------------------------------ */
 
 static V perform(V v);
+static V mk_bytes(const void *p, int64_t n);
 static V net_run(Act *a);
 static V mem_run(Act *a);
 static V thread_run(Act *a);
@@ -1557,7 +1579,7 @@ static V act_run(Act *a) {
         free(s);
         return a->a;
     }
-    case A_INPUT: {
+    case A_INPUT: case A_INPUT_OPT: {
         if (a->a) { fputs(AS(Str, a->a)->s, stdout); }
         fflush(stdout);
         char *line = NULL;
@@ -1565,12 +1587,19 @@ static V act_run(Act *a) {
         world_release();
         ssize_t n = getline(&line, &cap, stdin);
         world_acquire();
-        if (n < 0) fail((int32_t)a->b, "入力がありません");
+        if (n < 0) {
+            if (a->kind == A_INPUT_OPT) return rt_construct("無", 0, NULL, 0); /* 入力確認する: 入力の終わり */
+            fail((int32_t)a->b, "入力がありません");
+        }
         if (n > 0 && line[n - 1] == '\n') n--;
         if (n > 0 && line[n - 1] == '\r') n--;
+        if (a->kind == A_INPUT_OPT) {
+            V s = mk_str(line, n);
+            return rt_construct("有", 1, &s, 0);
+        }
         return mk_str(line, n);
     }
-    case A_LISTEN: case A_ACCEPT: case A_CONNECT: case A_RECVLINE: case A_RECV: case A_SEND: case A_SENDB: case A_CLOSE:
+    case A_LISTEN: case A_ACCEPT: case A_CONNECT: case A_RECVLINE: case A_RECV: case A_RECVB: case A_SEND: case A_SENDB: case A_CLOSE:
         return net_run(a);
     case A_TRY: {
         TryFrame f;
@@ -1778,7 +1807,8 @@ V rt_trace(V v, const char *fn, int32_t pos) {
     }
     if (!is_failure(v)) return v;
     char buf[64];
-    int k = snprintf(buf, sizeof buf, "%d行目 ", pos & 0xfffff);
+    const char *fname, *ftext;
+    int k = snprintf(buf, sizeof buf, "%d行目 ", local_line(pos & 0xfffff, &fname, &ftext));
     Buf b = {0};
     buf_add(&b, buf, (size_t)k);
     buf_cat(&b, fn);
@@ -1792,6 +1822,8 @@ static V caught_failure(void) {
     V f = rt_construct("失敗", 1, &why, 0);
     int line = fail_last_pos & 0xfffff, col = (fail_last_pos >> 20) & 0x7ff;
     if (!line) return f;
+    const char *fname, *ftext;
+    line = local_line(line, &fname, &ftext);
     char buf[96];
     int k = col ? snprintf(buf, sizeof buf, "%d行目 %d文字目(ここで実行時エラー)", line, col)
                 : snprintf(buf, sizeof buf, "%d行目(ここで実行時エラー)", line);
@@ -2418,11 +2450,11 @@ static V net_run(Act *a) {
         /* 応答を待つ時間は区切らない(LLM のように最初の応答まで長くかかる相手もいるため) */
         return mk_int(sock_add(fd), pos);
     }
-    case A_RECVLINE: case A_RECV: {
+    case A_RECVLINE: case A_RECV: case A_RECVB: {
         Sock s = sock_get2(a->a, "接続", 1, pos);
         fflush(stdout);
         int64_t want = 0;
-        if (a->kind == A_RECV) {
+        if (a->kind != A_RECVLINE) {
             V v = need_num(a->b, pos);
             want = IS_INT(v) ? INT_VAL(v) : -1;
             if (want < 0) fail(pos, "「%s」は受信するバイト数ではありません", plain(v).s);
@@ -2451,6 +2483,11 @@ static V net_run(Act *a) {
         world_acquire();
         errno = e;
         if (bad) { free(b.s); net_fail(a); }
+        if (a->kind == A_RECVB) { /* バイト列受信する: 文字の途中で切れても壊さない */
+            V r = mk_bytes(b.s, (int64_t)b.n);
+            free(b.s);
+            return r;
+        }
         return buf_str(&b);
     }
     case A_SEND: case A_SENDB: {
@@ -2522,6 +2559,7 @@ BI(n_accept) { return mk_net(A_ACCEPT, "接続受付する", a[0], 0, pos); }
 BI(n_connect) { return mk_net(A_CONNECT, "接続する", a[0], a[1], pos); } /* に, で */
 BI(n_recvline) { return mk_net(A_RECVLINE, "行受信する", a[0], 0, pos); }
 BI(n_recv) { return mk_net(A_RECV, "受信する", a[0], a[1], pos); }  /* から, を */
+BI(n_recvb) { return mk_net(A_RECVB, "バイト列受信する", a[0], a[1], pos); }  /* から, を */
 BI(n_send) { return mk_net(A_SEND, "送信する", a[0], a[1], pos); }  /* を, へ */
 BI(n_sendb) { return mk_net(A_SENDB, "バイト列送信する", a[0], a[1], pos); }  /* を, へ */
 BI(n_close) { return mk_net(A_CLOSE, "切断する", a[0], 0, pos); }
@@ -2915,6 +2953,7 @@ BI(m_numcheck) { /* 数にできれば 数 の 成功、できなければ エ�
     V why = rt_str(fail_last_msg, (int64_t)strlen(fail_last_msg));
     return rt_construct("失敗", 1, &why, 0);
 }
+BI(m_input_check) { return mk_act(A_INPUT_OPT, "入力確認する", a[0] ? format_v(a[0]) : 0, pos); }
 BI(m_calc_try) { /* 引数を全部渡した関数の値を呼び、成功なら 値 の 成功、実行時エラーなら エラーの文 の 失敗 */
     need_fn(a[0], pos);
     TryFrame f;
@@ -3599,6 +3638,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"失敗説明する", 2, P2_WO_DE, NULL, f_explain},
     {"失敗詳細にする", 1, P1_WO, NULL, f_detail},
     {"数値確認する", 1, P1_WO, NULL, m_numcheck},
+    {"入力確認する", 1, P1_WO, R_OPT1, m_input_check},
     {"試算する", 1, P1_WO, NULL, m_calc_try},
     /* 「スレッド」の組み込み */
     {"並行開始する", 1, P1_WO, NULL, t_spawn},
@@ -3628,6 +3668,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"接続する", 2, P2_NI_DE, NULL, n_connect},
     {"行受信する", 1, P1_KARA, NULL, n_recvline},
     {"受信する", 2, P2_KARA_WO, NULL, n_recv},
+    {"バイト列受信する", 2, P2_KARA_WO, NULL, n_recvb},
     {"送信する", 2, P2_WO_HE, NULL, n_send},
     {"バイト列送信する", 2, P2_WO_HE, NULL, n_sendb},
     {"切断する", 1, P1_WO, NULL, n_close},

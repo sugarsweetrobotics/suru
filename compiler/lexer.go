@@ -452,7 +452,7 @@ func tokenizeLine(text string, line int) ([]*Token, error) {
 	quoted := false
 	flush := func() error {
 		if len(buf) > 0 {
-			ts, err := classify(string(buf), Pos{line, start + 1}, quoted)
+			ts, err := classify(string(buf), Pos{line, start + 1, curPosFile}, quoted)
 			if err != nil {
 				return err
 			}
@@ -464,7 +464,7 @@ func tokenizeLine(text string, line int) ([]*Token, error) {
 	}
 	for i := 0; i < n; i++ {
 		c := rs[i]
-		here := Pos{line, i + 1}
+		here := Pos{line, i + 1, curPosFile}
 		if len(buf) == 0 && !isSpace(c) {
 			start = i
 		}
@@ -808,7 +808,7 @@ func segmentRun(pieces []piece, line Pos) ([]*Token, error) {
 			}
 			cls := charClass(rs[i])
 			if cls == "OTHER" {
-				return nil, errAt(Pos{line.Line, pc.col + i}, "「"+string(rs[i])+"」は使えない文字です")
+				return nil, errAt(Pos{line.Line, pc.col + i, curPosFile}, "「"+string(rs[i])+"」は使えない文字です")
 			}
 			j := i + 1
 			switch cls {
@@ -838,7 +838,7 @@ func segmentRun(pieces []piece, line Pos) ([]*Token, error) {
 
 	var tokens []*Token
 	for idx, p := range parts {
-		here := Pos{line.Line, cols[idx]}
+		here := Pos{line.Line, cols[idx], curPosFile}
 		switch p.cls {
 		case "NAME", "QNAME":
 			switch {
@@ -941,7 +941,7 @@ func tokenizePunctLine(text string, line int) ([]*Token, error) {
 	}
 	for i := 0; i < n; i++ {
 		c := rs[i]
-		here = Pos{line, i + 1}
+		here = Pos{line, i + 1, curPosFile}
 		if len(buf) == 0 && !isSpace(c) && c != '『' {
 			start = i
 		}
@@ -1128,7 +1128,7 @@ func splitSourceLines(source string) ([]*Line, error) {
 				return nil, err
 			}
 			if len(tokens) > 0 {
-				lines = append(lines, &Line{Indent: indent, Tokens: tokens, Number: Pos{number, 0}})
+				lines = append(lines, &Line{Indent: indent, Tokens: tokens, Number: Pos{number, 0, curPosFile}})
 			}
 			k++
 			continue
@@ -1170,3 +1170,6 @@ func splitSourceLines(source string) ([]*Line, error) {
 	}
 	return lines, nil
 }
+
+// curPosFile は読み込んだファイルを解析している間、そのファイルの道(字句の Pos.File に入れる)
+var curPosFile string

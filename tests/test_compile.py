@@ -102,6 +102,27 @@ f を 2 に 適用する
   s を 表示する
 始めする
 """,
+    "入力確認する": """
+文字列 の 有無 を 応答する は 文字列 の 動作
+（s の 有） を 応答する とは 手順
+  「> 」 + s を 表示する
+  「? 」 を 入力確認してから 応答する
+無 を 応答する とは 「おしまい」 を 表示する
+「? 」 を 入力確認してから 応答する
+""",
+    "もしの枝のした結果": """
+n を 質問する とは 手順
+  答 とは もし n > 1 ならば 「大? 」 を 入力した 結果 そうでなければ 「小」
+  追加 とは もし n > 5 ならば 「x」 そうでなければ もし n > 1 ならば 「中? 」 を 入力した 結果 そうでなければ 「-」
+  答 + 追加 を 表示する
+方法 を 処理する とは 手順
+  本文 とは もし 方法 が 「HEAD」 ならば 「」 そうでなければ 「本文? 」 を 入力した 結果
+  本文 の 長さ を 結果にする
+1 を 質問する
+3 を 質問する
+「HEAD」 を 処理してから 表示する
+「GET」 を 処理してから 表示する
+""",
     "数の表示": """
 10 / 4
 1 / 3
@@ -285,6 +306,16 @@ def test_通信でこちらからつなぐのをコンパイルする(tmp_path):
     assert bad.returncode == 1 and "「接続する」で通信に失敗しました" in bad.stderr
 
 
+def test_バイト列受信するをコンパイルする(tmp_path):
+    from net_helper import CLIENT_BYTES, CLIENT_BYTES_OUT, answer_once, free_port
+
+    port = free_port()
+    t = answer_once(port)
+    r = compiled(CLIENT_BYTES.replace("PORT", str(port)), tmp_path)
+    t.join(10)
+    assert r.returncode == 0 and r.stdout == "".join(s + "\n" for s in CLIENT_BYTES_OUT)
+
+
 @pytest.mark.parametrize("which", ["HTTP_SERVER", "HTTP_ACTION_SERVER"])
 def test_HTTPのサーバーをコンパイルして答えてもらう(which, tmp_path):
     import net_helper as N
@@ -445,3 +476,11 @@ u に i を 足込する とは u を （i * 7 % 1000） から i へ 表内の�
 
 def test_表はインタプリタと同じ(tmp_path):
     assert same(TABLE, tmp_path) == "10\n0\n真\n偽\n（「a」 と 「b」 と 「c」）\n（10 と 2 と 3）\n3\n1000\n1\n真\n（「y」 と 「z」）\n"
+
+
+def test_読み込んだファイルの中の実行時エラーはファイルの名前を付ける(tmp_path):
+    from test_suru import PARTS, PARTS_ERR, PARTS_MAIN
+
+    (tmp_path / "部品.suru").write_text(PARTS, encoding="utf-8")
+    r = compiled(PARTS_MAIN, tmp_path, str(tmp_path))
+    assert r.returncode == 1 and r.stderr == PARTS_ERR + "\n"

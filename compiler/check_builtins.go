@@ -282,6 +282,11 @@ func init() {
 		need(c, a, WO, resultT(newTVar(), newTVar()), line, "失敗詳細にする")
 		return STR
 	})
+	prim("入力確認する", []partReq{opt(WO)}, func() Type {
+		return &TFun{nil, act(&TCon{"有無", []Type{STR}})}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		return act(&TCon{"有無", []Type{STR}})
+	})
 	prim("数値確認する", []partReq{req(WO)}, func() Type {
 		return &TFun{[]TParam{{WO, STR}}, resultT(NUM, STR)}
 	}, func(c *Checker, a typedArgs, line Pos) Type {
@@ -327,6 +332,7 @@ func init() {
 	simple("接続する", []TParam{{"に", STR}, {"で", NUM}}, act(NUM))
 	simple("行受信する", []TParam{{"から", NUM}}, act(STR))
 	simple("受信する", []TParam{{"から", NUM}, {WO, NUM}}, act(STR))
+	simple("バイト列受信する", []TParam{{"から", NUM}, {WO, NUM}}, act(bytesT))
 	simple("送信する", []TParam{{WO, STR}, {"へ", NUM}}, act(NUM))
 	simple("バイト列送信する", []TParam{{WO, bytesT}, {"へ", NUM}}, act(NUM))
 	// スレッド(「スレッド」の組み込み)。並行開始した結果は、合流する(待って結果を返す)動作
