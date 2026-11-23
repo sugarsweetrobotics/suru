@@ -290,3 +290,28 @@ def test_失敗の文はインタプリタとバイナリで同じ(tmp_path):
 def test_値と引数に使えない型():
     assert "のどれかの型を書いてください" in err("バイト列 を 甲する は バイト列\nx を 甲する とは 外部の「abs」\n")
     assert "のどれかの型を書いてください" in err("無 を 甲する は 数\nx を 甲する とは 外部の「abs」\n")
+
+
+@needs_cc
+@pytest.mark.skipif(shutil.which("pkg-config") is None, reason="pkg-config がありません")
+def test_短い名前はpkg_configのフォルダからも探す(tmp_path, monkeypatch):
+    # 普通は探さないフォルダ(Homebrew の /opt/homebrew/lib のような)にあるライブラリ
+    cc = shutil.which("cc") or shutil.which("clang")
+    lib = tmp_path / "変な場所" / "lib"
+    lib.mkdir(parents=True)
+    (tmp_path / "s.c").write_text("long long surupc_triple(long long x) { return 3 * x; }\n", encoding="utf-8")
+    subprocess.run([cc, "-shared", "-fPIC", "-o", str(lib / "libsurupc.so"), str(tmp_path / "s.c")], check=True)
+    pc = tmp_path / "pc"
+    pc.mkdir()
+    (pc / "surupc.pc").write_text(f"libdir={lib}\n\nName: surupc\nDescription: t\nVersion: 1.0\nLibs: -L${{libdir}} -lsurupc\n", encoding="utf-8")
+    monkeypatch.setenv("PKG_CONFIG_PATH", str(pc))
+    suru._PKGCONFIG_CACHE.clear()
+    suru._FFI_LIBS.clear()
+    src = "外部の「surupc」 を 読み込む\n数 を 三倍する は 数\nx を 三倍する とは 外部の「surupc_triple」\n14 を 三倍して 表示する\n"
+    assert interpreted(src, str(tmp_path)) == "42\n"
+    assert suru_compile._pkgconfig_link_flags("surupc") == [f"-L{lib}", f"-Wl,-rpath,{lib}"]
+    assert suru_compile._pkgconfig_link_flags("m") == []
+    if suru_compile.find_cc() is not None:
+        r = compiled(src, str(tmp_path))
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == "42\n"

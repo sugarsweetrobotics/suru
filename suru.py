@@ -4279,14 +4279,53 @@ MIN_COMPILED_INT, MAX_COMPILED_INT = -(1 << 62), (1 << 62) - 1  # コンパイ�
 _FFI_LIBS: dict = {}
 
 
+_NO_PKGCONFIG_LIBS = {"c", "m", "pthread", "dl", "rt"}  # どこにでもある C のライブラリ
+_PKGCONFIG_CACHE: dict[str, str] = {}
+
+
+def _pkgconfig_libdir(name: str) -> str:
+    """短い名前のライブラリ(lib名前.so・.dylib)があるフォルダを、pkg-config の「lib名前」か「名前」の
+    libdir から探す(Homebrew の /opt/homebrew/lib など)。見つからなければ ""。Go 版の PkgConfigLibDir と同じ"""
+    import shutil
+    import subprocess
+
+    if name in _NO_PKGCONFIG_LIBS or "/" in name or "\\" in name:
+        return ""
+    if name in _PKGCONFIG_CACHE:
+        return _PKGCONFIG_CACHE[name]
+    found = ""
+    pc = next((shutil.which(c) for c in (os.environ.get("PKG_CONFIG", ""), "pkg-config", "pkgconf") if c and shutil.which(c)), None)
+    if pc:
+        for module in (f"lib{name}", name):
+            try:
+                r = subprocess.run([pc, "--variable=libdir", module], capture_output=True, text=True, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                break
+            d = r.stdout.strip()
+            if r.returncode == 0 and d and any(os.path.exists(os.path.join(d, f"lib{name}{ext}")) for ext in (".so", ".dylib", ".a")):
+                found = d
+                break
+    _PKGCONFIG_CACHE[name] = found
+    return found
+
+
+def _pkgconfig_lib_file(name: str) -> str | None:
+    """pkg-config のフォルダにある lib名前 の共有ライブラリのファイル(なければ None)"""
+    d = _pkgconfig_libdir(name)
+    for ext in (".dylib", ".so") if sys.platform == "darwin" else (".so", ".dylib"):
+        if d and os.path.exists(os.path.join(d, f"lib{name}{ext}")):
+            return os.path.join(d, f"lib{name}{ext}")
+    return None
+
+
 def _ffi_lib(path: str, line: int) -> Any:
-    """ライブラリを開く(同じものは一度だけ)。短い名前(「m」)は OS の探し方で探す"""
+    """ライブラリを開く(同じものは一度だけ)。短い名前(「m」)は OS の探し方で探し、なければ pkg-config で"""
     import ctypes
     import ctypes.util
 
     if path in _FFI_LIBS:
         return _FFI_LIBS[path]
-    found = path if os.path.isabs(path) else ctypes.util.find_library(path) or f"lib{path}.so"
+    found = path if os.path.isabs(path) else ctypes.util.find_library(path) or _pkgconfig_lib_file(path) or f"lib{path}.so"
     try:
         lib = ctypes.CDLL(found, use_errno=True)
     except OSError as e:

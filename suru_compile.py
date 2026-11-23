@@ -1034,6 +1034,21 @@ def runtime_object(cc: str) -> str:
     return obj
 
 
+def _standard_lib_dir(d: str) -> bool:
+    """リンカーと dlopen が普通に探すフォルダか(rpath を足さない)"""
+    d = os.path.normpath(d)
+    roots = ("/lib", "/lib64", "/usr/lib", "/usr/lib64")
+    return d in roots or (os.path.dirname(d) in roots and "-linux-" in os.path.basename(d))
+
+
+def _pkgconfig_link_flags(lib: str) -> list[str]:
+    """短い名前のライブラリを、pkg-config のフォルダから探す clang の引数(Go 版の pkgConfigLinkFlags と同じ)"""
+    d = S._pkgconfig_libdir(lib)
+    if not d or _standard_lib_dir(d):
+        return []
+    return [f"-L{d}", f"-Wl,-rpath,{d}"]
+
+
 def link_flags(ll_path: str) -> list[str]:
     """IR の始めの「; suru-link: 」の行から、外部のライブラリをリンクする引数を作る"""
     flags: list[str] = []
@@ -1046,7 +1061,7 @@ def link_flags(ll_path: str) -> list[str]:
                 if os.path.isabs(lib):
                     flags += [lib, f"-Wl,-rpath,{os.path.dirname(lib)}"]
                 elif lib != "c":
-                    flags.append(f"-l{lib}")
+                    flags += _pkgconfig_link_flags(lib) + [f"-l{lib}"]
     return flags
 
 

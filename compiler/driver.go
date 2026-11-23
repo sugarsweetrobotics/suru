@@ -20,7 +20,7 @@ func LinkFlags(ir string) []string {
 			if filepath.IsAbs(lib) {
 				flags = append(flags, lib, "-Wl,-rpath,"+filepath.Dir(lib))
 			} else if lib != "c" {
-				flags = append(flags, "-l"+lib)
+				flags = append(append(flags, pkgConfigLinkFlags(lib)...), "-l"+lib)
 			}
 		}
 	}
