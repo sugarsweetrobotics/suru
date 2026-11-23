@@ -2210,7 +2210,9 @@ func preludeWordLine(nodes []*LNode) (Pos, bool) {
 			if (t.Kind == "WORD" || t.Kind == "CALL") && !t.Quoted &&
 				(preludeWords[t.S] || preludeCalls[t.S] || strings.HasPrefix(t.S, PreludeName+ModuleSep) ||
 					// 「無」は「… は 無」なら外部の関数の型(C の void)
-					t.S == "無" && !(k > 0 && isKw(n.Line.Tokens[k-1], KwWa))) {
+					t.S == "無" && !(k > 0 && isKw(n.Line.Tokens[k-1], KwWa)) ||
+					// 「で」のない「試行する」は成否を返す
+					t.Kind == "CALL" && t.S == "試行する" && !lineHasPart(n.Line.Tokens, "で")) {
 				return n.Line.Number, true
 			}
 		}
@@ -2219,6 +2221,15 @@ func preludeWordLine(nodes []*LNode) (Pos, bool) {
 		}
 	}
 	return Pos{}, false
+}
+
+func lineHasPart(tokens []*Token, part string) bool {
+	for _, u := range tokens {
+		if u.Kind == "PART" && u.S == part {
+			return true
+		}
+	}
+	return false
 }
 
 // loadPrelude は lib/基本.suru を読む(同じフォルダに 基本.suru があっても、いつも同梱のもの)

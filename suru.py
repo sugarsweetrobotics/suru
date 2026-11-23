@@ -2620,7 +2620,10 @@ def _prelude_word_line(nodes: list) -> int | None:
                     t.value in PRELUDE_WORDS or t.value in PRELUDE_CALLS
                     or t.value.startswith(PRELUDE_NAME + MODULE_SEP)
                     # 「無」は「… は 無」なら外部の関数の型(C の void)
-                    or t.value == PRELUDE_NONE and not (k > 0 and is_kw(n.line.tokens[k - 1], KW_WA))):
+                    or t.value == PRELUDE_NONE and not (k > 0 and is_kw(n.line.tokens[k - 1], KW_WA))
+                    # 「で」のない「試行する」は成否を返す
+                    or t.kind == "CALL" and t.value == PRELUDE_TRY
+                    and not any(u.kind == "PART" and u.value == "で" for u in n.line.tokens)):
                 return n.line.number
         line = _prelude_word_line(n.children)
         if line is not None:
@@ -3279,6 +3282,7 @@ THREAD_PATH = os.path.join(LIB_DIR, THREAD_NAME + SOURCE_SUFFIX)
 PRELUDE_NAME = "基本"
 PRELUDE_PATH = os.path.join(LIB_DIR, PRELUDE_NAME + SOURCE_SUFFIX)
 PRELUDE_NONE = "無"
+PRELUDE_TRY = "試行する"
 PRELUDE_TYPES = ("成否", "有無")
 PRELUDE_WORDS = frozenset(("成否", "有無", "成功", "失敗", "有"))
 PRELUDE_CALLS = frozenset(("成否にする", "有無にする", "中断する"))  # 取出する は性質の関数なので入れない
@@ -3598,7 +3602,7 @@ STD_PRIMITIVES = [
     Builtin("バイト数にする", [(WO, True)], lambda it, a, line: len(_str(a[WO], "「バイト数にする」の「を」", line).encode("utf-8"))),
     Builtin("文字にする", [(WO, True)], lambda it, a, line: _chr(a[WO], line)),
     Builtin("文字コードにする", [(WO, True)], lambda it, a, line: _ord(a[WO], line)),
-    Builtin("試行する", [(WO, True), ("で", True)], lambda it, a, line: _try(a[WO], a["で"], line)),
+    Builtin("試行する", [(WO, True), ("で", False)], lambda it, a, line: _try(a[WO], a.get("で"), line)),
     # バイト列と、外部の関数とのやりとり
     Builtin("バイト列にする", [(WO, True)], lambda it, a, line: _str(a[WO], "「バイト列にする」の「を」", line).encode("utf-8")),
     Builtin("バイト列組立する", [(WO, True)], lambda it, a, line: _bytes_of_list(a[WO], line)),
@@ -3724,10 +3728,24 @@ def _fail_action(v: Any, line: int) -> Action:
 
 
 def _try(m: Any, alt: Any, line: int) -> Any:
-    """「m を 代わり で 試行する」: m を行い、実行時エラーになったら、エラーの文を標準エラーに書いて 代わり を行う"""
+    """「m を 代わり で 試行する」: m を行い、実行時エラーになったら、エラーの文を標準エラーに書いて 代わり を行う。
+    「で」を省くと、成功なら 結果 の 成功、実行時エラーなら エラーの文 の 失敗(標準エラーには書かない)"""
     for v, p in ((m, "を"), (alt, "で")):
+        if v is None:
+            continue
         if not isinstance(v, ACTION_TYPES):
             raise SuruError(f"「試行する」の「{p}」は動作でなければなりません(「{format_value(v)}」が渡されました)", line)
+
+    if alt is None:
+        def perform_result(it: "Interpreter") -> Any:
+            try:
+                return Record("成功", "成否", ("値",), (it.perform(m),))
+            except SuruError as e:
+                return Record("失敗", "成否", ("理由",), (e.message,))
+            except RecursionError:
+                return Record("失敗", "成否", ("理由",), ("再帰が深すぎます",))
+
+        return Action("試行する", perform_result)
 
     def perform(it: "Interpreter") -> Any:
         try:

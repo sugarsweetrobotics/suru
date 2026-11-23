@@ -1571,12 +1571,16 @@ static V act_run(Act *a) {
     case A_TRY: {
         TryFrame f;
         f.prev = try_top;
-        f.quiet = 0;
+        f.quiet = a->b == 0; /* 「で」を省いたときは、エラーの文を書かずに失敗にする */
         try_top = &f;
         if (setjmp(f.jb) == 0) {
             V r = perform(a->a);
             try_top = f.prev;
-            return r;
+            return a->b ? r : rt_construct("成功", 1, &r, 0);
+        }
+        if (!a->b) {
+            V why = rt_str(fail_last_msg, (int64_t)strlen(fail_last_msg));
+            return rt_construct("失敗", 1, &why, 0);
         }
         return perform(a->b); /* fail_msg が try_top を戻している */
     }
@@ -2341,9 +2345,9 @@ static V mk_net(int kind, const char *name, V x, V y, int32_t pos) {
     AS(Act, v)->pos = pos;
     return v;
 }
-BI(s_try) { /* を, で */
+BI(s_try) { /* を, で(「で」を省くと成否を返す) */
     const char *parts[2] = {"を", "で"};
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < (a[1] ? 2 : 1); i++) {
         int t = TAG(a[i]);
         if (t != T_ACT && t != T_PURE) fail(pos, "「試行する」の「%s」は動作でなければなりません(「%s」が渡されました)", parts[i], plain(a[i]).s);
     }
@@ -3364,7 +3368,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"バイト数にする", 1, P1_WO, NULL, s_bytes},
     {"文字にする", 1, P1_WO, NULL, s_chr},
     {"文字コードにする", 1, P1_WO, NULL, s_ord},
-    {"試行する", 2, P2_WO_DE, NULL, s_try},
+    {"試行する", 2, P2_WO_DE, R_1_OPT, s_try},
     {"バイト列にする", 1, P1_WO, NULL, m_tobytes},
     {"バイト列組立する", 1, P1_WO, NULL, m_build},
     {"数列にする", 1, P1_WO, NULL, m_list},

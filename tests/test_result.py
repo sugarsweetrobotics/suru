@@ -204,3 +204,42 @@ def test_した中身の後には結果か中身():
     with pytest.raises(suru.SuruError) as e:
         suru.parse_program("入力した 中\n")
     assert "「入力した」の後には「結果」か「中身」を書いてください" in str(e.value)
+
+
+# --- 段階3: 「で」を省いた 試行する --------------------------------------------
+
+TRY = """「標準」 を 読み込んで 使う
+「ファイル」 を 読み込む
+道 を 本文読取する とは 手順
+  本文 とは （道 を ファイル内の読込する） を 試行した 中身
+  （本文 の 長さ） の 成功 を 結果にする
+「無い.txt」 を 本文読取してから 表示する
+（「12」 を 数値にして 結果にする） を 試行してから 表示する
+（「a」 を 失敗する） を 試行してから 表示する
+（「a」 を 失敗する） を （「代わり」 を 表示する） で 試行する
+手順（nとは、「無い.txt」を本文読取した中身。nを表示する）。
+「ここには来ない」 を 表示する
+"""
+
+TRY_OUT = """（理由 は 「ファイル『無い.txt』を開くのに失敗しました(No such file or directory)」 の 失敗）
+（値 は 12 の 成功）
+（理由 は 「a」 の 失敗）
+代わり
+"""
+
+
+def test_でを省いた試行するは成否を返す(tmp_path):
+    for r in run_both(TRY, tmp_path):
+        assert (r.returncode, r.stdout) == (1, TRY_OUT)
+        assert r.stderr == "エラー: 9行目 8文字目: a\nエラー: ファイル『無い.txt』を開くのに失敗しました(No such file or directory)\n"
+
+
+def test_でを省いた試行するの型():
+    suru_check.check("「標準」 を 読み込んで 使う\nr は （数 と 文字列） の 成否 の 動作\nr とは （1 を 結果にする） を 試行する\n")
+    with pytest.raises(suru.SuruError):
+        suru_check.check("「標準」 を 読み込んで 使う\nr は 数 の 動作\nr とは （1 を 結果にする） を 試行する\n")
+
+
+def test_でのある試行するは基本を読み込まない():
+    prog = suru.parse_program("「標準」 を 読み込んで 使う\n（1 を 表示する） を （2 を 表示する） で 試行する\n")
+    assert not any(isinstance(s, suru.Import) and s.auto for s in prog)

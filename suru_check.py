@@ -1963,10 +1963,12 @@ def _t_abort(c, a, line):
     return TVar()
 
 
-@prim("試行する", {WO: True, "で": True}, lambda: (lambda x: TFun([(WO, act(x)), ("で", act(x))], act(x)))(TVar()))
+@prim("試行する", {WO: True, "で": False}, lambda: (lambda x: TFun([(WO, act(x)), ("で", act(x))], act(x)))(TVar()))
 def _t_try(c, a, line):
     x = TVar()
     _need(c, a, WO, act(x), line, "試行する")
+    if "で" not in a:
+        return act(TCon("成否", (x, STR)))  # 「で」を省くと、実行時エラーを失敗(エラーの文)にする
     _need(c, a, "で", act(x), line, "試行する")
     return act(x)
 # 通信(「通信」の組み込み)。待受口と接続は番号
