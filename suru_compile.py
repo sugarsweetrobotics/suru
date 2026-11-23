@@ -639,7 +639,11 @@ class Compiler:
                 self.link_libs.append(lib)
         ret = FFI_IR[ext.result]
         if not ext.pointer:
-            decl = f"declare {ret} @{ext.symbol}({', '.join(FFI_IR[t] for t in ext.params)})"
+            if ext.cargs:
+                cts = ["i64" if k == "定数" else FFI_IR[ext.params[v]] for k, v in ext.cargs]
+            else:
+                cts = [FFI_IR[t] for t in ext.params]
+            decl = f"declare {ret} @{ext.symbol}({', '.join(cts)})"
             if self.ffi_decls.setdefault(ext.symbol, decl) != decl:
                 raise S.SuruError(f"外部の関数「{ext.symbol}」が違う型で2回宣言されています", ext.line)
         fname = self.cstr(name)
@@ -654,6 +658,8 @@ class Compiler:
                     continue
                 c = fg.call(FFI_IR[t], f"@rt_ffi_{t}", f"i64 {v}, ptr {fname}, i32 {PART_IDS[p]}, i32 %pos")
                 args.append(f"{FFI_IR[t]} {c}")
+            if ext.cargs:
+                args = [f"i64 {v}" if k == "定数" else args[v] for k, v in ext.cargs]
             fg.call("void", "@rt_ffi_pre", "")
             r = fg.call(ret, fn, ", ".join(args))
             fg.call("void", "@rt_ffi_post", "")
@@ -1064,6 +1070,21 @@ def runtime_object(cc: str) -> str:
     return obj
 
 
+def _standard_lib_dir(d: str) -> bool:
+    """リンカーと dlopen が普通に探すフォルダか(rpath を足さない)"""
+    d = os.path.normpath(d)
+    roots = ("/lib", "/lib64", "/usr/lib", "/usr/lib64")
+    return d in roots or (os.path.dirname(d) in roots and "-linux-" in os.path.basename(d))
+
+
+def _pkgconfig_link_flags(lib: str) -> list[str]:
+    """短い名前のライブラリを、pkg-config のフォルダから探す clang の引数(Go 版の pkgConfigLinkFlags と同じ)"""
+    d = S._pkgconfig_libdir(lib)
+    if not d or _standard_lib_dir(d):
+        return []
+    return [f"-L{d}", f"-Wl,-rpath,{d}"]
+
+
 def link_flags(ll_path: str) -> list[str]:
     """IR の始めの「; suru-link: 」の行から、外部のライブラリをリンクする引数を作る"""
     flags: list[str] = []
@@ -1076,7 +1097,7 @@ def link_flags(ll_path: str) -> list[str]:
                 if os.path.isabs(lib):
                     flags += [lib, f"-Wl,-rpath,{os.path.dirname(lib)}"]
                 elif lib != "c":
-                    flags.append(f"-l{lib}")
+                    flags += _pkgconfig_link_flags(lib) + [f"-l{lib}"]
     return flags
 
 

@@ -1693,6 +1693,18 @@ func parseStatement(node *LNode) Node {
 		}
 		return &Define{name, params, &Extern{Symbol: sym, Line: afterT[1].Line}, isFunction, node.Line.Number}
 	}
+	if len(afterT) >= 5 && afterT[0].Kind == "WORD" && afterT[0].S == KwExtern && !afterT[0].Quoted &&
+		afterT[1].Kind == "STR" && afterT[2].Kind == "LP" && afterT[len(afterT)-1].Kind == "RP" && len(node.Children) == 0 {
+		// 「… とは 外部の「pcre2_match_8」（c と s と n と o と 0 と md と 0）」: C に渡す引数を並べて書く
+		sym := afterT[1].S
+		if !isCSymbol(sym) {
+			raise(afterT[1].Line, "「"+sym+"」は C の関数の名前ではありません")
+		}
+		if strings.HasPrefix(sym, "rt_") || strings.HasPrefix(sym, "suru_") {
+			raise(afterT[1].Line, "「"+sym+"」は「する」の実行時が使う名前なので、外部の関数にできません")
+		}
+		return &Define{name, params, &Extern{Symbol: sym, Line: afterT[1].Line, CArgs: parseExternArgs(afterT[2 : len(afterT)-1])}, isFunction, node.Line.Number}
+	}
 	if len(afterT) == 4 && afterT[0].Kind == "WORD" && afterT[0].S == KwExtern && !afterT[0].Quoted &&
 		afterT[1].Kind == "LP" && afterT[2].Kind == "WORD" && afterT[3].Kind == "RP" && len(node.Children) == 0 {
 		// 「x を f で 呼ぶ とは 外部の（f）」: 引数 f の番地にある C の関数を呼ぶ
@@ -2179,6 +2191,35 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 	return attachProvisos(statements)
 }
 
+// parseExternArgs は「（a と 0 と b）」の中: 引数の名前か整数を「と」でつないだもの
+func parseExternArgs(toks []*Token) []ExternArg {
+	bad := func(t *Token) {
+		raise(t.Line, "外部の関数の引数の並びには、引数の名前か整数を「と」でつないで書きます(「（a と 0 と b）」)")
+	}
+	var out []ExternArg
+	inner := toks[1:]
+	if len(inner) == 0 {
+		bad(toks[0])
+	}
+	for i, t := range inner {
+		if i%2 == 1 {
+			if !isKw(t, KwTo) || i == len(inner)-1 {
+				bad(t)
+			}
+			continue
+		}
+		switch {
+		case t.Kind == "WORD" && !t.Quoted && t.S != KwExtern:
+			out = append(out, ExternArg{Name: t.S, Line: t.Line})
+		case t.Kind == "NUM" && t.N.Kind == NInt && t.N.I.IsInt64():
+			out = append(out, ExternArg{IsConst: true, Const: t.N.I.Int64(), Line: t.Line})
+		default:
+			bad(t)
+		}
+	}
+	return out
+}
+
 // 基本(成否・有無)は、その名前を書いたファイルが自動で「読み込んで 使う」
 const PreludeName = "基本"
 
@@ -2322,6 +2363,30 @@ func attachExterns(statements []Node) {
 		ext.Params = nil
 		for _, p := range d.Params {
 			ext.Params = append(ext.Params, ffiType(types[p.Part], sig, "「"+p.Part+"」"))
+		}
+		if ext.CArgs != nil {
+			used := map[int]bool{}
+			for i, a := range ext.CArgs {
+				if a.IsConst {
+					continue
+				}
+				k := -1
+				for j, p := range d.Params {
+					if p.Name == a.Name {
+						k = j
+					}
+				}
+				if k < 0 {
+					raise(a.Line, "「"+a.Name+"」は「"+d.Name+"」の引数ではありません")
+				}
+				ext.CArgs[i].Param = k
+				used[k] = true
+			}
+			for j, p := range d.Params {
+				if !used[j] {
+					raise(d.Line, "外部の関数「"+d.Name+"」の引数「"+p.Name+"」を C に渡していません(「（…）」の中に書きます)")
+				}
+			}
 		}
 		result := sig.Result
 		if tn, ok := result.(*TypeName); ok && tn.Name == "動作" {

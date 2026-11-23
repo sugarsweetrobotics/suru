@@ -152,7 +152,11 @@ func (k *kumu) run(args []string) int {
 	if err != nil {
 		return k.fail(err)
 	}
-	if _, err := Resolve(p, k.stderr); err != nil {
+	deps, err := Resolve(p, k.stderr)
+	if err != nil {
+		return k.fail(err)
+	}
+	if err := CheckSysDeps(p, deps, k.stderr); err != nil {
 		return k.fail(err)
 	}
 	if cmd == "試験" {
@@ -226,7 +230,7 @@ func compileTo(source, path, exe, opt string, check bool) (built bool, err error
 		return false, err
 	}
 	h := sha256.New()
-	for _, part := range []string{version, opt, ir, string(suru.Runtime)} {
+	for _, part := range []string{version, opt, ir, string(suru.Runtime), strings.Join(compiler.LinkFlags(ir), " ")} {
 		fmt.Fprintf(h, "%d:%s", len(part), part)
 	}
 	digest := hex.EncodeToString(h.Sum(nil))

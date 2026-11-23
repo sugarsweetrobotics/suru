@@ -21,12 +21,27 @@ const OutDir = "出力"
 
 // Project は 組.suru に書いたプロジェクトの設定
 type Project struct {
-	Root    string // 組.suru のあるフォルダ(絶対パス)
-	Name    string // 名前(作るバイナリの名前にもなる)
-	Version string // 版
-	Entry   string // 入口のファイルの名前(.suru なし)
-	Deps    []Dep  // 依存(書いた順)
-	depLine int    // 「依存 とは …」の行(なければ 0)
+	Root    string   // 組.suru のあるフォルダ(絶対パス)
+	Name    string   // 名前(作るバイナリの名前にもなる)
+	Version string   // 版
+	Entry   string   // 入口のファイルの名前(.suru なし)
+	Deps    []Dep    // 依存(書いた順)
+	depLine int      // 「依存 とは …」の行(なければ 0)
+	SysDeps []SysDep // 外部依存: システムの C のライブラリ(pkg-config の名前)
+	Guide   []string // 導入案内: 外部依存が無いときに見せる入れ方
+}
+
+// SysDep は 組.suru の外部依存の1つ。「libpcre2-8」か、最低の版を付けた「libpcre2-8@10.30」
+type SysDep struct {
+	Module     string // pkg-config の名前
+	MinVersion string // 最低の版(なければ空)
+}
+
+func (d SysDep) String() string {
+	if d.MinVersion == "" {
+		return d.Module
+	}
+	return d.Module + "@" + d.MinVersion
 }
 
 // EntryPath は入口のファイルのパス
@@ -35,7 +50,7 @@ func (p *Project) EntryPath() string {
 }
 
 // configKeys は 組.suru に書ける項目(書く順)
-var configKeys = []string{"名前", "版", "入口", "依存"}
+var configKeys = []string{"名前", "版", "入口", "依存", "外部依存", "導入案内"}
 
 // ParseConfig は 組.suru の中身を読む。する の定義「名前 とは 「…」」だけを書ける
 func ParseConfig(source, root string) (*Project, error) {
@@ -65,6 +80,24 @@ func ParseConfig(source, root string) (*Project, error) {
 				return nil, configError(&compiler.SuruError{Message: err.Error(), Line: pos}, source)
 			}
 			p.Deps, p.depLine = deps, pos.Line
+			continue
+		}
+		if d.Name == "外部依存" || d.Name == "導入案内" {
+			items, err := stringList(d)
+			if err != nil {
+				return nil, configError(&compiler.SuruError{Message: err.Error(), Line: pos}, source)
+			}
+			if d.Name == "導入案内" {
+				p.Guide = items
+				continue
+			}
+			for _, it := range items {
+				sd, err := ParseSysDep(it)
+				if err != nil {
+					return nil, configError(&compiler.SuruError{Message: err.Error(), Line: pos}, source)
+				}
+				p.SysDeps = append(p.SysDeps, sd)
+			}
 			continue
 		}
 		s, ok := d.Body.(*compiler.Str)
@@ -216,6 +249,45 @@ func ParseDep(spec string) (Dep, error) {
 		return Dep{}, fmt.Errorf("依存「%s」の場所に空白は使えません", spec)
 	}
 	return Dep{Source: strings.TrimSuffix(src, "/"), Version: ver}, nil
+}
+
+// stringList は「…」か、それを と でつないだものを読む(外部依存・導入案内)
+func stringList(d *compiler.Define) ([]string, error) {
+	bad := fmt.Errorf("「%s」には 「…」 の文字列か、それを と でつないだものを書きます", d.Name)
+	var items []compiler.Node
+	switch b := d.Body.(type) {
+	case *compiler.Str:
+		items = []compiler.Node{b}
+	case *compiler.ListLit:
+		items = b.Items
+	default:
+		return nil, bad
+	}
+	if len(d.Params) > 0 || d.IsFunction {
+		return nil, bad
+	}
+	var out []string
+	for _, it := range items {
+		s, ok := it.(*compiler.Str)
+		if !ok {
+			return nil, bad
+		}
+		out = append(out, s.Value)
+	}
+	return out, nil
+}
+
+// ParseSysDep は外部依存の「名前」か「名前@最低の版」を読む
+func ParseSysDep(spec string) (SysDep, error) {
+	spec = strings.TrimSpace(spec)
+	module, ver, _ := strings.Cut(spec, "@")
+	if module == "" || strings.ContainsAny(module, " \t/") {
+		return SysDep{}, fmt.Errorf("外部依存「%s」は pkg-config の名前で書きます(「libpcre2-8」、版を決めるなら「libpcre2-8@10.30」)", spec)
+	}
+	if strings.Contains(spec, "@") && !isVersion(strings.TrimPrefix(ver, "v")) {
+		return SysDep{}, fmt.Errorf("外部依存「%s」の版は数と点で書きます(「%s@10.30」)", spec, module)
+	}
+	return SysDep{Module: module, MinVersion: strings.TrimPrefix(ver, "v")}, nil
 }
 
 func parseDeps(d *compiler.Define) ([]Dep, error) {

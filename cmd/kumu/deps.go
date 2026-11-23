@@ -30,6 +30,7 @@ import (
 // Resolved は使うことに決めた依存の1つ
 type Resolved struct {
 	Name, Source, Version, Commit, Hash, Dir string
+	Config                                   *Project // 依存の 組.suru
 }
 
 type resolver struct {
@@ -63,7 +64,7 @@ func Resolve(p *Project, stderr io.Writer) ([]Resolved, error) {
 		if _, err := os.Stat(filepath.Join(dir, cfg.Name+compiler.SourceSuffix)); err != nil {
 			return fmt.Errorf("依存「%s」に「%s%s」がありません(ライブラリは、名前と同じファイルを読み込まれるファイルにします)", src, cfg.Name, compiler.SourceSuffix)
 		}
-		res := Resolved{Name: cfg.Name, Source: src, Version: ver, Dir: dir}
+		res := Resolved{Name: cfg.Name, Source: src, Version: ver, Dir: dir, Config: cfg}
 		if ver != "" {
 			res.Version = ver
 			if b, err := os.ReadFile(dir + ".commit"); err == nil {
@@ -464,8 +465,13 @@ func (k *kumu) deps(cmd string, args []string) int {
 			return k.fail(err)
 		}
 	}
-	if _, err := Resolve(p, k.stderr); err != nil {
+	resolved, err := Resolve(p, k.stderr)
+	if err != nil {
 		os.WriteFile(cfgPath, before, 0o644) // 集められなければ 組.suru を元に戻す
+		return k.fail(err)
+	}
+	// 外部依存が足りなくても、追加した依存はそのまま(入れてから作り直せばよい)
+	if err := CheckSysDeps(p, resolved, k.stderr); err != nil {
 		return k.fail(err)
 	}
 	return 0

@@ -903,9 +903,19 @@ func (c *Compiler) externBody(name string, params []Param, ext *Extern) genBody 
 		}
 	}
 	ret := ffiIR[ext.Result]
-	ps := make([]string, len(ext.Params))
-	for i, t := range ext.Params {
-		ps[i] = ffiIR[t]
+	var ps []string
+	if ext.CArgs == nil {
+		for _, t := range ext.Params {
+			ps = append(ps, ffiIR[t])
+		}
+	} else {
+		for _, a := range ext.CArgs {
+			if a.IsConst {
+				ps = append(ps, "i64")
+			} else {
+				ps = append(ps, ffiIR[ext.Params[a.Param]])
+			}
+		}
 	}
 	if ext.Pointer == "" {
 		decl := "declare " + ret + " @" + ext.Symbol + "(" + strings.Join(ps, ", ") + ")"
@@ -927,6 +937,17 @@ func (c *Compiler) externBody(name string, params []Param, ext *Extern) genBody 
 			}
 			cv := fg.call(ffiIR[t], "@rt_ffi_"+t, fmt.Sprintf("i64 %s, ptr %s, i32 %d, i32 %%pos", v, fname, partIDs[p.Part]))
 			args = append(args, ffiIR[t]+" "+cv)
+		}
+		if ext.CArgs != nil {
+			byParam := args
+			args = nil
+			for _, a := range ext.CArgs {
+				if a.IsConst {
+					args = append(args, fmt.Sprintf("i64 %d", a.Const))
+				} else {
+					args = append(args, byParam[a.Param])
+				}
+			}
 		}
 		fg.call("void", "@rt_ffi_pre", "")
 		r := fg.call(ret, fn, strings.Join(args, ", "))

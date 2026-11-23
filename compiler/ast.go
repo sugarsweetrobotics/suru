@@ -276,13 +276,24 @@ type ExternLib struct {
 
 // Extern は「x を 余弦にする とは 外部の「cos」」の本体
 type Extern struct {
-	Symbol string
-	Line   Pos
-	Libs   []string
-	Params []string // 定義の引数の順に C の型(i64 f64 i32 bool str ptr)
-	Result string
-	Action bool
+	Symbol  string
+	Line    Pos
+	Libs    []string
+	Params  []string // 定義の引数の順に C の型(i64 f64 i32 bool str ptr)
+	Result  string
+	Action  bool
 	Pointer string // 「外部の（f）」なら、関数の番地を持つ引数の名前(C には渡さない)
+	// 「外部の「f」（a と 0 と b）」なら、C に渡す引数の並び(なければ定義の引数の順)
+	CArgs []ExternArg
+}
+
+// ExternArg は C に渡す引数の1つ: 定義の引数(Name、attachExterns が Param に番号を入れる)か、整数の定数(int64_t)
+type ExternArg struct {
+	Name    string
+	Param   int
+	IsConst bool
+	Const   int64
+	Line    Pos
 }
 
 func nn(xs ...Node) []Node {
