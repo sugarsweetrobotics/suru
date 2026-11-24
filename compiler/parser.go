@@ -113,15 +113,18 @@ func (t *TypeMap) Update(o *TypeMap) {
 
 // 小数・整数は数の別名(外部の関数の宣言で C の double・int を表す)。番地は C のポインタ
 // 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
-var builtinTypes = []string{"数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作"}
+var builtinTypes = []string{"数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作", "単精度"}
 
 // KwExtern は外部の関数・ライブラリの印
 const KwExtern = "外部の"
 
+// KwMainThread は「外部の「SDL3」 を 主スレッドで 読み込む」
+const KwMainThread = "主スレッドで"
+
 // ffiTypeNames は外部の関数に渡せる型(書く順)と C の型
-var ffiTypeNames = []string{"数", "小数", "整数", "真偽", "文字列", "番地", "バイト列", "無"}
+var ffiTypeNames = []string{"数", "小数", "整数", "真偽", "文字列", "番地", "バイト列", "無", "単精度"}
 var ffiTypes = map[string]string{"数": "i64", "小数": "f64", "整数": "i32", "真偽": "bool", "文字列": "str", "番地": "ptr",
-	"バイト列": "bytes", "無": "void"}
+	"バイト列": "bytes", "無": "void", "単精度": "f32"}
 var builtinTypeSet = setOf(builtinTypes...)
 
 const typeVarNames = "甲乙丙丁戊己庚辛壬癸"
@@ -1893,7 +1896,7 @@ func typeWord(t *Token, args []Node) Node {
 		}
 		return &TypeVarName{name}
 	}
-	if (name == "数" || name == "文字列" || name == "真偽" || name == "小数" || name == "整数" || name == "番地" || name == "バイト列" || name == "無") && len(args) > 0 {
+	if (name == "数" || name == "文字列" || name == "真偽" || name == "小数" || name == "整数" || name == "番地" || name == "バイト列" || name == "無" || name == "単精度") && len(args) > 0 {
 		raise(t.Line, "「"+name+"」は型の引数をとりません")
 	}
 	if (name == "リスト" || name == "動作") && len(args) != 1 {
@@ -2643,9 +2646,14 @@ func externLibTarget(node *LNode, ctx *ParseContext) *ExternLib {
 	if len(tokens) == 0 || !(tokens[0].Kind == "WORD" && tokens[0].S == KwExtern && !tokens[0].Quoted) {
 		return nil
 	}
+	mainThread := len(tokens) == 5 && tokens[3].Kind == "WORD" && tokens[3].S == KwMainThread && !tokens[3].Quoted
+	if mainThread {
+		tokens = append(append([]*Token{}, tokens[:3]...), tokens[4:]...)
+	}
 	if len(tokens) != 4 || tokens[1].Kind != "STR" || !(tokens[2].Kind == "PART" && tokens[2].S == WO) ||
 		!(isKw(tokens[3], KwImport) || isKw(tokens[3], KwImportPolit)) || node.Line.Indent != 0 {
-		raise(tokens[0].Line, "外部のライブラリは一番外に「"+KwExtern+"「m」 を "+KwImport+"」のように書いて読み込みます")
+		raise(tokens[0].Line, "外部のライブラリは一番外に「"+KwExtern+"「m」 を "+KwImport+"」"+
+			"(主スレッドで呼ぶなら「"+KwExtern+"「m」 を "+KwMainThread+" "+KwImport+"」)のように書いて読み込みます")
 	}
 	name := tokens[1].S
 	if name == "" {
@@ -2655,7 +2663,7 @@ func externLibTarget(node *LNode, ctx *ParseContext) *ExternLib {
 	if strings.Contains(name, "/") || strings.HasSuffix(name, ".so") || strings.HasSuffix(name, ".dylib") {
 		path = absPath(filepath.Join(ctx.BaseDir, name))
 	}
-	return &ExternLib{name, path, tokens[0].Line}
+	return &ExternLib{name, path, tokens[0].Line, mainThread}
 }
 
 func ffiType(te Node, sig *TypeSig, what string) string {
@@ -2681,11 +2689,13 @@ func ffiType(te Node, sig *TypeSig, what string) string {
 // attachExterns は外部の関数の定義に、同じファイルのライブラリと型の宣言(C の型)を付ける
 func attachExterns(statements []Node) {
 	var libs []string
+	mainThread := false
 	sigs := map[string]*TypeSig{}
 	for _, s := range statements {
 		switch x := s.(type) {
 		case *ExternLib:
 			libs = append(libs, x.Path)
+			mainThread = mainThread || x.MainThread
 		case *TypeSig:
 			sigs[x.Name] = x
 		}
@@ -2758,6 +2768,7 @@ func attachExterns(statements []Node) {
 		}
 		ext.Result = ffiType(result, sig, "値")
 		ext.Libs = libs
+		ext.MainThread = mainThread
 		if ext.Pointer != "" {
 			k := -1
 			for i, p := range d.Params {

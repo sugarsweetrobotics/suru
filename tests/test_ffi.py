@@ -366,3 +366,104 @@ def test_C_に渡す引数の並びのまちがい():
     assert "引数の名前か整数を「と」でつないで" in err(head + "a を b で 引算する とは 外部の「sub3」（a と 「x」 と b）\n")
     assert "引数の名前か整数を「と」でつないで" in err(head + "a を b で 引算する とは 外部の「sub3」（a と 1.5 と b）\n")
     assert "引数の名前か整数を「と」でつないで" in err(head + "a を b で 引算する とは 外部の「sub3」（a b）\n")
+
+
+MT_C_SOURCE = r"""
+#define _GNU_SOURCE
+#include <errno.h>
+#include <unistd.h>
+#include <sys/syscall.h>
+float addf(float a, float b) { return a + b; }
+float thirdf(void) { return 1.0f / 3.0f; }
+int on_main(void) { return syscall(SYS_gettid) == getpid(); }
+static int count;
+void tick(void) { count++; }
+int ticks(void) { return count; }
+int set_errno(int e) { errno = e; return -1; }
+int sum8(int a, int b, int c, int d, int e, int f, int g, int h) { return a + b + c + d + e + f + g + h; }
+"""
+
+MT_DECLS = """「標準」 を 読み込む
+外部の「./libmt.so」 を 主スレッドで 読み込む
+単精度 を 単精度 に 浮動加算する は 単精度
+a を b に 浮動加算する とは 外部の「addf」
+三分の一取得する は 単精度
+三分の一取得する とは 外部の「thirdf」
+主確認する は 整数
+主確認する とは 外部の「on_main」
+刻印する は 無 の 動作
+刻印する とは 外部の「tick」
+刻み数取得する は 整数 の 動作
+刻み数取得する とは 外部の「ticks」
+整数 を エラー設定する は 整数 の 動作
+e を エラー設定する とは 外部の「set_errno」
+"""
+
+MT_PROGRAM = MT_DECLS + """
+1.5 を 2.25 に 浮動加算する
+（三分の一取得する） > 0.333333
+（三分の一取得する） < 0.333334
+主確認する
+試す とは 手順
+  刻印する
+  刻印する
+  n とは 刻み数取得した 結果
+  n を 表示する
+  r とは 2 を エラー設定した 結果
+  e とは 標準内のエラー番号取得した 結果
+  e を 表示する
+試す
+"""
+
+MT_EXPECTED = "3.75\n真\n真\n1\n2\n2\n"
+
+
+@pytest.fixture
+def mtdir(tmp_path):
+    cc = shutil.which("cc") or shutil.which("clang")
+    (tmp_path / "mt.c").write_text(MT_C_SOURCE, encoding="utf-8")
+    subprocess.run([cc, "-shared", "-fPIC", "-o", str(tmp_path / "libmt.so"), str(tmp_path / "mt.c")], check=True)
+    return tmp_path
+
+
+linux_only = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="スレッドの番号の調べ方が Linux 向け")
+
+
+@needs_cc
+@linux_only
+def test_主スレッドで呼ぶ_インタプリタ(mtdir):
+    suru._FFI_LIBS.clear()
+    assert interpreted(MT_PROGRAM, str(mtdir)) == MT_EXPECTED
+
+
+@needs_cc
+@linux_only
+@pytest.mark.skipif(suru_compile.find_cc() is None, reason="clang がありません")
+def test_主スレッドで呼ぶ_バイナリ(mtdir):
+    r = compiled(MT_PROGRAM, str(mtdir))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == MT_EXPECTED
+
+
+@needs_cc
+@linux_only
+@pytest.mark.skipif(suru_compile.find_cc() is None, reason="clang がありません")
+def test_主スレッドで呼ぶ_並行の処理から(mtdir):
+    # コンパイルしたものは、並行して動かしている処理から呼んでも最初のスレッドで呼ぶ
+    src = "「スレッド」 を 読み込む\n" + MT_DECLS + """
+仕事する とは 手順
+  刻印する
+  （主確認する） を 表示する
+試す とは 手順
+  t とは （仕事する） を スレッド内の並行開始した 結果
+  r とは t を スレッド内の合流した 結果
+  刻み数取得してから 表示する
+試す
+"""
+    r = compiled(src, str(mtdir))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "1\n1\n"
+
+
+def test_主スレッドの書き方のまちがい():
+    assert "主スレッドで" in err("外部の「m」 を 主スレッドに 読み込む\n")

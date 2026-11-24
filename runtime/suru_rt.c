@@ -238,7 +238,9 @@ static void world_atfork_parent(void) {
     pthread_mutex_unlock(&alloc_mu);
     pthread_mutex_unlock(&world_mu);
 }
+static int mt_loop;
 static void world_atfork_child(void) {
+    mt_loop = 0; /* 子には main のスレッドがないので、主スレッドで呼ぶ関数もその場で呼ぶ */
     if (!world_multi) return;
     pthread_mutex_init(&world_mu, NULL);
     pthread_mutex_init(&alloc_mu, NULL);
@@ -3789,6 +3791,74 @@ void rt_ffi_post(void) {
     world_acquire();
 }
 
+float rt_ffi_f32(V v, const char *fname, int32_t part, int32_t pos) {
+    if (!is_num(v)) ffi_bad(v, fname, part, "数", pos);
+    return (float)num_d(v);
+}
+
+/* 「外部の「m」 を 主スレッドで 読み込む」のライブラリの関数は、プロセスの最初のスレッド(main)で呼ぶ。
+   macOS の窓(SDL など)は最初のスレッドでしか操作できないが、プログラムは大きなスタックの別スレッドで動くため。
+   IR は引数を rt_ffi_mt_buf() に置き、それを読んで呼ぶ小さな関数 fn を作って rt_ffi_main に渡す */
+static pthread_t mt_tid;
+static int mt_loop;                 /* main が仕事を待っている(world_atfork_child の上でも宣言) */
+static int mt_exit;                 /* プログラムが終わった */
+static void (*mt_fn)(void *);
+static void *mt_ctx;
+static int mt_err, mt_finished;
+static pthread_mutex_t mt_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t mt_callers = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t mt_cv = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t mt_done_cv = PTHREAD_COND_INITIALIZER;
+static __thread uint64_t mt_buf[40];
+
+void *rt_ffi_mt_buf(void) { return mt_buf; }
+
+void rt_ffi_main(void (*fn)(void *), void *ctx) {
+    if (!__atomic_load_n(&mt_loop, __ATOMIC_ACQUIRE) || pthread_equal(pthread_self(), mt_tid)) {
+        fn(ctx);
+        return;
+    }
+    pthread_mutex_lock(&mt_callers);
+    pthread_mutex_lock(&mt_mu);
+    mt_fn = fn;
+    mt_ctx = ctx;
+    mt_finished = 0;
+    pthread_cond_signal(&mt_cv);
+    while (!mt_finished) pthread_cond_wait(&mt_done_cv, &mt_mu);
+    int e = mt_err;
+    pthread_mutex_unlock(&mt_mu);
+    pthread_mutex_unlock(&mt_callers);
+    errno = e;
+}
+
+/* main のスレッド: プログラムが終わるまで、主スレッドで呼ぶ仕事を待って行う */
+static void mt_serve(void) {
+    pthread_mutex_lock(&mt_mu);
+    for (;;) {
+        while (!mt_fn && !mt_exit) pthread_cond_wait(&mt_cv, &mt_mu);
+        if (!mt_fn) break;
+        void (*fn)(void *) = mt_fn;
+        void *ctx = mt_ctx;
+        pthread_mutex_unlock(&mt_mu);
+        errno = 0;
+        fn(ctx);
+        int e = errno;
+        pthread_mutex_lock(&mt_mu);
+        mt_err = e;
+        mt_fn = NULL;
+        mt_finished = 1;
+        pthread_cond_broadcast(&mt_done_cv);
+    }
+    pthread_mutex_unlock(&mt_mu);
+}
+
+static void mt_stop(void) {
+    pthread_mutex_lock(&mt_mu);
+    mt_exit = 1;
+    pthread_cond_signal(&mt_cv);
+    pthread_mutex_unlock(&mt_mu);
+}
+
 void *rt_ffi_ptr(V v, const char *fname, int32_t part, int32_t pos) {
     if (TAG(v) != T_ADDR) ffi_bad(v, fname, part, "番地", pos);
     return AS(Addr, v)->p;
@@ -3902,6 +3972,7 @@ static void *run_main(void *arg) {
     gc_log = getenv("SURU_GC_LOG") != NULL;
     suru_main();
     fflush(stdout);
+    mt_stop();
     return NULL;
 }
 
@@ -3918,13 +3989,18 @@ int main(int argc, char **argv) {
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, (size_t)1 << 30);
     pthread_t th;
-    if (pthread_create(&th, &attr, run_main, NULL) != 0) run_main(NULL);
-    else {
+    mt_tid = pthread_self();
+    __atomic_store_n(&mt_loop, 1, __ATOMIC_RELEASE);
+    if (pthread_create(&th, &attr, run_main, NULL) != 0) {
+        mt_loop = 0;
+        run_main(NULL);
+    } else {
         /* 待っているだけのこのスレッドではシグナルを受けない。プロセスに送られたシグナルは
            プログラムを動かすスレッドに届くので、そこでの受付(sigprocmask)がそのまま効く */
         sigset_t all;
         sigfillset(&all);
         pthread_sigmask(SIG_BLOCK, &all, NULL);
+        mt_serve();
         pthread_join(th, NULL);
     }
     return 0;
