@@ -1258,9 +1258,11 @@ func (p *ExprParser) atom() Node {
 		if p.pos < len(p.tokens) {
 			nxt = p.tokens[p.pos]
 		}
-		if t.S == Tejun && !t.Quoted && nxt != nil && nxt.Kind == "LP" {
+		if (t.S == Tejun || t.S == TejunIO) && !t.Quoted && nxt != nil && nxt.Kind == "LP" {
 			p.next()
-			return p.parenDo(nxt)
+			d := p.parenDo(nxt)
+			d.(*Do).IO = t.S == TejunIO
+			return d
 		}
 		return &Var{t.S, t.Line, t.Quoted}
 	case "LP":
@@ -1682,8 +1684,11 @@ func parseStatement(node *LNode) Node {
 		raise(head[0].Line, "「"+name+"」: 読み込んだファイルの中の名前は定義できません")
 	}
 	afterT := nosep(after)
-	if len(afterT) == 1 && afterT[0].Kind == "WORD" && afterT[0].S == Tejun && !afterT[0].Quoted && len(node.Children) > 0 {
-		return &Define{name, params, parseDo(node.Children, node.Line.Number), isFunction, node.Line.Number}
+	if len(afterT) == 1 && afterT[0].Kind == "WORD" && (afterT[0].S == Tejun || afterT[0].S == TejunIO) && !afterT[0].Quoted && len(node.Children) > 0 {
+		// 「挨拶する とは 手順」+ 深い行(「入出力手順」なら動作だけ)
+		d := parseDo(node.Children, node.Line.Number)
+		d.(*Do).IO = afterT[0].S == TejunIO
+		return &Define{name, params, d, isFunction, node.Line.Number}
 	}
 	if len(afterT) == 2 && afterT[0].Kind == "WORD" && afterT[0].S == KwExtern && !afterT[0].Quoted &&
 		afterT[1].Kind == "STR" && len(node.Children) == 0 {
@@ -2217,7 +2222,7 @@ func thenDo(first Node, expr Node) Node {
 		d.Statements = append(d.Statements, expr)
 		return d
 	}
-	return &Do{[]Node{first, expr}, lineOf(first), true}
+	return &Do{[]Node{first, expr}, lineOf(first), true, false}
 }
 
 func attachProvisos(statements []Node) []Node {
@@ -2332,7 +2337,7 @@ func parseDo(nodes []*LNode, line Pos) Node {
 	if d, ok := statements[len(statements)-1].(*Define); ok {
 		raise(d.Line, "手順の最後は定義ではなく、行うこと(式)でなければなりません")
 	}
-	return &Do{statements, line, false}
+	return &Do{statements, line, false, false}
 }
 
 // --- プログラムとファイルの読み込み ---

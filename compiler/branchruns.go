@@ -184,7 +184,7 @@ func splitBranchRuns(node Node) {
 			}
 			branch := func(e Node) Node {
 				stmts := append([]Node{replaceNode(s, t, e)}, rest...)
-				return &Do{Statements: stmts, Line: line}
+				return &Do{Statements: stmts, Line: line, IO: d.IO}
 			}
 			var split Node
 			switch m := t.(type) {

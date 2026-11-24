@@ -130,7 +130,7 @@ def build() -> dict:
         },
         "kanji-keyword": {
             "patterns": [
-                {"name": "keyword.control.suru", "match": word([suru.TEJUN])},
+                {"name": "keyword.control.suru", "match": word([suru.TEJUN, suru.TEJUN_IO])},
                 {"name": "storage.type.suru", "match": word(suru.KANJI_KEYWORDS)},
                 {"name": "constant.language.suru", "match": word(["真", "偽", suru.KW_EMPTY])},
                 {"name": "variable.language.suru", "match": word(kanji_props + [suru.RESULT])},

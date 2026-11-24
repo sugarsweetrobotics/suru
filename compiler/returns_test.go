@@ -59,3 +59,24 @@ func TestTypeSigReturnsAction(t *testing.T) {
 		}
 	}
 }
+
+// 「入出力手順」は動作だけの手順。値が動作でなければ型の検査でエラー
+func TestIOTejun(t *testing.T) {
+	ok := "挨拶する とは 入出力手順\n  「a」 を 表示する\n  3 を 結果にする\n挨拶する\n"
+	prog, err := ParseSource(ok, ".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, isDo := prog[0].(*Define).Body.(*Do)
+	if !isDo || !d.IO {
+		t.Fatalf("入出力手順の印がありません: %#v", prog[0])
+	}
+	div := "a と b を 安全除算する とは\n  もし b が 0 ならば 「0 では割れません」 の 失敗\n  そうでなければ （a / b） の 成功\n"
+	if _, err := CompileSource(div+"入出力手順（xとは、10と2を安全除算した結果。x+1を結果にする）。\n", ".", "x.suru", true); err == nil ||
+		!strings.Contains(err.Error(), "「入出力手順」の値は動作でなければなりません") {
+		t.Errorf("成否の入出力手順がエラーになりません: %v", err)
+	}
+	if _, err := CompileSource(div+"手順（xとは、10と2を安全除算した結果。x+1を結果にする）。\n", ".", "x.suru", true); err != nil {
+		t.Errorf("成否の手順がエラーになりました: %v", err)
+	}
+}
