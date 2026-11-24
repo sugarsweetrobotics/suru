@@ -4142,14 +4142,31 @@ def _net_action(name: str, run: Any) -> Any:
     return fn
 
 
-def _listen(net: _Net, a: dict, line: int) -> int:
+def _bind_addr(name: str, a: dict, line: int) -> tuple:
+    """「ポート を アドレス に 待受開始する」の、待ち受けるアドレスとポート(「に」がなければ 0.0.0.0)"""
     import socket
     port = _num(a[WO], line)
     if not isinstance(port, int) or not 0 <= port <= 65535:
         raise SuruError(f"「{format_value(a[WO])}」はポートの番号ではありません", line)
+    if "に" not in a:
+        return ("0.0.0.0", port)
+    host = _str(a["に"], f"「{name}」の「に」", line)
+    try:
+        return socket.getaddrinfo(host, port, socket.AF_INET, 0, 0, socket.AI_PASSIVE)[0][4]
+    except socket.gaierror as e:
+        raise SuruError(f"「{name}」で通信に失敗しました({e.strerror or e})", line) from None
+
+
+def _listen(net: _Net, a: dict, line: int) -> int:
+    import socket
+    addr = _bind_addr("待受開始する", a, line)
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("0.0.0.0", port))
+    try:
+        sock.bind(addr)
+    except OSError:
+        sock.close()
+        raise
     sock.listen(16)
     return net.add(sock)
 
@@ -4227,15 +4244,13 @@ def _close(net: _Net, a: dict, line: int) -> int:
 
 
 def _udp_open(net: _Net, a: dict, line: int) -> int:
-    """「ポート を UDP開始する」: 0.0.0.0 のそのポートで受け取る UDP の口(0 なら OS が選ぶ)"""
+    """「ポート を UDP開始する」: 0.0.0.0(「に」があればそのアドレス)のそのポートで受け取る UDP の口(0 なら OS が選ぶ)"""
     import socket
-    port = _num(a[WO], line)
-    if not isinstance(port, int) or not 0 <= port <= 65535:
-        raise SuruError(f"「{format_value(a[WO])}」はポートの番号ではありません", line)
+    addr = _bind_addr("UDP開始する", a, line)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        sock.bind(("0.0.0.0", port))
+        sock.bind(addr)
     except OSError:
         sock.close()
         raise
@@ -4264,8 +4279,23 @@ def _udp_recv(net: _Net, a: dict, line: int) -> Record:
     return Record("UDP便", "UDP便", ("中身", "送り主", "ポート"), (data, addr[0], addr[1]))
 
 
+def _local_port(net: _Net, a: dict, line: int) -> int:
+    """「口 を ポート取得する」: 待受口・接続・UDP の口の、こちらのポート(0 で開いたときに OS が選んだもの)"""
+    return net.get(a[WO], "待受口か接続かUDPの口", line).getsockname()[1]
+
+
+def _peer_addr(net: _Net, a: dict, line: int) -> str:
+    """「接続 を 相手アドレス取得する」: つながっている相手の IP アドレス"""
+    return net.get(a[WO], "接続", line).getpeername()[0]
+
+
+def _peer_port(net: _Net, a: dict, line: int) -> int:
+    """「接続 を 相手ポート取得する」: つながっている相手のポート"""
+    return net.get(a[WO], "接続", line).getpeername()[1]
+
+
 NET_PRIMITIVES = [
-    Builtin("待受開始する", [(WO, True)], _net_action("待受開始する", _listen)),
+    Builtin("待受開始する", [(WO, True), ("に", False)], _net_action("待受開始する", _listen)),
     Builtin("接続受付する", [("から", True)], _net_action("接続受付する", _accept)),
     Builtin("接続する", [("に", True), ("で", True)], _net_action("接続する", _connect)),
     Builtin("行受信する", [("から", True)], _net_action("行受信する", _recv_line)),
@@ -4275,9 +4305,12 @@ NET_PRIMITIVES = [
     Builtin("バイト列送信する", [(WO, True), ("へ", True)], _net_action("バイト列送信する", _send_bytes)),
     Builtin("切断する", [(WO, True)], _net_action("切断する", _close)),
     Builtin("待機時間設定する", [(WO, True), ("で", True)], _net_action("待機時間設定する", _set_timeout)),
-    Builtin("UDP開始する", [(WO, True)], _net_action("UDP開始する", _udp_open)),
+    Builtin("UDP開始する", [(WO, True), ("に", False)], _net_action("UDP開始する", _udp_open)),
     Builtin("UDPバイト列送信する", [(WO, True), ("から", True), ("に", True), ("で", True)], _net_action("UDPバイト列送信する", _udp_send)),
     Builtin("UDPバイト列受信する", [("から", True)], _net_action("UDPバイト列受信する", _udp_recv)),
+    Builtin("ポート取得する", [(WO, True)], _net_action("ポート取得する", _local_port)),
+    Builtin("相手アドレス取得する", [(WO, True)], _net_action("相手アドレス取得する", _peer_addr)),
+    Builtin("相手ポート取得する", [(WO, True)], _net_action("相手ポート取得する", _peer_port)),
 ]
 
 
