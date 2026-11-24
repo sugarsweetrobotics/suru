@@ -614,7 +614,9 @@ def test_表示可能():
 
 def test_データの例が動く():
     src = (ROOT / "examples" / "data.suru").read_text(encoding="utf-8")
-    assert _text(src)[-3:] == ["（横 は 3 で 縦 は 0 の 点）", "9", "2×3"]
+    out = _text(src)
+    assert out[4] == "78.5"  # 半径 5 の円の面積(円周率 3.14)
+    assert out[-3:] == ["（横 は 3 で 縦 は 0 の 点）", "9", "2×3"]
 
 
 # --- 動作(副作用)・連鎖可能・手順 ---------------------------------------------
