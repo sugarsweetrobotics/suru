@@ -1131,7 +1131,7 @@ TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import, ExternLib, Vis
 TYPE_VAR_NAMES = "甲乙丙丁戊己庚辛壬癸"
 # 小数・整数は数の別名(外部の関数の宣言で C の double・int を表す)。番地は C のポインタ
 # 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
-BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無")
+BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作")
 # 外部の関数に渡せる型 → C の型の名前(バイト列は引数だけ、無は値だけ)
 FFI_TYPES = {"数": "i64", "小数": "f64", "整数": "i32", "真偽": "bool", "文字列": "str", "番地": "ptr",
              "バイト列": "bytes", "無": "void"}
@@ -2269,13 +2269,14 @@ def drop_returns(right: list[Token]) -> tuple[list[Token], bool]:
 
 
 def action_returning(tokens: list[Token]) -> list[Token]:
-    """型の宣言の中の「数 を 返す 動作」を「数 の 動作」にする"""
+    """型の宣言の中の「数 を 返す 動作」を「数 の 動作」にする(「入出力動作」も)"""
     out: list[Token] = []
     i = 0
     while i < len(tokens):
         t = tokens[i]
         if (t.kind == "PART" and t.value == WO and i + 2 < len(tokens) and is_kw(tokens[i + 1], KW_HENSU)
-                and tokens[i + 2].kind == "WORD" and tokens[i + 2].value == ACTION_TYPE and not tokens[i + 2].quoted):
+                and tokens[i + 2].kind == "WORD" and tokens[i + 2].value in (ACTION_TYPE, ACTION_ALIAS)
+                and not tokens[i + 2].quoted):
             out.append(Token("KW", KW_NO, t.line))
             out.append(tokens[i + 2])
             i += 3
@@ -2286,6 +2287,7 @@ def action_returning(tokens: list[Token]) -> list[Token]:
 
 
 ACTION_TYPE = "動作"
+ACTION_ALIAS = "入出力動作"
 
 
 def try_parse_type_sig(tokens: list[Token]) -> TypeSig | None:
@@ -2376,6 +2378,8 @@ def parse_type(tokens: list[Token], i: int) -> tuple[Any, int]:
 
 def _type_word(tok: Token, args: list) -> Any:
     name = tok.value
+    if name == ACTION_ALIAS:
+        name = ACTION_TYPE  # 「入出力動作」は「動作」の別名
     if len(name) == 1 and name in TYPE_VAR_NAMES and not tok.quoted:
         if args:
             raise SuruError(f"「{name}」は型の引数をとりません", tok.line)

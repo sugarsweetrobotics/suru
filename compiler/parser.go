@@ -113,7 +113,7 @@ func (t *TypeMap) Update(o *TypeMap) {
 
 // 小数・整数は数の別名(外部の関数の宣言で C の double・int を表す)。番地は C のポインタ
 // 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
-var builtinTypes = []string{"数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無"}
+var builtinTypes = []string{"数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作"}
 
 // KwExtern は外部の関数・ライブラリの印
 const KwExtern = "外部の"
@@ -1745,13 +1745,13 @@ func dropReturns(right []*Token) ([]*Token, bool) {
 	return right, false
 }
 
-// actionReturning は型の宣言の中の「数 を 返す 動作」を「数 の 動作」にする
+// actionReturning は型の宣言の中の「数 を 返す 動作」を「数 の 動作」にする(「入出力動作」も)
 func actionReturning(tokens []*Token) []*Token {
 	var out []*Token
 	for i := 0; i < len(tokens); i++ {
 		t := tokens[i]
 		if t.Kind == "PART" && t.S == "を" && i+2 < len(tokens) && isKw(tokens[i+1], KwHensu) &&
-			tokens[i+2].Kind == "WORD" && tokens[i+2].S == "動作" && !tokens[i+2].Quoted {
+			tokens[i+2].Kind == "WORD" && (tokens[i+2].S == "動作" || tokens[i+2].S == "入出力動作") && !tokens[i+2].Quoted {
 			out = append(out, tok("KW", KwNo, t.Line), tokens[i+2])
 			i += 2
 			continue
@@ -1878,6 +1878,9 @@ func parseType(tokens []*Token, i int) (Node, int) {
 
 func typeWord(t *Token, args []Node) Node {
 	name := t.S
+	if name == "入出力動作" {
+		name = "動作" // 「入出力動作」は「動作」の別名
+	}
 	if len([]rune(name)) == 1 && strings.Contains(typeVarNames, name) && !t.Quoted {
 		if len(args) > 0 {
 			raise(t.Line, "「"+name+"」は型の引数をとりません")
