@@ -31,7 +31,7 @@ import suru as S
 RUNTIME = S.data_path("runtime", "suru_rt.c")
 
 # 外部の関数の C の型 → LLVM IR の型
-FFI_IR = {"i64": "i64", "f64": "double", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr", "bytes": "ptr",
+FFI_IR = {"i64": "i64", "f64": "double", "f32": "float", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr", "bytes": "ptr",
           "void": "void"}
 LINK_MARK = "; suru-link: "  # IR の中の、リンクするライブラリの印(build が読む)
 PART_IDS = {"を": 0, "に": 1, "で": 2, "から": 3, "へ": 4, "より": 5, "が": 6}
@@ -44,6 +44,9 @@ declare ptr @rt_alloc(i64)
 declare i64 @rt_ffi_i64(i64, ptr, i32, i32)
 declare i32 @rt_ffi_i32(i64, ptr, i32, i32)
 declare double @rt_ffi_f64(i64, ptr, i32, i32)
+declare float @rt_ffi_f32(i64, ptr, i32, i32)
+declare ptr @rt_ffi_mt_buf()
+declare void @rt_ffi_main(ptr, ptr)
 declare i32 @rt_ffi_bool(i64, ptr, i32, i32)
 declare ptr @rt_ffi_str(i64, ptr, i32, i32)
 declare ptr @rt_ffi_ptr(i64, ptr, i32, i32)
@@ -673,15 +676,22 @@ class Compiler:
                 args.append(f"{FFI_IR[t]} {c}")
             if ext.cargs:
                 args = [f"i64 {v}" if k == "定数" else args[v] for k, v in ext.cargs]
-            fg.call("void", "@rt_ffi_pre", "")
-            r = fg.call(ret, fn, ", ".join(args))
-            fg.call("void", "@rt_ffi_post", "")
+            if ext.main_thread:
+                r = self.main_thread_call(ret, fn, args, fg, ext.line)
+            else:
+                fg.call("void", "@rt_ffi_pre", "")
+                r = fg.call(ret, fn, ", ".join(args))
+                fg.call("void", "@rt_ffi_post", "")
             if ext.result == "void":
                 return "1"  # 数の 0
             if ext.result == "i64":
                 return fg.call("i64", "@rt_ffi_from_i64", f"i64 {r}, ptr {fname}, i32 %pos")
             if ext.result == "f64":
                 return fg.call("i64", "@rt_float", f"double {r}")
+            if ext.result == "f32":
+                d = fg.tmp()
+                fg.emit(f"{d} = fpext float {r} to double")
+                return fg.call("i64", "@rt_float", f"double {d}")
             return fg.call("i64", f"@rt_ffi_from_{ext.result}", f"{ret} {r}")
 
         if not ext.action:
@@ -691,6 +701,43 @@ class Compiler:
             k = self.closure(name, [(S.WO, f"\0捨てる{self.uid()}")], call, sc, fg, check_pred=False)
             return fg.call("i64", "@rt_ffi_action", f"i64 {k}, ptr {fname}, i32 %pos")
         return action
+
+    def main_thread_call(self, ret: str, fn: str, args: list, fg: FnGen, line: int) -> str:
+        """主スレッドで呼ぶ: 関数の番地と引数を rt_ffi_mt_buf に置き、それを読んで呼ぶ関数を rt_ffi_main に渡す"""
+        if len(args) > 38:
+            raise S.SuruError("主スレッドで呼ぶ外部の関数の引数は 38 個までです", line)
+        buf = fg.call("ptr", "@rt_ffi_mt_buf", "")
+        k = self.uid()
+        th = [f"define internal void @mt.{k}(ptr %b) {{", "entry:"]
+        fg.emit(f"store ptr {fn}, ptr {buf}")
+        targs = []
+        for i, a in enumerate(args):
+            t, v = a.split(" ", 1)
+            slot = fg.tmp()
+            fg.emit(f"{slot} = getelementptr i64, ptr {buf}, i64 {i + 2}")
+            fg.emit(f"store {t} {v}, ptr {slot}")
+            th.append(f"  %s{i} = getelementptr i64, ptr %b, i64 {i + 2}")
+            th.append(f"  %a{i} = load {t}, ptr %s{i}")
+            targs.append(f"{t} %a{i}")
+        th.append("  %f = load ptr, ptr %b")
+        if ret == "void":
+            th.append(f"  call void %f({', '.join(targs)})")
+        else:
+            th.append(f"  %r = call {ret} %f({', '.join(targs)})")
+            th.append("  %rs = getelementptr i64, ptr %b, i64 1")
+            th.append(f"  store {ret} %r, ptr %rs")
+        th += ["  ret void", "}"]
+        self.functions.append("\n".join(th))
+        fg.call("void", "@rt_ffi_pre", "")
+        fg.call("void", "@rt_ffi_main", f"ptr @mt.{k}, ptr {buf}")
+        fg.call("void", "@rt_ffi_post", "")
+        if ret == "void":
+            return ""
+        slot = fg.tmp()
+        fg.emit(f"{slot} = getelementptr i64, ptr {buf}, i64 1")
+        r = fg.tmp()
+        fg.emit(f"{r} = load {ret}, ptr {slot}")
+        return r
 
     def new_info(self, name: str, params: list) -> FnInfo:
         k = self.uid()

@@ -18,7 +18,7 @@ import (
 // --- LLVM IR の生成(suru_compile.py と同じ IR を出す) ---
 
 // ffiIR は外部の関数の C の型 → LLVM IR の型
-var ffiIR = map[string]string{"i64": "i64", "f64": "double", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr", "bytes": "ptr",
+var ffiIR = map[string]string{"i64": "i64", "f64": "double", "f32": "float", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr", "bytes": "ptr",
 	"void": "void"}
 
 // LinkMark は IR の中の、リンクするライブラリの印(ビルドで読む)
@@ -35,6 +35,9 @@ declare ptr @rt_alloc(i64)
 declare i64 @rt_ffi_i64(i64, ptr, i32, i32)
 declare i32 @rt_ffi_i32(i64, ptr, i32, i32)
 declare double @rt_ffi_f64(i64, ptr, i32, i32)
+declare float @rt_ffi_f32(i64, ptr, i32, i32)
+declare ptr @rt_ffi_mt_buf()
+declare void @rt_ffi_main(ptr, ptr)
 declare i32 @rt_ffi_bool(i64, ptr, i32, i32)
 declare ptr @rt_ffi_str(i64, ptr, i32, i32)
 declare ptr @rt_ffi_ptr(i64, ptr, i32, i32)
@@ -1009,9 +1012,14 @@ func (c *Compiler) externBody(name string, params []Param, ext *Extern) genBody 
 				}
 			}
 		}
-		fg.call("void", "@rt_ffi_pre", "")
-		r := fg.call(ret, fn, strings.Join(args, ", "))
-		fg.call("void", "@rt_ffi_post", "")
+		var r string
+		if ext.MainThread {
+			r = c.mainThreadCall(ret, fn, args, fg, ext.Line)
+		} else {
+			fg.call("void", "@rt_ffi_pre", "")
+			r = fg.call(ret, fn, strings.Join(args, ", "))
+			fg.call("void", "@rt_ffi_post", "")
+		}
 		switch ext.Result {
 		case "void":
 			return "1" // 数の 0
@@ -1019,6 +1027,10 @@ func (c *Compiler) externBody(name string, params []Param, ext *Extern) genBody 
 			return fg.call("i64", "@rt_ffi_from_i64", fmt.Sprintf("i64 %s, ptr %s, i32 %%pos", r, fname))
 		case "f64":
 			return fg.call("i64", "@rt_float", "double "+r)
+		case "f32":
+			d := fg.tmp()
+			fg.emit(d + " = fpext float " + r + " to double")
+			return fg.call("i64", "@rt_float", "double "+d)
 		}
 		return fg.call("i64", "@rt_ffi_from_"+ext.Result, ret+" "+r)
 	}
@@ -1029,6 +1041,49 @@ func (c *Compiler) externBody(name string, params []Param, ext *Extern) genBody 
 		k := c.closure(name, []Param{{Part: WO, Name: fmt.Sprintf("\x00捨てる%d", c.uid())}}, genBody(call), sc, fg, false)
 		return fg.call("i64", "@rt_ffi_action", fmt.Sprintf("i64 %s, ptr %s, i32 %%pos", k, fname))
 	}
+}
+
+// mainThreadCall は主スレッドで呼ぶ: 関数の番地と引数を rt_ffi_mt_buf に置き、それを読んで呼ぶ関数を rt_ffi_main に渡す
+func (c *Compiler) mainThreadCall(ret, fn string, args []string, fg *fnGen, line Pos) string {
+	if len(args) > 38 {
+		raise(line, "主スレッドで呼ぶ外部の関数の引数は 38 個までです")
+	}
+	buf := fg.call("ptr", "@rt_ffi_mt_buf", "")
+	k := c.uid()
+	th := []string{fmt.Sprintf("define internal void @mt.%d(ptr %%b) {", k), "entry:"}
+	fg.emit("store ptr " + fn + ", ptr " + buf)
+	var targs []string
+	for i, a := range args {
+		sp := strings.SplitN(a, " ", 2)
+		t, v := sp[0], sp[1]
+		slot := fg.tmp()
+		fg.emit(fmt.Sprintf("%s = getelementptr i64, ptr %s, i64 %d", slot, buf, i+2))
+		fg.emit(fmt.Sprintf("store %s %s, ptr %s", t, v, slot))
+		th = append(th, fmt.Sprintf("  %%s%d = getelementptr i64, ptr %%b, i64 %d", i, i+2))
+		th = append(th, fmt.Sprintf("  %%a%d = load %s, ptr %%s%d", i, t, i))
+		targs = append(targs, fmt.Sprintf("%s %%a%d", t, i))
+	}
+	th = append(th, "  %f = load ptr, ptr %b")
+	if ret == "void" {
+		th = append(th, "  call void %f("+strings.Join(targs, ", ")+")")
+	} else {
+		th = append(th, "  %r = call "+ret+" %f("+strings.Join(targs, ", ")+")")
+		th = append(th, "  %rs = getelementptr i64, ptr %b, i64 1")
+		th = append(th, "  store "+ret+" %r, ptr %rs")
+	}
+	th = append(th, "  ret void", "}")
+	c.functions = append(c.functions, strings.Join(th, "\n"))
+	fg.call("void", "@rt_ffi_pre", "")
+	fg.call("void", "@rt_ffi_main", fmt.Sprintf("ptr @mt.%d, ptr %s", k, buf))
+	fg.call("void", "@rt_ffi_post", "")
+	if ret == "void" {
+		return ""
+	}
+	slot := fg.tmp()
+	fg.emit(fmt.Sprintf("%s = getelementptr i64, ptr %s, i64 1", slot, buf))
+	r := fg.tmp()
+	fg.emit(fmt.Sprintf("%s = load %s, ptr %s", r, ret, slot))
+	return r
 }
 
 func (c *Compiler) newInfo(name string, params []Param) *fnInfo {
