@@ -2063,7 +2063,17 @@ def _t_finally(c, a, line):
 
 
 # 通信(「通信」の組み込み)。待受口と接続は番号
-_simple("待受開始する", [(WO, NUM)], act(NUM))
+def _t_bind(name: str):
+    """「ポート を アドレス に 待受開始する」(「に」は省ける)"""
+    @prim(name, {WO: True, "に": False}, lambda: TFun([(WO, NUM)], act(NUM)))
+    def fn(c, a, line):
+        _need(c, a, WO, NUM, line, name)
+        if "に" in a:
+            _need(c, a, "に", STR, line, name)
+        return act(NUM)
+
+
+_t_bind("待受開始する")
 _simple("接続受付する", [("から", NUM)], act(NUM))
 _simple("接続する", [("に", STR), ("で", NUM)], act(NUM))
 _simple("行受信する", [("から", NUM)], act(STR))
@@ -2073,7 +2083,10 @@ _simple("送信する", [(WO, STR), ("へ", NUM)], act(NUM))
 _simple("バイト列送信する", [(WO, BYTES), ("へ", NUM)], act(NUM))
 _simple("切断する", [(WO, NUM)], act(NUM))
 _simple("待機時間設定する", [(WO, NUM), ("で", NUM)], act(NUM))
-_simple("UDP開始する", [(WO, NUM)], act(NUM))
+_t_bind("UDP開始する")
+_simple("ポート取得する", [(WO, NUM)], act(NUM))
+_simple("相手アドレス取得する", [(WO, NUM)], act(STR))
+_simple("相手ポート取得する", [(WO, NUM)], act(NUM))
 _simple("UDPバイト列送信する", [(WO, BYTES), ("から", NUM), ("に", STR), ("で", NUM)], act(NUM))
 _simple("UDPバイト列受信する", [("から", NUM)], act(TCon("UDP便", (BYTES, STR, NUM))))  # lib/通信.suru の型
 

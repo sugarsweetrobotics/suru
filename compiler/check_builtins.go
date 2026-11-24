@@ -331,7 +331,7 @@ func init() {
 		return act(x)
 	})
 	// 通信(「通信」の組み込み)。待受口と接続は番号
-	simple("待受開始する", []TParam{{WO, NUM}}, act(NUM))
+	bindPrim("待受開始する")
 	simple("接続受付する", []TParam{{"から", NUM}}, act(NUM))
 	simple("接続する", []TParam{{"に", STR}, {"で", NUM}}, act(NUM))
 	simple("行受信する", []TParam{{"から", NUM}}, act(STR))
@@ -420,7 +420,10 @@ func init() {
 	})
 	simple("切断する", []TParam{{WO, NUM}}, act(NUM))
 	simple("待機時間設定する", []TParam{{WO, NUM}, {"で", NUM}}, act(NUM))
-	simple("UDP開始する", []TParam{{WO, NUM}}, act(NUM))
+	bindPrim("UDP開始する")
+	simple("ポート取得する", []TParam{{WO, NUM}}, act(NUM))
+	simple("相手アドレス取得する", []TParam{{WO, NUM}}, act(STR))
+	simple("相手ポート取得する", []TParam{{WO, NUM}}, act(NUM))
 	simple("UDPバイト列送信する", []TParam{{WO, bytesT}, {"から", NUM}, {"に", STR}, {"で", NUM}}, act(NUM))
 	simple("UDPバイト列受信する", []TParam{{"から", NUM}}, act(&TCon{"UDP便", []Type{bytesT, STR, NUM}})) // lib/通信.suru の型
 	prim("逆順にする", []partReq{req(WO)}, func() Type {
@@ -466,6 +469,19 @@ var builtinFuns map[string]func() Type
 var primCalls = map[string]typer{}
 var primFuns = map[string]func() Type{}
 var primNames []string
+
+// bindPrim は「ポート を アドレス に 待受開始する」(「に」は省ける)
+func bindPrim(name string) {
+	prim(name, []partReq{req(WO), opt("に")}, func() Type {
+		return &TFun{Params: []TParam{{WO, NUM}}, Result: act(NUM)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		need(c, a, WO, NUM, line, name)
+		if _, ok := a.get("に"); ok {
+			need(c, a, "に", STR, line, name)
+		}
+		return act(NUM)
+	})
+}
 
 func prim(name string, parts []partReq, fun func() Type, fn typer) {
 	primCalls[name] = func(c *Checker, a typedArgs, line Pos) Type {

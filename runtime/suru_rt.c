@@ -72,7 +72,7 @@ typedef struct Fn {
 enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_SENDB, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
        A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_FIFO_NEW, A_CH_FIFO_OPEN, A_CH_FIFO_DEL, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
        A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY, A_INPUT_OPT, A_RECVB, A_TIMEOUT,
-       A_UDP_OPEN, A_UDP_SEND, A_UDP_RECV };
+       A_UDP_OPEN, A_UDP_SEND, A_UDP_RECV, A_LOCAL_PORT, A_PEER_ADDR, A_PEER_PORT };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; V c, d; } Act; /* c・d は引数が3つ以上の動作だけ(UDPバイト列送信する) */
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
@@ -1610,7 +1610,7 @@ static V act_run(Act *a) {
         return mk_str(line, n);
     }
     case A_LISTEN: case A_ACCEPT: case A_CONNECT: case A_RECVLINE: case A_RECV: case A_RECVB: case A_SEND: case A_SENDB: case A_CLOSE: case A_TIMEOUT:
-    case A_UDP_OPEN: case A_UDP_SEND: case A_UDP_RECV:
+    case A_UDP_OPEN: case A_UDP_SEND: case A_UDP_RECV: case A_LOCAL_PORT: case A_PEER_ADDR: case A_PEER_PORT:
         return net_run(a);
     case A_TRY: {
         TryFrame f;
@@ -2390,22 +2390,46 @@ static Sock sock_get(V v, const char *what, int32_t pos) { return sock_get2(v, w
 __attribute__((noreturn)) static void net_fail(Act *a) { fail(a->pos, "「%s」で通信に失敗しました(%s)", a->name, strerror(errno)); }
 
 static Bytes *need_bytes(V v, const char *what, int32_t pos);
+/* 待ち受けるアドレスとポート(a->a がポート、a->b が「に」のアドレス。なければ 0.0.0.0) */
+static struct sockaddr_in bind_addr(Act *a) {
+    int32_t pos = a->pos;
+    V v = need_num(a->a, pos);
+    int64_t port = IS_INT(v) ? INT_VAL(v) : -1;
+    if (port < 0 || port > 65535) fail(pos, "「%s」はポートの番号ではありません", plain(v).s);
+    struct sockaddr_in ad = {0};
+    ad.sin_family = AF_INET;
+    ad.sin_addr.s_addr = htonl(INADDR_ANY);
+    ad.sin_port = htons((uint16_t)port);
+    if (a->b) {
+        char what[64];
+        snprintf(what, sizeof what, "「%s」の「に」", a->name);
+        Str *host = need_str(a->b, what, pos);
+        char hs[256];
+        if (host->n >= (int64_t)sizeof hs) fail(pos, "「%s」はホストの名前として長すぎます", plain(a->b).s);
+        memcpy(hs, host->s, (size_t)host->n);
+        hs[host->n] = 0;
+        struct addrinfo hints = {0}, *res = NULL;
+        hints.ai_family = AF_INET;
+        hints.ai_flags = AI_PASSIVE;
+        world_release();
+        int g = getaddrinfo(hs, NULL, &hints, &res);
+        world_acquire();
+        if (g != 0) fail(pos, "「%s」で通信に失敗しました(%s)", a->name, gai_strerror(g));
+        ad.sin_addr = ((struct sockaddr_in *)res->ai_addr)->sin_addr;
+        freeaddrinfo(res);
+    }
+    return ad;
+}
 static V net_run(Act *a) {
     int32_t pos = a->pos;
     switch (a->kind) {
     case A_LISTEN: {
-        V v = need_num(a->a, pos);
-        int64_t port = IS_INT(v) ? INT_VAL(v) : -1;
-        if (port < 0 || port > 65535) fail(pos, "「%s」はポートの番号ではありません", plain(v).s);
+        struct sockaddr_in ad = bind_addr(a);
         signal(SIGPIPE, SIG_IGN); /* 相手が切れても止まらず、送信のエラーにする */
         int fd = socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0) net_fail(a);
         int one = 1;
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-        struct sockaddr_in ad = {0};
-        ad.sin_family = AF_INET;
-        ad.sin_addr.s_addr = htonl(INADDR_ANY);
-        ad.sin_port = htons((uint16_t)port);
         if (bind(fd, (struct sockaddr *)&ad, sizeof ad) < 0 || listen(fd, 16) < 0) { int e = errno; close(fd); errno = e; net_fail(a); }
         return mk_int(sock_add(fd), pos);
     }
@@ -2527,18 +2551,12 @@ static V net_run(Act *a) {
         if (off < n) net_fail(a);
         return mk_int(n, pos);
     }
-    case A_UDP_OPEN: { /* ポート を UDP開始する(0 なら OS が選ぶ) */
-        V v = need_num(a->a, pos);
-        int64_t port = IS_INT(v) ? INT_VAL(v) : -1;
-        if (port < 0 || port > 65535) fail(pos, "「%s」はポートの番号ではありません", plain(v).s);
+    case A_UDP_OPEN: { /* ポート を アドレス に UDP開始する(0 なら OS が選ぶ。「に」がなければ 0.0.0.0) */
+        struct sockaddr_in ad = bind_addr(a);
         int fd = socket(AF_INET, SOCK_DGRAM, 0);
         if (fd < 0) net_fail(a);
         int one = 1;
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-        struct sockaddr_in ad = {0};
-        ad.sin_family = AF_INET;
-        ad.sin_addr.s_addr = htonl(INADDR_ANY);
-        ad.sin_port = htons((uint16_t)port);
         if (bind(fd, (struct sockaddr *)&ad, sizeof ad) < 0) { int e = errno; close(fd); errno = e; net_fail(a); }
         return mk_int(sock_add(fd), pos);
     }
@@ -2593,6 +2611,17 @@ static V net_run(Act *a) {
         vals[2] = mk_int(ntohs(from.sin_port), pos);
         return rt_construct("UDP便", 3, vals, pos);
     }
+    case A_LOCAL_PORT: case A_PEER_ADDR: case A_PEER_PORT: { /* ポート取得する(getsockname)・相手アドレス取得する・相手ポート取得する(getpeername) */
+        int fd = sock_get(a->a, a->kind == A_LOCAL_PORT ? "待受口か接続かUDPの口" : "接続", pos).fd;
+        struct sockaddr_in ad = {0};
+        socklen_t len = sizeof ad;
+        int r = a->kind == A_LOCAL_PORT ? getsockname(fd, (struct sockaddr *)&ad, &len) : getpeername(fd, (struct sockaddr *)&ad, &len);
+        if (r < 0) net_fail(a);
+        if (a->kind != A_PEER_ADDR) return mk_int(ntohs(ad.sin_port), pos);
+        char hs[INET_ADDRSTRLEN] = "";
+        inet_ntop(AF_INET, &ad.sin_addr, hs, sizeof hs);
+        return cstr(hs);
+    }
     case A_TIMEOUT: { /* 接続 を 秒 で 待機時間設定する(0 なら待ち続ける) */
         V v = need_num(a->b, pos);
         double sec = IS_INT(v) ? (double)INT_VAL(v) : AS(Flt, v)->d;
@@ -2641,7 +2670,7 @@ BI(s_finally) { /* を, で */
     }
     return mk_act(A_FINALLY, "後始末実行する", a[0], a[1]);
 }
-BI(n_listen) { return mk_net(A_LISTEN, "待受開始する", a[0], 0, pos); }
+BI(n_listen) { return mk_net(A_LISTEN, "待受開始する", a[0], a[1], pos); } /* を, に(省ける) */
 BI(n_accept) { return mk_net(A_ACCEPT, "接続受付する", a[0], 0, pos); }
 BI(n_connect) { return mk_net(A_CONNECT, "接続する", a[0], a[1], pos); } /* に, で */
 BI(n_recvline) { return mk_net(A_RECVLINE, "行受信する", a[0], 0, pos); }
@@ -2651,7 +2680,10 @@ BI(n_send) { return mk_net(A_SEND, "送信する", a[0], a[1], pos); }  /* を, 
 BI(n_sendb) { return mk_net(A_SENDB, "バイト列送信する", a[0], a[1], pos); }  /* を, へ */
 BI(n_close) { return mk_net(A_CLOSE, "切断する", a[0], 0, pos); }
 BI(n_timeout) { return mk_net(A_TIMEOUT, "待機時間設定する", a[0], a[1], pos); } /* を, で */
-BI(n_udp_open) { return mk_net(A_UDP_OPEN, "UDP開始する", a[0], 0, pos); }
+BI(n_udp_open) { return mk_net(A_UDP_OPEN, "UDP開始する", a[0], a[1], pos); } /* を, に(省ける) */
+BI(n_local_port) { return mk_net(A_LOCAL_PORT, "ポート取得する", a[0], 0, pos); }
+BI(n_peer_addr) { return mk_net(A_PEER_ADDR, "相手アドレス取得する", a[0], 0, pos); }
+BI(n_peer_port) { return mk_net(A_PEER_PORT, "相手ポート取得する", a[0], 0, pos); }
 BI(n_udp_send) { /* を, から, に, で */
     V v = mk_net(A_UDP_SEND, "UDPバイト列送信する", a[0], a[1], pos);
     AS(Act, v)->c = a[2];
@@ -3796,7 +3828,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"箱更新する", 2, P2_WO_DE, NULL, x_update},
     {"箱書込する", 2, P2_WO_HE, NULL, x_set},
     /* 「通信」の組み込み */
-    {"待受開始する", 1, P1_WO, NULL, n_listen},
+    {"待受開始する", 2, P2_WO_NI, R_1_OPT, n_listen},
     {"待機時間設定する", 2, P2_WO_DE, NULL, n_timeout},
     {"接続受付する", 1, P1_KARA, NULL, n_accept},
     {"接続する", 2, P2_NI_DE, NULL, n_connect},
@@ -3806,7 +3838,10 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"送信する", 2, P2_WO_HE, NULL, n_send},
     {"バイト列送信する", 2, P2_WO_HE, NULL, n_sendb},
     {"切断する", 1, P1_WO, NULL, n_close},
-    {"UDP開始する", 1, P1_WO, NULL, n_udp_open},
+    {"UDP開始する", 2, P2_WO_NI, R_1_OPT, n_udp_open},
+    {"ポート取得する", 1, P1_WO, NULL, n_local_port},
+    {"相手アドレス取得する", 1, P1_WO, NULL, n_peer_addr},
+    {"相手ポート取得する", 1, P1_WO, NULL, n_peer_port},
     {"UDPバイト列送信する", 4, P4_WO_KARA_NI_DE, NULL, n_udp_send},
     {"UDPバイト列受信する", 1, P1_KARA, NULL, n_udp_recv},
 };
