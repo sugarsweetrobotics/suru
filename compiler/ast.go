@@ -154,6 +154,7 @@ type Do struct {
 	Statements []Node
 	Line       Pos
 	Sequel     bool
+	IO         bool // 「入出力手順」: 値は動作でなければならない
 }
 type Sequel struct {
 	Expr Node

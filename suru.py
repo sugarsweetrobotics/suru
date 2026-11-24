@@ -171,6 +171,7 @@ POLITE_FORMS = {"します": SURU, "しまして": SHITE, "しましてから": 
 RESULT = "結果"     # 「入力 の 結果 を 数値にする」「入力した 結果」
 CONTENT = "中身"    # 「安全除算した 中身」: 成功(有)なら中の値、失敗(無)ならその失敗を返す(Rust の ?)
 TEJUN = "手順"      # 「手順（文。文。…）」: 文を順に行う
+TEJUN_IO = "入出力手順"  # 動作(IO)だけの手順。型の検査で値が動作かを確かめる
 HOLE = "\0前の結果"  # 「してから」の後ろの関数に渡す値(内部の名前)
 
 PROPERTIES = {"先頭", "残り", "最後", "長さ", "それぞれ"}
@@ -900,6 +901,7 @@ class Do:
     statements: list
     line: int
     sequel: bool = False  # 「それから」で作った並び
+    io: bool = False  # 「入出力手順」: 値は動作でなければならない
 
 
 @dataclass
@@ -1951,9 +1953,11 @@ class ExprParser:
             return Str(tok.value, tok.line)
         if tok.kind == "WORD":
             nxt = self.tokens[self.pos] if self.pos < len(self.tokens) else None
-            if tok.value == TEJUN and not tok.quoted and nxt is not None and nxt.kind == "LP":
+            if tok.value in (TEJUN, TEJUN_IO) and not tok.quoted and nxt is not None and nxt.kind == "LP":
                 self.next()
-                return self.paren_do(nxt)
+                do = self.paren_do(nxt)
+                do.io = tok.value == TEJUN_IO
+                return do
             return Var(tok.value, tok.line, tok.quoted)
         if tok.kind == "LP":
             block = self.paren_block(tok)
@@ -2215,9 +2219,12 @@ def parse_statement(node: Node) -> Any:
     if MODULE_SEP in name and not head[0].qualified:
         raise SuruError(f"「{name}」: 読み込んだファイルの中の名前は定義できません", head[0].line)
     after_t = nosep(after)
-    if len(after_t) == 1 and after_t[0].kind == "WORD" and after_t[0].value == TEJUN and not after_t[0].quoted and node.children:
-        # 「挨拶する とは 手順」+ 深い行: 深い行を順に行う
-        return Define(name, params, parse_do(node.children, node.line.number), is_function, node.line.number)
+    if (len(after_t) == 1 and after_t[0].kind == "WORD" and after_t[0].value in (TEJUN, TEJUN_IO)
+            and not after_t[0].quoted and node.children):
+        # 「挨拶する とは 手順」+ 深い行: 深い行を順に行う(「入出力手順」なら動作だけ)
+        do = parse_do(node.children, node.line.number)
+        do.io = after_t[0].value == TEJUN_IO
+        return Define(name, params, do, is_function, node.line.number)
     if (len(after_t) == 2 and after_t[0].kind == "WORD" and after_t[0].value == KW_EXTERN and not after_t[0].quoted
             and after_t[1].kind == "STR" and not node.children):
         # 「x を 余弦にする とは 外部の「cos」」: C の関数を呼ぶ
@@ -5219,7 +5226,7 @@ def split_branch_runs(node: Any) -> None:
             line = first_line_of(s) or node.line
 
             def branch(e: Any) -> Any:
-                return Do([_replace_node(s, t, e)] + rest, line)
+                return Do([_replace_node(s, t, e)] + rest, line, io=node.io)
 
             if isinstance(t, If):
                 split = If(t.cond, branch(t.then), branch(t.other))

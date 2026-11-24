@@ -1368,6 +1368,11 @@ func (c *Checker) infer(node Node, env *TEnv) Type {
 				return "「した 中身」を使う手順の値は" + sb + "になりますが、" + sa + "になっています"
 			})
 		}
+		if n.IO {
+			c.unifyOr(t, act(newTVar()), n.Line, func(sa, sb string) string {
+				return "「入出力手順」の値は動作でなければなりませんが、" + sa + "になっています(動作でない連鎖には「手順」を使ってください)"
+			})
+		}
 		return t
 	case *Sequel:
 		return c.infer(n.Expr, env)

@@ -1617,6 +1617,10 @@ class Checker:
         if used:
             self.unify_or(t, act(target), node.line,
                           lambda sa, sb: f"「した 中身」を使う手順の値は{sb}になりますが、{sa}になっています")
+        if getattr(node, "io", False):
+            self.unify_or(t, act(TVar()), node.line,
+                          lambda sa, sb: f"「入出力手順」の値は動作でなければなりませんが、{sa}になっています"
+                          "(動作でない連鎖には「手順」を使ってください)")
         return t
 
     def do_type(self, stmts: list, i: int, env: TEnv, line: Any) -> Any:
