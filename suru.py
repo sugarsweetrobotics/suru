@@ -4226,6 +4226,44 @@ def _close(net: _Net, a: dict, line: int) -> int:
     return v
 
 
+def _udp_open(net: _Net, a: dict, line: int) -> int:
+    """「ポート を UDP開始する」: 0.0.0.0 のそのポートで受け取る UDP の口(0 なら OS が選ぶ)"""
+    import socket
+    port = _num(a[WO], line)
+    if not isinstance(port, int) or not 0 <= port <= 65535:
+        raise SuruError(f"「{format_value(a[WO])}」はポートの番号ではありません", line)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("0.0.0.0", port))
+    except OSError:
+        sock.close()
+        raise
+    return net.add(sock)
+
+
+def _udp_send(net: _Net, a: dict, line: int) -> int:
+    """「バイト列 を 口 から ホスト に ポート で UDPバイト列送信する」: 1つの便りとして送る"""
+    import socket
+    data = _bytes(a[WO], "「UDPバイト列送信する」の「を」", line)
+    sock = net.get(a["から"], "UDPの口", line)
+    host = _str(a["に"], "「UDPバイト列送信する」の「に」", line)
+    port = _num(a["で"], line)
+    if not isinstance(port, int) or not 0 <= port <= 65535:
+        raise SuruError(f"「{format_value(a['で'])}」はポートの番号ではありません", line)
+    try:
+        addr = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)[0][4]
+    except socket.gaierror as e:
+        raise SuruError(f"「UDPバイト列送信する」で通信に失敗しました({e.strerror or e})", line) from None
+    return sock.sendto(data, addr)
+
+
+def _udp_recv(net: _Net, a: dict, line: int) -> Record:
+    """「口 から UDPバイト列受信する」: 次の便りを1つ丸ごと(中身はバイト列)。送り主の IP アドレスとポートも"""
+    data, addr = net.get(a["から"], "UDPの口", line).recvfrom(65536)
+    return Record("UDP便", "UDP便", ("中身", "送り主", "ポート"), (data, addr[0], addr[1]))
+
+
 NET_PRIMITIVES = [
     Builtin("待受開始する", [(WO, True)], _net_action("待受開始する", _listen)),
     Builtin("接続受付する", [("から", True)], _net_action("接続受付する", _accept)),
@@ -4237,6 +4275,9 @@ NET_PRIMITIVES = [
     Builtin("バイト列送信する", [(WO, True), ("へ", True)], _net_action("バイト列送信する", _send_bytes)),
     Builtin("切断する", [(WO, True)], _net_action("切断する", _close)),
     Builtin("待機時間設定する", [(WO, True), ("で", True)], _net_action("待機時間設定する", _set_timeout)),
+    Builtin("UDP開始する", [(WO, True)], _net_action("UDP開始する", _udp_open)),
+    Builtin("UDPバイト列送信する", [(WO, True), ("から", True), ("に", True), ("で", True)], _net_action("UDPバイト列送信する", _udp_send)),
+    Builtin("UDPバイト列受信する", [("から", True)], _net_action("UDPバイト列受信する", _udp_recv)),
 ]
 
 

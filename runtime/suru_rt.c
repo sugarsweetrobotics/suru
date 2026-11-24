@@ -71,8 +71,9 @@ typedef struct Fn {
 } Fn;
 enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_SENDB, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
        A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_FIFO_NEW, A_CH_FIFO_OPEN, A_CH_FIFO_DEL, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
-       A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY, A_INPUT_OPT, A_RECVB, A_TIMEOUT };
-typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; } Act;
+       A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY, A_INPUT_OPT, A_RECVB, A_TIMEOUT,
+       A_UDP_OPEN, A_UDP_SEND, A_UDP_RECV };
+typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; V c, d; } Act; /* c・d は引数が3つ以上の動作だけ(UDPバイト列送信する) */
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
 
@@ -811,6 +812,7 @@ static V mk_act(int kind, const char *name, V a, V b) {
     x->name = name;
     x->a = a;
     x->b = b;
+    x->c = x->d = 0;
     return (V)(intptr_t)x;
 }
 
@@ -1606,6 +1608,7 @@ static V act_run(Act *a) {
         return mk_str(line, n);
     }
     case A_LISTEN: case A_ACCEPT: case A_CONNECT: case A_RECVLINE: case A_RECV: case A_RECVB: case A_SEND: case A_SENDB: case A_CLOSE: case A_TIMEOUT:
+    case A_UDP_OPEN: case A_UDP_SEND: case A_UDP_RECV:
         return net_run(a);
     case A_TRY: {
         TryFrame f;
@@ -2522,6 +2525,72 @@ static V net_run(Act *a) {
         if (off < n) net_fail(a);
         return mk_int(n, pos);
     }
+    case A_UDP_OPEN: { /* ポート を UDP開始する(0 なら OS が選ぶ) */
+        V v = need_num(a->a, pos);
+        int64_t port = IS_INT(v) ? INT_VAL(v) : -1;
+        if (port < 0 || port > 65535) fail(pos, "「%s」はポートの番号ではありません", plain(v).s);
+        int fd = socket(AF_INET, SOCK_DGRAM, 0);
+        if (fd < 0) net_fail(a);
+        int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        struct sockaddr_in ad = {0};
+        ad.sin_family = AF_INET;
+        ad.sin_addr.s_addr = htonl(INADDR_ANY);
+        ad.sin_port = htons((uint16_t)port);
+        if (bind(fd, (struct sockaddr *)&ad, sizeof ad) < 0) { int e = errno; close(fd); errno = e; net_fail(a); }
+        return mk_int(sock_add(fd), pos);
+    }
+    case A_UDP_SEND: { /* バイト列 を 口 から ホスト に ポート で UDPバイト列送信する(a=を, b=から, c=に, d=で) */
+        Bytes *b = need_bytes(a->a, "「UDPバイト列送信する」の「を」", pos);
+        int fd = sock_get(a->b, "UDPの口", pos).fd;
+        Str *host = need_str(a->c, "「UDPバイト列送信する」の「に」", pos);
+        V v = need_num(a->d, pos);
+        int64_t port = IS_INT(v) ? INT_VAL(v) : -1;
+        if (port < 0 || port > 65535) fail(pos, "「%s」はポートの番号ではありません", plain(v).s);
+        char hs[256], ps[8];
+        if (host->n >= (int64_t)sizeof hs) fail(pos, "「%s」はホストの名前として長すぎます", plain(a->c).s);
+        memcpy(hs, host->s, (size_t)host->n);
+        hs[host->n] = 0;
+        snprintf(ps, sizeof ps, "%d", (int)port);
+        struct addrinfo hints = {0}, *res = NULL;
+        hints.ai_family = AF_INET; /* 口は IPv4 */
+        hints.ai_socktype = SOCK_DGRAM;
+        world_release(); /* 名前を引く間と送る間は、表(socks)に触らない。送るものは a->a から見えるので回収されない */
+        int g = getaddrinfo(hs, ps, &hints, &res);
+        ssize_t k = -1;
+        if (g == 0) {
+            do k = sendto(fd, b->d, (size_t)b->n, 0, res->ai_addr, res->ai_addrlen); while (k < 0 && errno == EINTR);
+            freeaddrinfo(res);
+        }
+        int e = errno;
+        world_acquire();
+        if (g != 0) fail(pos, "「%s」で通信に失敗しました(%s)", a->name, gai_strerror(g));
+        errno = e;
+        if (k < 0) net_fail(a);
+        return mk_int(k, pos);
+    }
+    case A_UDP_RECV: { /* 口 から UDPバイト列受信する: 次の便りを1つ丸ごと */
+        int fd = sock_get(a->a, "UDPの口", pos).fd;
+        fflush(stdout); /* 待つ前に、それまでの表示を出しておく */
+        char *buf = malloc(65536);
+        if (!buf) fail(pos, "メモリが足りません");
+        struct sockaddr_in from;
+        socklen_t flen = sizeof from;
+        ssize_t k;
+        world_release();
+        do k = recvfrom(fd, buf, 65536, 0, (struct sockaddr *)&from, &flen); while (k < 0 && errno == EINTR);
+        int e = errno;
+        world_acquire();
+        if (k < 0) { free(buf); errno = e; net_fail(a); }
+        char hs[INET_ADDRSTRLEN] = "";
+        inet_ntop(AF_INET, &from.sin_addr, hs, sizeof hs);
+        V vals[3];
+        vals[0] = mk_bytes(buf, (int64_t)k);
+        free(buf);
+        vals[1] = cstr(hs);
+        vals[2] = mk_int(ntohs(from.sin_port), pos);
+        return rt_construct("UDP便", 3, vals, pos);
+    }
     case A_TIMEOUT: { /* 接続 を 秒 で 待機時間設定する(0 なら待ち続ける) */
         V v = need_num(a->b, pos);
         double sec = IS_INT(v) ? (double)INT_VAL(v) : AS(Flt, v)->d;
@@ -2580,10 +2649,19 @@ BI(n_send) { return mk_net(A_SEND, "送信する", a[0], a[1], pos); }  /* を, 
 BI(n_sendb) { return mk_net(A_SENDB, "バイト列送信する", a[0], a[1], pos); }  /* を, へ */
 BI(n_close) { return mk_net(A_CLOSE, "切断する", a[0], 0, pos); }
 BI(n_timeout) { return mk_net(A_TIMEOUT, "待機時間設定する", a[0], a[1], pos); } /* を, で */
+BI(n_udp_open) { return mk_net(A_UDP_OPEN, "UDP開始する", a[0], 0, pos); }
+BI(n_udp_send) { /* を, から, に, で */
+    V v = mk_net(A_UDP_SEND, "UDPバイト列送信する", a[0], a[1], pos);
+    AS(Act, v)->c = a[2];
+    AS(Act, v)->d = a[3];
+    return v;
+}
+BI(n_udp_recv) { return mk_net(A_UDP_RECV, "UDPバイト列受信する", a[0], 0, pos); }
 
 static const int32_t P1_DE[] = {P_DE}, P2_DE_WO[] = {P_DE, P_WO}, P1_WO[] = {P_WO}, P2_WO_NI[] = {P_WO, P_NI}, P2_KARA_WO[] = {P_KARA, P_WO},
                      P2_WO_DE[] = {P_WO, P_DE}, P2_KARA_DE[] = {P_KARA, P_DE}, P3_WO_KARA_DE[] = {P_WO, P_KARA, P_DE},
-                     P2_GA_WO[] = {P_GA, P_WO}, P1_KARA[] = {P_KARA}, P2_WO_HE[] = {P_WO, P_HE}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P2_GA_DE[] = {P_GA, P_DE}, P2_NI_DE[] = {P_NI, P_DE};
+                     P2_GA_WO[] = {P_GA, P_WO}, P1_KARA[] = {P_KARA}, P2_WO_HE[] = {P_WO, P_HE}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P2_GA_DE[] = {P_GA, P_DE}, P2_NI_DE[] = {P_NI, P_DE},
+                     P4_WO_KARA_NI_DE[] = {P_WO, P_KARA, P_NI, P_DE};
 static const uint8_t R_OPT1[] = {0}, R_1_OPT[] = {1, 0};
 
 typedef struct { const char *name; int32_t n; const int32_t *parts; const uint8_t *req; Code code; } BuiltinDef;
@@ -3726,6 +3804,9 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"送信する", 2, P2_WO_HE, NULL, n_send},
     {"バイト列送信する", 2, P2_WO_HE, NULL, n_sendb},
     {"切断する", 1, P1_WO, NULL, n_close},
+    {"UDP開始する", 1, P1_WO, NULL, n_udp_open},
+    {"UDPバイト列送信する", 4, P4_WO_KARA_NI_DE, NULL, n_udp_send},
+    {"UDPバイト列受信する", 1, P1_KARA, NULL, n_udp_recv},
 };
 
 static V def_builtin(const BuiltinDef *d) { return mk_builtin(d->name, d->n, d->parts, d->req, d->code, NULL); }

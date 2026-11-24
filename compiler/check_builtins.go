@@ -420,6 +420,9 @@ func init() {
 	})
 	simple("切断する", []TParam{{WO, NUM}}, act(NUM))
 	simple("待機時間設定する", []TParam{{WO, NUM}, {"で", NUM}}, act(NUM))
+	simple("UDP開始する", []TParam{{WO, NUM}}, act(NUM))
+	simple("UDPバイト列送信する", []TParam{{WO, bytesT}, {"から", NUM}, {"に", STR}, {"で", NUM}}, act(NUM))
+	simple("UDPバイト列受信する", []TParam{{"から", NUM}}, act(&TCon{"UDP便", []Type{bytesT, STR, NUM}})) // lib/通信.suru の型
 	prim("逆順にする", []partReq{req(WO)}, func() Type {
 		x := newTVar()
 		return &TFun{Params: []TParam{{WO, x}}, Result: x}
