@@ -60,7 +60,12 @@ type Analysis struct {
 
 // Analyze はプログラムを調べて、間違い・名前の型・定義の場所を返す。
 // 間違いがあっても、そこまでに分かったことは返す
-func Analyze(source, baseDir string) (a *Analysis) {
+func Analyze(source, baseDir string) *Analysis {
+	return AnalyzeFile(source, baseDir, "")
+}
+
+// AnalyzeFile は Analyze の、調べるファイルの道 path が分かっているもの(同じ名前のファイルの読み込みで自分を飛ばす)
+func AnalyzeFile(source, baseDir, path string) (a *Analysis) {
 	a = &Analysis{Starts: map[int][]int{}, Usages: map[string]string{}}
 	srcLines := SplitLines(source)
 	// 構文の間違いが見つかったら、その一番外の文の行を空にして読み直し、ほかの間違いも探す
@@ -71,6 +76,7 @@ func Analyze(source, baseDir string) (a *Analysis) {
 	text := source
 	for round := 0; round < 20; round++ {
 		c := NewParseContext(baseDir)
+		c.Path = filePath(path)
 		var prog []Node
 		err := try(func() { prog = ParseProgram(text, c) })
 		if err == nil {

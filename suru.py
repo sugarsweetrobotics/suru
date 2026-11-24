@@ -305,7 +305,7 @@ def tokenize_line(text: str, line: int) -> list[Token]:
             break
         elif c == "「":
             flush()
-            j = text.find("」", i + 1)
+            j = find_string_close(text, i)
             if j < 0:
                 raise SuruError("文字列の「に対応する」がありません", here)
             tokens.append(Token("STR", text[i + 1 : j], here))
@@ -368,6 +368,21 @@ def drop_desu(tokens: list[Token]) -> list[Token]:
             raise SuruError("「です」は文の終わり(「。」の前)にだけ書けます", t.line)
         out.append(t)
     return out
+
+
+def find_string_close(text: str, i: int) -> int:
+    """text[i] の「に対応する」の位置(なければ -1)。文字列の中の「」は入れ子として数える
+    (「失敗: 「abc」は数にできません」は1つの文字列)"""
+    depth = 0
+    for j in range(i, len(text)):
+        c = text[j]
+        if c == "「":
+            depth += 1
+        elif c == "」":
+            depth -= 1
+            if depth == 0:
+                return j
+    return -1
 
 
 def _find_name_close(text: str, i: int, line: int) -> int:
@@ -608,7 +623,7 @@ def tokenize_punct_line(text: str, line: int) -> list[Token]:
             break
         elif c == "「":
             flush()
-            j = text.find("」", i + 1)
+            j = find_string_close(text, i)
             if j < 0:
                 raise SuruError("文字列の「に対応する」がありません", here)
             tokens.append(Token("STR", text[i + 1 : j], here))
@@ -645,7 +660,7 @@ def is_punct_line(text: str) -> bool:
     while i < n:
         c = text[i]
         if c in ("「", NAME_OPEN):
-            j = text.find("」" if c == "「" else NAME_CLOSE, i + 1)
+            j = find_string_close(text, i) if c == "「" else text.find(NAME_CLOSE, i + 1)
             if j < 0:
                 return False
             i = j
@@ -1146,12 +1161,13 @@ class ParseContext:
     """構文解析で使う、定義済みの型と形の名前(「3 と 4 の 点」を読むために先に集める)"""
 
     def __init__(self, ctors: dict | None = None, types: dict | None = None, base_dir: str = ".",
-                 modules: dict | None = None):
+                 modules: dict | None = None, path: str = ""):
         self.ctors: dict[str, tuple[str, list]] = dict(ctors or {})  # 形 → (型, フィールド名)
         self.types: dict[str, list] = dict(types or {})  # 型 → [形]
         self.base_dir = base_dir  # 「「数学」 を 読み込む」で探すフォルダ
         self.modules: dict[str, Any] = dict(modules or {})  # 読み込んだファイル(絶対パス → Module。読み込み中は None)
         self.packages: dict[str, str] | None = None  # プロジェクトの依存(名前 → フォルダ)。None なら初めて読み込むときに探す
+        self.path = os.path.abspath(path) if path else ""  # 解析しているファイル(自分と同じ名前のファイルを読み込むときに飛ばす)
         self.in_prelude = False  # 基本.suru そのものを読んでいる(基本を自動で読み込まない)
         # 読み込んだファイル(lib/ のものを除く)を解析しているときは「部品内の」。そのファイルの型と形の名前に付ける
         self.qualify = ""
@@ -1159,6 +1175,7 @@ class ParseContext:
     def copy(self) -> "ParseContext":
         c = ParseContext(self.ctors, self.types, self.base_dir, self.modules)
         c.packages = self.packages
+        c.path = self.path
         return c
 
     def add(self, td: TypeDef) -> None:
@@ -1996,7 +2013,7 @@ def parse_definition_head(tokens: list[Token], line: int) -> tuple[str, list, bo
     if last.kind == "WORD" and len(tokens) == 1:
         return last.value, [], False  # 値の定義: 「税率 とは 0.1」
     if last.kind != "CALL" or last.form != SURU:
-        raise SuruError("関数名は「する」で終わる必要があります", last.line)
+        raise not_suru_error(last)
     if any(_is_pattern_token(t) for t in tokens[:-1]):
         return last.value, parse_pattern_head(tokens[:-1], line), True
     params: list = []
@@ -2316,7 +2333,7 @@ def try_parse_type_sig(tokens: list[Token]) -> TypeSig | None:
         params = []
         i = 0
         while i < len(left) - 1:
-            t, i = parse_type(left, i)
+            t, i = parse_param_type(left, i, len(left) - 1)
             if i >= len(left) - 1 or not (left[i].kind == "PART" or is_kw(left[i], GA)):
                 raise SuruError("型の宣言では、引数の型の後に助詞を書いてください(「数 を 階乗する は 数」)", line)
             params.append((left[i].value, t))
@@ -2325,6 +2342,10 @@ def try_parse_type_sig(tokens: list[Token]) -> TypeSig | None:
         if any(p == q for k, (p, _) in enumerate(params) for q, _ in params[:k]):
             raise SuruError(f"「{name}」の型の宣言で同じ助詞が2回使われています", line)
         return TypeSig(name, params, parse_type_all(right, line), line)
+    if (last.kind in ("WORD", "CALL") and len(left) >= 2 and (left[-2].kind == "PART" or is_kw(left[-2], GA))
+            and _parses_as_type(right, line)):
+        # 「数 で 流す は 数 を 返す 入出力動作」: 関数の型の宣言のつもりで、名前が「する」で終わっていない
+        raise not_suru_error(last)
     if len(left) == 1 and left[0].kind == "WORD" and right and (_is_type_word(right[0]) or right[0].kind == "LP"):
         # 値: 「税率 は 数」(「点 は 比較可能」は性質の実装)
         if len(right) == 1 and not _is_type_word(right[0]):
@@ -2333,6 +2354,36 @@ def try_parse_type_sig(tokens: list[Token]) -> TypeSig | None:
             raise SuruError(RETURNS_ONLY_FUN, line)
         return TypeSig(_check_name(left[0]), None, parse_type_all(right, line), line)
     return None
+
+
+TUPLE_TYPE = "と"  # 引数の「文字列 と JSON を」の型(長さと要素ごとの型が決まったリスト)
+
+
+def parse_param_type(tokens: list[Token], i: int, end: int) -> tuple[Any, int]:
+    """引数の型を1つ読む。「文字列 と JSON を」のように「と」でつなげば、定義の「名 と 値 を」に合わせて
+    要素ごとに型の違うリスト(TypeName("と", [文字列, JSON]))"""
+    t, i = parse_type(tokens, i)
+    items = [t]
+    while i < end - 1 and is_kw(tokens[i], KW_TO):
+        t, i = parse_type(tokens, i + 1)
+        items.append(t)
+    return (t, i) if len(items) == 1 else (TypeName(TUPLE_TYPE, items), i)
+
+
+def not_suru_error(last: Token) -> SuruError:
+    """関数名が「する」で終わっていない(「x で 流す とは …」「数 で 流す は 数」)"""
+    word = str(last.value)
+    if last.kind == "CALL" and word.endswith(SURU):
+        word = word[: -len(SURU)] + last.form
+    return SuruError(f"関数名は「する」で終わる必要があります(「{word}」)", last.line)
+
+
+def _parses_as_type(tokens: list[Token], line: int) -> bool:
+    try:
+        parse_type_all(tokens, line)
+    except SuruError:
+        return False
+    return True
 
 
 def parse_type_all(tokens: list[Token], line: int) -> Any:
@@ -2411,7 +2462,7 @@ def parse_fun_type(tokens: list[Token], line: int) -> TypeFun:
     if k is not None:
         i = 0
         while i < k:
-            t, i = parse_type(tokens[:k], i)
+            t, i = parse_param_type(tokens[:k], i, k)
             if i >= k or not (tokens[i].kind == "PART" or is_kw(tokens[i], GA)):
                 raise SuruError("関数の型では、引数の型の後に助詞を書いてください", line)
             params.append((tokens[i].value, t))
@@ -3054,11 +3105,32 @@ def load_module(name: str, ctx: ParseContext, line: int) -> Module:
     探す順は、読み込むファイルのフォルダ → プロジェクトの依存 → 標準の lib"""
     if ctx.packages is None:
         ctx.packages = find_packages(ctx.base_dir)
-    path = os.path.abspath(os.path.join(ctx.base_dir, name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX))
+    file = name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX
+    path = os.path.abspath(os.path.join(ctx.base_dir, file))
+    if path == ctx.path:
+        # 「試験/会話帳.suru」の「「会話帳」 を 読み込む」: 自分自身は飛ばして、依存・プロジェクトのフォルダ・標準の lib を探す
+        lib = os.path.abspath(os.path.join(LIB_DIR, file))
+        found = package_path(name, ctx, line) or _project_file(file, ctx) or (lib if os.path.exists(lib) else None)
+        if found is None:
+            raise SuruError(f"「{file}」を読み込むと、自分自身を読み込むことになります"
+                            "(同じ名前の別のファイルなら、置き場所かファイルの名前を変えてください)", line)
+        return _load_path(found, name, ctx, line)
     if not os.path.exists(path):
-        path = package_path(name, ctx, line) or os.path.abspath(
-            os.path.join(LIB_DIR, name if name.endswith(SOURCE_SUFFIX) else name + SOURCE_SUFFIX))
+        path = package_path(name, ctx, line) or os.path.abspath(os.path.join(LIB_DIR, file))
     return _load_path(path, name, ctx, line)
+
+
+def _project_file(file: str, ctx: ParseContext) -> str | None:
+    """プロジェクト(組.suru のあるフォルダ)の一番上にある file。読み込むファイル自身のフォルダは除く"""
+    d = os.path.abspath(ctx.base_dir)
+    while True:
+        if os.path.exists(os.path.join(d, PROJECT_CONFIG)):
+            path = os.path.join(d, file)
+            return path if d != os.path.abspath(ctx.base_dir) and os.path.exists(path) else None
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
 
 
 def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool = False) -> Module:
@@ -3075,7 +3147,7 @@ def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool
     except OSError:
         raise SuruError(f"ファイル「{name}{'' if name.endswith(SOURCE_SUFFIX) else SOURCE_SUFFIX}」が見つかりません", line) from None
     ctx.modules[path] = None
-    sub = ParseContext(ctx.ctors, ctx.types, os.path.dirname(path))
+    sub = ParseContext(ctx.ctors, ctx.types, os.path.dirname(path), path=path)
     sub.modules = ctx.modules
     sub.packages = ctx.packages
     sub.in_prelude = prelude
@@ -6024,7 +6096,7 @@ def _paren_depth(text: str) -> int:
     while i < n:
         c = text[i]
         if c in ("「", NAME_OPEN):
-            j = text.find("」" if c == "「" else NAME_CLOSE, i + 1)
+            j = find_string_close(text, i) if c == "「" else text.find(NAME_CLOSE, i + 1)
             if j < 0:
                 return depth + 1  # 文字列が閉じていない
             i = j + 1
@@ -6376,12 +6448,12 @@ def lint(paths: list[str]) -> int:
     return 0
 
 
-def type_check(source: str, base_dir: str = ".") -> bool:
+def type_check(source: str, base_dir: str = ".", path: str = "") -> bool:
     """型を調べる。間違いがあれば表示して False"""
     from suru_check import check
 
     try:
-        check(source, base_dir)
+        check(source, base_dir, path)
     except Exception as e:  # suru_check は suru を別のモジュールとして読み込むので、名前で見分ける
         if type(e).__name__ != "SuruError":
             raise
@@ -6427,13 +6499,14 @@ def main(argv: list[str]) -> int:
     base_dir = os.path.dirname(os.path.abspath(argv[1]))
     # 実行の前に必ず型を調べる(間違いがあれば実行しない)
     try:
-        if checking and not type_check(source, base_dir):
+        if checking and not type_check(source, base_dir, argv[1]):
             return 1
     except SuruError as e:  # 構文のエラー
         print(format_error(e, source), file=sys.stderr)
         return 1
     interp = Interpreter()
     interp.ctx.base_dir = base_dir
+    interp.ctx.path = os.path.abspath(argv[1])
     try:
         interp.run(source, emit=lambda v: print(interp.format(v)))
     except SuruError as e:

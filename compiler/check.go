@@ -704,7 +704,11 @@ func (c *Checker) inferDefs(defs []*Define, env *TEnv, sigs map[string]*TypeSig)
 		heads := map[string]head{}
 		for _, d := range comp {
 			if d.IsFunction {
-				l, t := c.functionHead(d, inner, mono[d.Name])
+				var want Type
+				if dt, ok := declared[d.Name]; ok {
+					want = dt.t
+				}
+				l, t := c.functionHead(d, inner, mono[d.Name], want)
 				heads[d.Name] = head{l, t}
 			}
 		}
@@ -1094,6 +1098,9 @@ func (c *Checker) typeOf(te Node, tvars *tvarMap, line Pos) Type {
 	for _, a := range tn.Args {
 		args = append(args, c.typeOf(a, tvars, line))
 	}
+	if tn.Name == TupleType {
+		return &TCon{Name: TupleType, Args: args}
+	}
 	if numAliases[tn.Name] {
 		return NUM
 	}
@@ -1163,11 +1170,17 @@ func (c *Checker) checkRigid(sg *TypeSig, tvars *tvarMap) {
 	}
 }
 
-func (c *Checker) functionHead(d *Define, env *TEnv, mono Type) (*TEnv, *TFun) {
+func (c *Checker) functionHead(d *Define, env *TEnv, mono Type, declared Type) (*TEnv, *TFun) {
 	local := newTEnv(env)
+	want := map[string]Type{}
+	if f, ok := declared.(*TFun); ok {
+		for _, p := range f.Params {
+			want[p.Part] = p.T
+		}
+	}
 	var params []TParam
 	for _, p := range d.Params {
-		params = append(params, TParam{p.Part, c.bindParam(p, local)})
+		params = append(params, TParam{p.Part, c.bindParam(p, local, want[p.Part])})
 	}
 	t := &TFun{Params: params, Result: newTVar(), Real: true}
 	if mono != nil {
@@ -1181,7 +1194,7 @@ func (c *Checker) inferDefine(d *Define, env *TEnv, local *TEnv, t *TFun, sg *Ty
 		return c.infer(d.Body, env)
 	}
 	if t == nil {
-		local, t = c.functionHead(d, env, nil)
+		local, t = c.functionHead(d, env, nil, nil)
 	}
 	c.exits = append(c.exits, &exitCtx{kind: "関数", t: t.Result})
 	result := c.infer(d.Body, local)
@@ -1203,11 +1216,21 @@ func (c *Checker) inferDefine(d *Define, env *TEnv, local *TEnv, t *TFun, sg *Ty
 	return &TFun{Params: t.Params, Result: result, Real: true}
 }
 
-func (c *Checker) bindParam(p Param, env *TEnv) Type {
+// bindParam は関数の引数(「a」か「a と b」)に型を付ける。
+// 「a と b」の型が「文字列 と JSON」と宣言されていれば、a・b に別々の型を付ける
+func (c *Checker) bindParam(p Param, env *TEnv, declared Type) Type {
 	if !p.List {
 		t := newTVar()
 		env.set(p.Name, t)
 		return t
+	}
+	if d, ok := declaredTuple(declared); ok && len(d.Args) == len(p.Names) {
+		items := make([]Type, len(p.Names))
+		for k, n := range p.Names {
+			items[k] = newTVar()
+			env.set(n, items[k])
+		}
+		return &TCon{Name: TupleType, Args: items}
 	}
 	elem := newTVar()
 	for _, n := range p.Names {
@@ -1238,14 +1261,11 @@ func (c *Checker) infer(node Node, env *TEnv) Type {
 		c.note(n.Line, n.Name, t, false)
 		return t
 	case *ListLit:
-		elem := newTVar()
+		var items []listItem
 		for _, item := range n.Items {
-			t := c.infer(item, env)
-			c.unifyOr(elem, t, firstLine(item), func(sa, sb string) string {
-				return "リストの要素の型がそろっていません(" + sa + " と " + sb + ")。違う型の値をまとめるときは、組か選択肢のある型を使ってください"
-			})
+			items = append(items, listItem{c.infer(item, env), firstLine(item)})
 		}
-		return lst(elem)
+		return c.listType(items)
 	case *Prop:
 		t := c.infer(n.Target, env)
 		if n.Name == "長さ" {
@@ -1305,7 +1325,7 @@ func (c *Checker) infer(node Node, env *TEnv) Type {
 		local := newTEnv(env)
 		var params []TParam
 		for _, p := range n.Params {
-			params = append(params, TParam{p.Part, c.bindParam(p, local)})
+			params = append(params, TParam{p.Part, c.bindParam(p, local, nil)})
 		}
 		result := newTVar()
 		c.exits = append(c.exits, &exitCtx{kind: "関数", t: result})
@@ -1482,6 +1502,11 @@ func (c *Checker) inferCall(n *Call, env *TEnv) Type {
 		line    Pos
 	}
 	var lifted []lift
+	type listArg struct {
+		t     Type
+		items []listItem
+	}
+	var listed []listArg // 「a と b」の引数
 	for _, a := range n.Args {
 		if e, ok := a.Value.(*Each); ok {
 			t := c.infer(e.Target, env)
@@ -1499,11 +1524,23 @@ func (c *Checker) inferCall(n *Call, env *TEnv) Type {
 				l = n.Line
 			}
 			lifted = append(lifted, lift{m, elem, l})
+		} else if l, ok := a.Value.(*ListLit); ok && c.tupleParam(n.Name, a.Part, env) {
+			// 「「a」 と 3 を 一項目にする」: 引数の型が「文字列 と 数」と宣言されていれば要素ごとに合わせる
+			var items []listItem
+			for _, item := range l.Items {
+				items = append(items, listItem{c.infer(item, env), firstLine(item)})
+			}
+			t := newTVar()
+			args = append(args, typedArg{a.Part, t})
+			listed = append(listed, listArg{t, items})
 		} else {
 			args = append(args, typedArg{a.Part, c.infer(a.Value, env)})
 		}
 	}
 	result := c.callType(n.Name, args, n.Line, env)
+	for _, l := range listed {
+		c.matchList(l.t, l.items)
+	}
 	if c.record {
 		ps := make([]TParam, len(args))
 		for i, a := range args {
@@ -1526,6 +1563,77 @@ func (c *Checker) inferCall(n *Call, env *TEnv) Type {
 		}
 	}
 	return result
+}
+
+// declaredTuple は t が「文字列 と 数」(要素ごとに型の決まったリスト)ならその型
+func declaredTuple(t Type) (*TCon, bool) {
+	if t == nil {
+		return nil, false
+	}
+	d, ok := prune(t).(*TCon)
+	return d, ok && d.Name == TupleType
+}
+
+// listItem はリストに書いた要素の型と行
+type listItem struct {
+	t    Type
+	line Pos
+}
+
+// listType は要素の型のリストの型
+func (c *Checker) listType(items []listItem) Type {
+	elem := newTVar()
+	for _, it := range items {
+		c.unifyOr(elem, it.t, it.line, func(sa, sb string) string {
+			return "リストの要素の型がそろっていません(" + sa + " と " + sb + ")。違う型の値をまとめるときは、組か選択肢のある型を使ってください" +
+				"(関数の引数なら、型の宣言で「文字列 と 数 を …」のように要素ごとの型を書けます)"
+		})
+	}
+	return lst(elem)
+}
+
+// matchList は引数に書いた「a と b」を、関数の引数の型 t に合わせる
+func (c *Checker) matchList(t Type, items []listItem) {
+	if r, ok := declaredTuple(t); ok && len(r.Args) == len(items) {
+		for k, it := range items {
+			k := k
+			c.unifyOr(r.Args[k], it.t, it.line, func(sa, sb string) string {
+				return fmt.Sprintf("「と」でつないだ%d番目の値は%sのはずですが、%sです", k+1, sa, sb)
+			})
+		}
+		return
+	}
+	line := c.line
+	if len(items) > 0 {
+		line = items[0].line
+	}
+	c.unifyOr(t, c.listType(items), line, func(sa, sb string) string {
+		return "「と」でつないだ値の型が合いません(" + sa + " と " + sb + ")"
+	})
+}
+
+// tupleParam は関数 name の引数 part の型が「文字列 と 数」(要素ごとに型の決まったリスト)と宣言されているか
+func (c *Checker) tupleParam(name, part string, env *TEnv) bool {
+	var t Type
+	switch v := env.lookup(name).(type) {
+	case *Scheme:
+		t = v.T
+	case Type:
+		t = v
+	default:
+		return false
+	}
+	f, ok := prune(t).(*TFun)
+	if !ok {
+		return false
+	}
+	for _, p := range f.Params {
+		if p.Part == part {
+			_, ok := declaredTuple(p.T)
+			return ok
+		}
+	}
+	return false
 }
 
 func (c *Checker) callType(name string, args typedArgs, line Pos, env *TEnv) Type {

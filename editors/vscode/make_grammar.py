@@ -17,6 +17,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 OUT = os.path.join(HERE, "syntaxes", "suru.tmLanguage.json")
+# 文字列。中の「」は入れ子として数える(Oniguruma の \g<名前> で再帰する)
+STRING = "(?<str>「(?:[^「」]|\\g<str>)*」)"
 
 
 def alt(words):
@@ -67,8 +69,9 @@ def build() -> dict:
         },
         "string": {
             "patterns": [
-                {"name": "string.quoted.other.suru", "match": "「[^」]*」"},
-                {"name": "invalid.illegal.unclosed-string.suru", "match": "「[^」]*$"},
+                # 文字列の中の「」は入れ子として数える(「失敗: 「abc」は数にできません」)
+                {"name": "string.quoted.other.suru", "match": STRING},
+                {"name": "invalid.illegal.unclosed-string.suru", "match": "「.*$"},
             ]
         },
         "quoted-name": {
@@ -179,7 +182,7 @@ def build() -> dict:
 
     # 「。」か「、」を含む行(文字列・『』・コメントの中は数えない)は句読点の書き方、それ以外は空白の書き方
     patterns["punct-line"] = {
-        "begin": "^(?=(?:「[^」]*」|『[^』]*』|[^「『#＃※。、])*[。、])",
+        "begin": "^(?=(?:" + STRING + "|『[^』]*』|[^「『#＃※。、])*[。、])",
         "end": "$",
         "patterns": rules("call"),
     }

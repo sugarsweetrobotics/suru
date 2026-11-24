@@ -375,6 +375,13 @@ func (n *namer) show(t Type, nested bool) string {
 		n.names[x] = name
 		return name
 	case *TCon:
+		if x.Name == TupleType {
+			parts := make([]string, len(x.Args))
+			for k, a := range x.Args {
+				parts[k] = n.show(a, true)
+			}
+			return "（" + strings.Join(parts, " と ") + "）"
+		}
 		if len(x.Args) == 0 || (!monadTypes[x.Name] && n.ordinary(x)) {
 			return x.Name
 		}

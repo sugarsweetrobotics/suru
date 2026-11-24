@@ -28,7 +28,7 @@ from suru import (
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
     PValue, Ref, RESULT, Run, Sequel, Str, SuruError, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
     HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, Import, Module, MODULE_SEP, SOURCE_SUFFIX, _where, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
-    parse_program, collect_runs, _run_key, LIB_PRIMITIVES, GA, UNWRAP_TYPES, _call_name,
+    parse_program, collect_runs, _run_key, LIB_PRIMITIVES, GA, UNWRAP_TYPES, _call_name, TUPLE_TYPE,
 )
 
 # ---------------------------------------------------------------------------
@@ -236,6 +236,8 @@ class Namer:
                 k = len(self.names)
                 self.names[t] = VAR_NAMES[k] if k < len(VAR_NAMES) else f"型{k + 1}"
             return self.names[t]
+        if isinstance(t, TCon) and t.name == TUPLE_TYPE:
+            return "（" + " と ".join(self(a, True) for a in t.args) + "）"
         if isinstance(t, TCon):
             if not t.args or (t.name not in MONADS and self.ordinary(t)):
                 return t.name
@@ -772,7 +774,8 @@ class Checker:
                 if sigs[name].params is None:
                     self.unify(mono[name], t)
             # 関数は先に引数の型を決めておく(互いに呼び合う中でも引数を調べられるように)
-            heads = {d.name: self.function_head(d, inner, mono[d.name]) for d in comp if d.is_function}
+            heads = {d.name: self.function_head(d, inner, mono[d.name], declared.get(d.name, (None,))[0])
+                     for d in comp if d.is_function}
             for name, (t, _) in declared.items():
                 if name in heads:
                     self.apply_sig(sigs[name], t, heads[name][1])
@@ -952,6 +955,8 @@ class Checker:
             return TFun([(p, self.type_of(t, tvars, line)) for p, t in te.params], self.type_of(te.result, tvars, line),
                         real=True)
         args = [self.type_of(a, tvars, line) for a in te.args]
+        if te.name == TUPLE_TYPE:
+            return TCon(TUPLE_TYPE, tuple(args))
         if te.name in NUM_ALIASES:
             return NUM
         if te.name in BASIC:
@@ -990,9 +995,10 @@ class Checker:
                 raise self.err(f"「{sig.name}」の型の宣言の「{seen[r]}」と「{name}」は、定義では同じ型になります", sig.line)
             seen[r] = name
 
-    def function_head(self, d: Define, env: TEnv, mono: Any = None) -> tuple:
+    def function_head(self, d: Define, env: TEnv, mono: Any = None, declared: Any = None) -> tuple:
         local = TEnv(env)
-        params = [(p, self.bind_param(pat, local)) for p, pat in d.params]
+        want = dict(declared.params) if isinstance(declared, TFun) else {}
+        params = [(p, self.bind_param(pat, local, want.get(p))) for p, pat in d.params]
         t = TFun(params, TVar(), real=True)
         if mono is not None:
             self.unify(mono, t)
@@ -1019,12 +1025,19 @@ class Checker:
             self.expect(result, BOOL, d.line, f"述語「{d.name}」の値")
         return TFun(params, result, real=True)
 
-    def bind_param(self, pat: Any, env: TEnv) -> Any:
-        """関数の引数(「a」か「a と b」)に型を付ける"""
+    def bind_param(self, pat: Any, env: TEnv, declared: Any = None) -> Any:
+        """関数の引数(「a」か「a と b」)に型を付ける。
+        「a と b」の型が「文字列 と JSON」と宣言されていれば、a・b に別々の型を付ける"""
         if isinstance(pat, str):
             t = TVar()
             env.vars[pat] = t
             return t
+        declared = prune(declared)
+        if isinstance(declared, TCon) and declared.name == TUPLE_TYPE and len(declared.args) == len(pat):
+            items = [TVar() for _ in pat]
+            for name, t in zip(pat, items):
+                env.vars[name] = t
+            return TCon(TUPLE_TYPE, tuple(items))
         elem = TVar()
         for name in pat:
             env.vars[name] = elem
@@ -1064,15 +1077,39 @@ class Checker:
         return TVar()  # 分からない名前は実行時にエラーになる
 
     def infer_ListLit(self, node: ListLit, env: TEnv) -> Any:
+        return self.list_type([(self.infer(item, env), first_line(item)) for item in node.items])
+
+    def list_type(self, items: list) -> Any:
+        """要素の型 [(型, 行)] のリストの型"""
         elem = TVar()
-        for item in node.items:
-            t = self.infer(item, env)
+        for t, line in items:
             self.unify_or(
-                elem, t, first_line(item),
+                elem, t, line,
                 lambda sa, sb: f"リストの要素の型がそろっていません({sa} と {sb})。"
-                "違う型の値をまとめるときは、組か選択肢のある型を使ってください",
+                "違う型の値をまとめるときは、組か選択肢のある型を使ってください"
+                "(関数の引数なら、型の宣言で「文字列 と 数 を …」のように要素ごとの型を書けます)",
             )
         return lst(elem)
+
+    def match_list(self, t: Any, items: list) -> None:
+        """引数に書いた「a と b」(要素の型 [(型, 行)])を、関数の引数の型 t に合わせる"""
+        r = prune(t)
+        if isinstance(r, TCon) and r.name == TUPLE_TYPE and len(r.args) == len(items):
+            for k, (want, (got, line)) in enumerate(zip(r.args, items)):
+                self.unify_or(want, got, line,
+                              lambda sa, sb, k=k: f"「と」でつないだ{k + 1}番目の値は{sa}のはずですが、{sb}です")
+            return
+        self.unify_or(t, self.list_type(items), items[0][1] if items else self.line,
+                      lambda sa, sb: f"「と」でつないだ値の型が合いません({sa} と {sb})")
+
+    def tuple_param(self, name: str, part: str, env: TEnv) -> bool:
+        """関数 name の引数 part の型が「文字列 と 数」(要素ごとに型の決まったリスト)と宣言されているか"""
+        v = env.lookup(name)
+        t = prune(v.t if isinstance(v, Scheme) else v)
+        if not isinstance(t, TFun):
+            return False
+        want = prune(dict(t.params).get(part))
+        return isinstance(want, TCon) and want.name == TUPLE_TYPE
 
     def infer_Prop(self, node: Prop, env: TEnv) -> Any:
         t = self.infer(node.target, env)
@@ -1198,6 +1235,7 @@ class Checker:
         args: dict = {}
         each = False
         lifted: list = []  # 「の 結果」の引数: (値の型, 結果の型, 行)
+        listed: list = []  # 「a と b」の引数: (引数の型, [(要素の型, 行)])
         for p, a in node.args.items():
             if isinstance(a, Each):
                 t = self.infer(a.target, env)
@@ -1212,9 +1250,16 @@ class Checker:
                 self.monad_elem(m, elem, env)
                 args[p] = elem
                 lifted.append((m, elem, a.line or node.line))
+            elif isinstance(a, ListLit) and self.tuple_param(node.name, p, env):
+                # 「「a」 と 3 を 一項目にする」: 引数の型が「文字列 と 数」と宣言されていれば要素ごとに合わせる
+                items = [(self.infer(item, env), first_line(item)) for item in a.items]
+                args[p] = TVar()
+                listed.append((args[p], items))
             else:
                 args[p] = self.infer(a, env)
         result = self.call_type(node.name, args, node.line, env)
+        for t, items in listed:
+            self.match_list(t, items)
         if each:
             result = lst(result)
         # 最後の「の 結果」は写像、その前のものは前から順に連鎖する
@@ -2265,9 +2310,9 @@ def _t_contains(c, a, line):
 # ---------------------------------------------------------------------------
 
 
-def check(source: str, base_dir: str = ".") -> None:
-    """型を調べる。間違いがあれば SuruError を出す。読み込むファイルは base_dir から探す"""
-    ctx = ParseContext(base_dir=base_dir)
+def check(source: str, base_dir: str = ".", path: str = "") -> None:
+    """型を調べる。間違いがあれば SuruError を出す。読み込むファイルは base_dir から探す(path は調べるファイル自身)"""
+    ctx = ParseContext(base_dir=base_dir, path=path)
     check_parsed(parse_program(source, ctx), ctx)
 
 

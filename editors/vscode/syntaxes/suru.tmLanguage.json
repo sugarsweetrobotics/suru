@@ -65,11 +65,11 @@
       "patterns": [
         {
           "name": "string.quoted.other.suru",
-          "match": "「[^」]*」"
+          "match": "(?<str>「(?:[^「」]|\\g<str>)*」)"
         },
         {
           "name": "invalid.illegal.unclosed-string.suru",
-          "match": "「[^」]*$"
+          "match": "「.*$"
         }
       ]
     },
@@ -270,7 +270,7 @@
       "match": "[\\p{L}_&&[^ぁ-ゟ]][\\p{L}\\p{Nd}_&&[^ぁ-ゟ]]*"
     },
     "punct-line": {
-      "begin": "^(?=(?:「[^」]*」|『[^』]*』|[^「『#＃※。、])*[。、])",
+      "begin": "^(?=(?:(?<str>「(?:[^「」]|\\g<str>)*」)|『[^』]*』|[^「『#＃※。、])*[。、])",
       "end": "$",
       "patterns": [
         {

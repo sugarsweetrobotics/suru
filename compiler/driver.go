@@ -31,6 +31,7 @@ func LinkFlags(ir string) []string {
 func CompileSource(source, baseDir, path string, check bool) (ir string, err *SuruError) {
 	err = try(func() {
 		ctx := NewParseContext(baseDir)
+		ctx.Path = filePath(path)
 		program := ParseProgram(source, ctx)
 		if check {
 			TypeCheck(program, ctx)
@@ -40,6 +41,14 @@ func CompileSource(source, baseDir, path string, check bool) (ir string, err *Su
 		ir = newCompiler(ctx, source).compile(program, path)
 	})
 	return
+}
+
+// filePath は解析するファイルの絶対パス(ファイルでなければ "")
+func filePath(path string) string {
+	if path == "" || strings.HasPrefix(path, "<") {
+		return ""
+	}
+	return absPath(path)
 }
 
 // ParseSource は する のプログラムを構文解析だけする(型の検査はしない)。間違いがあれば *SuruError

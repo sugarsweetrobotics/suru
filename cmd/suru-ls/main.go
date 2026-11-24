@@ -211,11 +211,11 @@ func pathToURI(path string) string {
 // update は uri の中身を調べて間違いを出す。relint なら点検もやり直す(でなければ前の知らせを使う)
 func (s *server) update(uri, text string, relint bool) {
 	d := &document{uri: uri, text: text, lines: compiler.SplitLines(text)}
-	base := "."
-	if p := uriToPath(uri); p != "" {
-		base = filepath.Dir(p)
+	base, path := ".", uriToPath(uri)
+	if path != "" {
+		base = filepath.Dir(path)
 	}
-	d.analysis = analyze(text, base)
+	d.analysis = analyze(text, base, path)
 	// 書いている途中で構文が崩れているときは、前に分かった名前で補完する
 	d.completions = d.analysis.Completions
 	old := s.docs[uri]
@@ -273,13 +273,13 @@ func (s *server) prepareLint() {
 }
 
 // analyze はコンパイラの中で思わぬ panic が起きても、サーバーを止めない
-func analyze(text, base string) (a *compiler.Analysis) {
+func analyze(text, base, path string) (a *compiler.Analysis) {
 	defer func() {
 		if r := recover(); r != nil {
 			a = &compiler.Analysis{Error: &compiler.SuruError{Message: fmt.Sprintf("解析の途中で問題が起きました: %v", r)}}
 		}
 	}()
-	return compiler.Analyze(text, base)
+	return compiler.AnalyzeFile(text, base, path)
 }
 
 // --- 要求 ---
