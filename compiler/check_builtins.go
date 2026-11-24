@@ -424,6 +424,9 @@ func init() {
 	simple("ポート取得する", []TParam{{WO, NUM}}, act(NUM))
 	simple("相手アドレス取得する", []TParam{{WO, NUM}}, act(STR))
 	simple("相手ポート取得する", []TParam{{WO, NUM}}, act(NUM))
+	simple("ブロードキャスト許可する", []TParam{{WO, NUM}}, act(NUM))
+	simple("マルチキャスト参加する", []TParam{{WO, NUM}, {"に", STR}}, act(NUM))
+	simple("マルチキャスト離脱する", []TParam{{WO, NUM}, {"から", STR}}, act(NUM))
 	simple("UDPバイト列送信する", []TParam{{WO, bytesT}, {"から", NUM}, {"に", STR}, {"で", NUM}}, act(NUM))
 	simple("UDPバイト列受信する", []TParam{{"から", NUM}}, act(&TCon{"UDP便", []Type{bytesT, STR, NUM}})) // lib/通信.suru の型
 	prim("逆順にする", []partReq{req(WO)}, func() Type {
