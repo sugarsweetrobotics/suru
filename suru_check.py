@@ -2073,6 +2073,9 @@ _simple("送信する", [(WO, STR), ("へ", NUM)], act(NUM))
 _simple("バイト列送信する", [(WO, BYTES), ("へ", NUM)], act(NUM))
 _simple("切断する", [(WO, NUM)], act(NUM))
 _simple("待機時間設定する", [(WO, NUM), ("で", NUM)], act(NUM))
+_simple("UDP開始する", [(WO, NUM)], act(NUM))
+_simple("UDPバイト列送信する", [(WO, BYTES), ("から", NUM), ("に", STR), ("で", NUM)], act(NUM))
+_simple("UDPバイト列受信する", [("から", NUM)], act(TCon("UDP便", (BYTES, STR, NUM))))  # lib/通信.suru の型
 
 # スレッド(「スレッド」の組み込み)。並行開始した結果は、合流する(待って結果を返す)動作
 def _thread(t: Any) -> TCon:
