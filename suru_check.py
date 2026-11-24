@@ -1939,6 +1939,9 @@ _simple("文字列にする", [(WO, BYTES)], STR)
 _simple("バイト長にする", [(WO, BYTES)], NUM)
 _simple("番地にする", [(WO, NUM)], ADDR)
 _simple("番地数値にする", [(WO, ADDR)], NUM)
+for _n in ("ビット積にする", "ビット和にする", "排他的論理和にする", "左シフトする", "右シフトする"):
+    _simple(_n, [(WO, NUM), ("で", NUM)], NUM)
+_simple("バイト列排他和にする", [(WO, BYTES), ("で", BYTES)], BYTES)
 @prim("直列化する", {WO: True}, lambda: TFun([(WO, TVar())], BYTES))
 def _t_serialize(c, a, line):
     return BYTES
@@ -2065,6 +2068,7 @@ _simple("バイト列受信する", [("から", NUM), (WO, NUM)], act(BYTES))
 _simple("送信する", [(WO, STR), ("へ", NUM)], act(NUM))
 _simple("バイト列送信する", [(WO, BYTES), ("へ", NUM)], act(NUM))
 _simple("切断する", [(WO, NUM)], act(NUM))
+_simple("待機時間設定する", [(WO, NUM), ("で", NUM)], act(NUM))
 
 # スレッド(「スレッド」の組み込み)。並行開始した結果は、合流する(待って結果を返す)動作
 def _thread(t: Any) -> TCon:

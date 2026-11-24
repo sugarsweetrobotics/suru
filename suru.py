@@ -3839,7 +3839,36 @@ STD_PRIMITIVES = [
     # 環境(lib/環境.suru が使う)
     Builtin("引数取得する", [], lambda it, a, line: Action("引数取得する", lambda it2: tuple(PROGRAM_ARGS))),
     Builtin("終了する", [(WO, True)], lambda it, a, line: _exit_action(a[WO], line)),
+    # ビット演算(整数を2の補数の並びとして扱う)
+    Builtin("ビット積にする", [(WO, True), ("で", True)], lambda it, a, line: _bit_op("ビット積にする", a, line, lambda x, y: x & y)),
+    Builtin("ビット和にする", [(WO, True), ("で", True)], lambda it, a, line: _bit_op("ビット和にする", a, line, lambda x, y: x | y)),
+    Builtin("排他的論理和にする", [(WO, True), ("で", True)], lambda it, a, line: _bit_op("排他的論理和にする", a, line, lambda x, y: x ^ y)),
+    Builtin("左シフトする", [(WO, True), ("で", True)], lambda it, a, line: _shift("左シフトする", a, line, lambda x, n: x << n)),
+    Builtin("右シフトする", [(WO, True), ("で", True)], lambda it, a, line: _shift("右シフトする", a, line, lambda x, n: x >> n)),
+    Builtin("バイト列排他和にする", [(WO, True), ("で", True)], lambda it, a, line: _bytes_xor(a[WO], a["で"], line)),
 ]
+
+
+def _bit_op(name: str, a: dict, line: int, op: Any) -> int:
+    return op(_int(a[WO], f"「{name}」の「を」", line), _int(a["で"], f"「{name}」の「で」", line))
+
+
+def _shift(name: str, a: dict, line: int, op: Any) -> int:
+    x = _int(a[WO], f"「{name}」の「を」", line)
+    n = _int(a["で"], f"「{name}」の「で」", line)
+    if not 0 <= n <= 63:
+        raise SuruError(f"「{name}」の「で」は 0 から 63 までです(「{n}」が渡されました)", line)
+    return op(x, n)
+
+
+def _bytes_xor(v: Any, k: Any, line: int) -> bytes:
+    """「b を 鍵 で バイト列排他和にする」: b の各バイトと、鍵を繰り返したものとの排他的論理和"""
+    b = _bytes(v, "「バイト列排他和にする」の「を」", line)
+    key = _bytes(k, "「バイト列排他和にする」の「で」", line)
+    if not key:
+        raise SuruError("「バイト列排他和にする」の「で」(鍵)が空のバイト列です", line)
+    rep = (key * (len(b) // len(key) + 1))[:len(b)]
+    return (int.from_bytes(b, "big") ^ int.from_bytes(rep, "big")).to_bytes(len(b), "big") if b else b""
 
 PROGRAM_ARGS: list[str] = []  # プログラムに渡した引数(「suru プログラム.suru a b」の a と b)
 
@@ -4050,6 +4079,16 @@ class _Net:
             self.files[v] = sock.makefile("rb")
         return self.files[v]
 
+    def read(self, v: Any, line: int, how: Any) -> Any:
+        """読み込み用で読む。時間切れになった読み込み用はもう読めないので、次は作り直す"""
+        try:
+            return how(self.reader(v, line))
+        except TimeoutError:
+            f = self.files.pop(v, None)
+            if f is not None:
+                f.close()
+            raise
+
 
 def _net(it: "Interpreter") -> _Net:
     net = getattr(it, "_net", None)
@@ -4104,14 +4143,14 @@ def _accept(net: _Net, a: dict, line: int) -> int:
 
 def _recv_line(net: _Net, a: dict, line: int) -> str:
     # 行の終わりの改行も含めて返す。相手が閉じていれば空の文字列
-    return net.reader(a["から"], line).readline(65536).decode("utf-8", "replace")
+    return net.read(a["から"], line, lambda f: f.readline(65536)).decode("utf-8", "replace")
 
 
 def _recv(net: _Net, a: dict, line: int) -> str:
     n = _num(a[WO], line)
     if not isinstance(n, int) or n < 0:
         raise SuruError(f"「{format_value(a[WO])}」は受信するバイト数ではありません", line)
-    return net.reader(a["から"], line).read(n).decode("utf-8", "replace")
+    return net.read(a["から"], line, lambda f: f.read(n)).decode("utf-8", "replace")
 
 
 def _recv_bytes(net: _Net, a: dict, line: int) -> bytes:
@@ -4119,7 +4158,7 @@ def _recv_bytes(net: _Net, a: dict, line: int) -> bytes:
     n = _num(a[WO], line)
     if not isinstance(n, int) or n < 0:
         raise SuruError(f"「{format_value(a[WO])}」は受信するバイト数ではありません", line)
-    return net.reader(a["から"], line).read(n)
+    return net.read(a["から"], line, lambda f: f.read(n))
 
 
 def _send(net: _Net, a: dict, line: int) -> int:
@@ -4132,6 +4171,15 @@ def _send_bytes(net: _Net, a: dict, line: int) -> int:
     data = _bytes(a[WO], "「バイト列送信する」の「を」", line)
     net.get(a["へ"], "接続", line).sendall(data)
     return len(data)
+
+
+def _set_timeout(net: _Net, a: dict, line: int) -> int:
+    """「接続 を 秒 で 待機時間設定する」: 受信・送信を待つ秒数(0 なら待ち続ける)"""
+    sec = _num(a["で"], line)
+    if isinstance(sec, bool) or sec < 0:
+        raise SuruError(f"「{format_value(a['で'])}」は待つ秒数ではありません(0 以上の数です)", line)
+    net.get(a[WO], "接続", line).settimeout(sec if sec > 0 else None)
+    return a[WO]
 
 
 def _close(net: _Net, a: dict, line: int) -> int:
@@ -4155,6 +4203,7 @@ NET_PRIMITIVES = [
     Builtin("送信する", [(WO, True), ("へ", True)], _net_action("送信する", _send)),
     Builtin("バイト列送信する", [(WO, True), ("へ", True)], _net_action("バイト列送信する", _send_bytes)),
     Builtin("切断する", [(WO, True)], _net_action("切断する", _close)),
+    Builtin("待機時間設定する", [(WO, True), ("で", True)], _net_action("待機時間設定する", _set_timeout)),
 ]
 
 

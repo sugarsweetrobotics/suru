@@ -230,7 +230,7 @@ def test_でを省いた試行するは成否を返す(tmp_path):
     for r in run_both(TRY, tmp_path):
         assert (r.returncode, r.stdout) == (1, TRY_OUT)
         assert r.stderr == ("エラー: 9行目 8文字目: a\nエラー: ファイル『無い.txt』を開くのに失敗しました(No such file or directory)\n"
-                             "  経路:\n    157行目 71文字目(ここで実行時エラー)\n    4行目 本文読取する\n    10行目 一番外\n")  # 157行目は lib/ファイル.suru の行
+                             "  経路:\n    160行目 71文字目(ここで実行時エラー)\n    4行目 本文読取する\n    10行目 一番外\n")  # 160行目は lib/標準.suru の 理由失敗する の行
 
 
 def test_でを省いた試行するの型():
