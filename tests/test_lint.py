@@ -207,6 +207,7 @@ def test_構文木の規則(kind, tmp_path):
 
 def test_例とライブラリは知らせなし(tmp_path):
     files = sorted(str(p) for p in (ROOT / "examples").glob("*.suru")) + sorted(str(p) for p in (ROOT / "lib").glob("*.suru"))
+    files += sorted(str(p) for p in (ROOT / "examples" / "通信").glob("*.suru"))
     files += sorted(str(p) for p in (ROOT / "tests").glob("*.suru"))
     r = run_lint(KINDS[-1], tmp_path, *files)
     assert (r.returncode, r.stdout) == (0, ""), r.stdout + r.stderr
