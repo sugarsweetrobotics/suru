@@ -18,7 +18,8 @@ def _err(src: str) -> SuruError:
     return info.value
 
 
-@pytest.mark.parametrize("path", sorted((ROOT / "examples").glob("*.suru")), ids=lambda p: p.name)
+@pytest.mark.parametrize("path", sorted((ROOT / "examples").glob("*.suru")) + sorted((ROOT / "examples" / "通信").glob("*.suru")),
+                         ids=lambda p: p.name)
 def test_例はすべて検査を通る(path):
     check(path.read_text(encoding="utf-8"), str(path.parent))
 

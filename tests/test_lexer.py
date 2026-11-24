@@ -14,7 +14,7 @@ import suru  # noqa: E402
 import suru_compile  # noqa: E402
 
 DUMP = ROOT / "tests" / "字句出力.suru"
-FILES = sorted((ROOT / "examples").glob("*.suru")) + sorted((ROOT / "lib").glob("*.suru"))
+FILES = sorted((ROOT / "examples").glob("*.suru")) + sorted((ROOT / "examples" / "通信").glob("*.suru")) + sorted((ROOT / "lib").glob("*.suru"))
 
 KINDS = {"NUM": "数", "STR": "文字列", "OP": "演算子", "LP": "開き", "RP": "閉じ", "WORD": "名前", "KW": "予約語",
          "PART": "助詞", "CALL": "呼出", "PERIOD": "句点", "SEP": "区切り"}

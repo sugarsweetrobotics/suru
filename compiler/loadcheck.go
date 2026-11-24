@@ -40,6 +40,7 @@ var stdPrimitives = []builtinInfo{
 var netPrimitives = []builtinInfo{
 	{"待受開始する", nil}, {"接続受付する", nil}, {"接続する", nil}, {"行受信する", nil}, {"受信する", nil}, {"バイト列受信する", nil},
 	{"送信する", nil}, {"バイト列送信する", nil}, {"切断する", nil}, {"待機時間設定する", nil},
+	{"UDP開始する", nil}, {"UDPバイト列送信する", nil}, {"UDPバイト列受信する", nil},
 }
 
 // スレッド.suru の中と「スレッド内の…」でだけ使える組み込み

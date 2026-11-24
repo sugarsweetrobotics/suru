@@ -46,7 +46,7 @@ def compare(path: pathlib.Path, suruc: pathlib.Path, out: pathlib.Path) -> None:
         assert (out / "go.ll").read_bytes() == (out / "py.ll").read_bytes()
 
 
-EXAMPLES = sorted((ROOT / "examples").glob("*.suru"))
+EXAMPLES = sorted((ROOT / "examples").glob("*.suru")) + sorted((ROOT / "examples" / "通信").glob("*.suru"))
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=[p.stem for p in EXAMPLES])
