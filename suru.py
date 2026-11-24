@@ -4152,24 +4152,26 @@ def _net_action(name: str, run: Any) -> Any:
 
 
 def _bind_addr(name: str, a: dict, line: int) -> tuple:
-    """「ポート を アドレス に 待受開始する」の、待ち受けるアドレスとポート(「に」がなければ 0.0.0.0)"""
+    """「ポート を アドレス に 待受開始する」の、アドレスの種類と待ち受けるアドレス(「に」がなければ 0.0.0.0。IPv6 のアドレスなら IPv6)"""
     import socket
     port = _num(a[WO], line)
     if not isinstance(port, int) or not 0 <= port <= 65535:
         raise SuruError(f"「{format_value(a[WO])}」はポートの番号ではありません", line)
     if "に" not in a:
-        return ("0.0.0.0", port)
+        return socket.AF_INET, ("0.0.0.0", port)
     host = _str(a["に"], f"「{name}」の「に」", line)
     try:
-        return socket.getaddrinfo(host, port, socket.AF_INET, 0, 0, socket.AI_PASSIVE)[0][4]
+        found = socket.getaddrinfo(host, port, socket.AF_UNSPEC, 0, 0, socket.AI_PASSIVE)
     except socket.gaierror as e:
         raise SuruError(f"「{name}」で通信に失敗しました({e.strerror or e})", line) from None
+    pick = next((r for r in found if r[0] == socket.AF_INET), found[0])  # 名前なら IPv4 を先に(今までどおり)
+    return pick[0], pick[4]
 
 
 def _listen(net: _Net, a: dict, line: int) -> int:
     import socket
-    addr = _bind_addr("待受開始する", a, line)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    family, addr = _bind_addr("待受開始する", a, line)
+    sock = socket.socket(family, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         sock.bind(addr)
@@ -4255,8 +4257,8 @@ def _close(net: _Net, a: dict, line: int) -> int:
 def _udp_open(net: _Net, a: dict, line: int) -> int:
     """「ポート を UDP開始する」: 0.0.0.0(「に」があればそのアドレス)のそのポートで受け取る UDP の口(0 なら OS が選ぶ)"""
     import socket
-    addr = _bind_addr("UDP開始する", a, line)
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    family, addr = _bind_addr("UDP開始する", a, line)
+    sock = socket.socket(family, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         sock.bind(addr)
@@ -4276,7 +4278,7 @@ def _udp_send(net: _Net, a: dict, line: int) -> int:
     if not isinstance(port, int) or not 0 <= port <= 65535:
         raise SuruError(f"「{format_value(a['で'])}」はポートの番号ではありません", line)
     try:
-        addr = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_DGRAM)[0][4]
+        addr = socket.getaddrinfo(host, port, sock.family, socket.SOCK_DGRAM)[0][4]  # 口と同じ種類のアドレス
     except socket.gaierror as e:
         raise SuruError(f"「UDPバイト列送信する」で通信に失敗しました({e.strerror or e})", line) from None
     return sock.sendto(data, addr)
@@ -4303,6 +4305,38 @@ def _peer_port(net: _Net, a: dict, line: int) -> int:
     return net.get(a[WO], "接続", line).getpeername()[1]
 
 
+def _broadcast(net: _Net, a: dict, line: int) -> int:
+    """「口 を ブロードキャスト許可する」: 255.255.255.255 などへ送れるようにする"""
+    import socket
+    net.get(a[WO], "UDPの口", line).setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    return a[WO]
+
+
+def _multicast(join: bool) -> Any:
+    """「口 を アドレス に マルチキャスト参加する」「口 を アドレス から マルチキャスト離脱する」"""
+    def run(net: _Net, a: dict, line: int) -> int:
+        import ipaddress
+        import socket
+        import struct
+        name, part = ("マルチキャスト参加する", "に") if join else ("マルチキャスト離脱する", "から")
+        sock = net.get(a[WO], "UDPの口", line)
+        text = _str(a[part], f"「{name}」の「{part}」", line)
+        try:
+            group = ipaddress.ip_address(text)
+        except ValueError:
+            group = None
+        if group is None or not group.is_multicast:
+            raise SuruError(f"「{text}」はマルチキャストのアドレスではありません(IPv4 は 224.0.0.0〜239.255.255.255、IPv6 は ff で始まる)", line)
+        if group.version == 4:
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP if join else socket.IP_DROP_MEMBERSHIP,
+                            group.packed + socket.inet_aton("0.0.0.0"))
+        else:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP if join else socket.IPV6_LEAVE_GROUP,
+                            group.packed + struct.pack("@I", 0))
+        return a[WO]
+    return run
+
+
 NET_PRIMITIVES = [
     Builtin("待受開始する", [(WO, True), ("に", False)], _net_action("待受開始する", _listen)),
     Builtin("接続受付する", [("から", True)], _net_action("接続受付する", _accept)),
@@ -4320,6 +4354,9 @@ NET_PRIMITIVES = [
     Builtin("ポート取得する", [(WO, True)], _net_action("ポート取得する", _local_port)),
     Builtin("相手アドレス取得する", [(WO, True)], _net_action("相手アドレス取得する", _peer_addr)),
     Builtin("相手ポート取得する", [(WO, True)], _net_action("相手ポート取得する", _peer_port)),
+    Builtin("ブロードキャスト許可する", [(WO, True)], _net_action("ブロードキャスト許可する", _broadcast)),
+    Builtin("マルチキャスト参加する", [(WO, True), ("に", True)], _net_action("マルチキャスト参加する", _multicast(True))),
+    Builtin("マルチキャスト離脱する", [(WO, True), ("から", True)], _net_action("マルチキャスト離脱する", _multicast(False))),
 ]
 
 

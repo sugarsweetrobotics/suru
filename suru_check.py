@@ -2087,6 +2087,9 @@ _t_bind("UDP開始する")
 _simple("ポート取得する", [(WO, NUM)], act(NUM))
 _simple("相手アドレス取得する", [(WO, NUM)], act(STR))
 _simple("相手ポート取得する", [(WO, NUM)], act(NUM))
+_simple("ブロードキャスト許可する", [(WO, NUM)], act(NUM))
+_simple("マルチキャスト参加する", [(WO, NUM), ("に", STR)], act(NUM))
+_simple("マルチキャスト離脱する", [(WO, NUM), ("から", STR)], act(NUM))
 _simple("UDPバイト列送信する", [(WO, BYTES), ("から", NUM), ("に", STR), ("で", NUM)], act(NUM))
 _simple("UDPバイト列受信する", [("から", NUM)], act(TCon("UDP便", (BYTES, STR, NUM))))  # lib/通信.suru の型
 
