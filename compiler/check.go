@@ -516,6 +516,15 @@ func (c *Checker) checkUnit(program []Node, prims map[string]any) *TEnv {
 	for _, s := range program {
 		if imp, ok := s.(*Import); ok {
 			sc := c.checkModule(imp.Module, imp.Line)
+			for name := range imp.Module.Private {
+				if local.hidden == nil {
+					local.hidden = map[string]string{}
+				}
+				local.hidden[imp.Module.Name+ModuleSep+name] = imp.Module.Name
+				if imp.Open {
+					local.hidden[name] = imp.Module.Name
+				}
+			}
 			for name, v := range sc.vars {
 				if !strings.HasPrefix(name, "\x00") && !strings.Contains(name, ModuleSep) && !imp.Module.Private[name] {
 					local.set(imp.Module.Name+ModuleSep+name, v)
@@ -1391,6 +1400,7 @@ func (c *Checker) inferVar(n *Var, env *TEnv) Type {
 	if info, ok := c.ctx.Ctors.Get(n.Name); ok && len(info.Fields) == 0 {
 		return c.ctorType(n.Name)
 	}
+	c.checkHidden(n.Name, env, n.Line)
 	return newTVar()
 }
 
@@ -1543,7 +1553,16 @@ func (c *Checker) callType(name string, args typedArgs, line Pos, env *TEnv) Typ
 		c.env = env
 		return typer(c, args, line)
 	}
+	c.checkHidden(name, env, line)
 	return newTVar()
+}
+
+// checkHidden は、読み込んだファイルの非公開の名前を使っていれば「定義されていません」にする
+// (分からない名前はふつう実行時にエラーになるが、非公開の名前は動かす前に知らせる #118)
+func (c *Checker) checkHidden(name string, env *TEnv, line Pos) {
+	if m, ok := env.hiddenIn(name); ok {
+		c.fail(line, "「"+name+"」は定義されていません(「"+m+"」で非公開とされています)")
+	}
 }
 
 func (c *Checker) callFun(name string, t *TFun, args typedArgs, line Pos) Type {
@@ -1586,6 +1605,7 @@ func (c *Checker) funValue(name string, env *TEnv, line Pos) Type {
 	if sig, ok := builtinFuns[name]; ok {
 		return sig()
 	}
+	c.checkHidden(name, env, line)
 	return newTVar()
 }
 
