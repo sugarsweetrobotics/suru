@@ -80,3 +80,27 @@ func TestIOTejun(t *testing.T) {
 		t.Errorf("成否の手順がエラーになりました: %v", err)
 	}
 }
+
+// パターンの「s という 形」は「s の 形」と同じ
+func TestToiuPattern(t *testing.T) {
+	shape := "図形 とは 半径 の 円 か 幅 と 高 の 長方形\n"
+	pairs := [][2]string{
+		{"（半径 という 円） を 面積にする とは 半径\n（幅 と 高 という 長方形） を 面積にする とは 幅\n",
+			"（半径 の   円） を 面積にする とは 半径\n（幅 と 高 の   長方形） を 面積にする とは 幅\n"},
+		{"x とは もし 5 の 円 が 半径 という 円 ならば 半径 そうでなければ 0\n", "x とは もし 5 の 円 が 半径 の   円 ならば 半径 そうでなければ 0\n"},
+		{"x とは もし 5 の 円 が 半径 は r という 円 ならば r そうでなければ 0\n", "x とは もし 5 の 円 が 半径 は r の   円 ならば r そうでなければ 0\n"},
+	}
+	for _, p := range pairs {
+		a, err := ParseSource(shape+p[0], ".")
+		if err != nil {
+			t.Fatalf("%q: %v", p[0], err)
+		}
+		b, err := ParseSource(shape+p[1], ".")
+		if err != nil {
+			t.Fatalf("%q: %v", p[1], err)
+		}
+		if !reflect.DeepEqual(a, b) {
+			t.Errorf("%q と %q が違います", p[0], p[1])
+		}
+	}
+}

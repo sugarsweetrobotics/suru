@@ -1658,7 +1658,8 @@ class ExprParser:
         except SuruError:
             self.pos = start
             return None
-        if is_kw(self.peek(), KW_NO) and is_ctor(self.peek(1)):
+        if (is_kw(self.peek(), KW_NO) or is_kw(self.peek(), KW_TOIU)) and is_ctor(self.peek(1)):
+            # 「s の JSON文字列」「s という JSON文字列」(パターンでは「という」も書ける)
             no = self.next()
             return PCtor(self.next().value, items, no.line)
         if len(items) == 1 and isinstance(items[0], PCtor):
@@ -1703,7 +1704,7 @@ class ExprParser:
                 continue
             break
         ctor = None
-        if is_kw(self.peek(), KW_NO) and is_ctor(self.peek(1)):
+        if (is_kw(self.peek(), KW_NO) or is_kw(self.peek(), KW_TOIU)) and is_ctor(self.peek(1)):
             self.next()
             ctor = self.next().value
         return PNamed(fields, ctor, line)

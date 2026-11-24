@@ -851,7 +851,8 @@ func (p *ExprParser) tryCtorPattern() Node {
 		p.pos = start
 		return nil
 	}
-	if isKw(p.peek0(), KwNo) && isCtor(p.peek(1)) {
+	if (isKw(p.peek0(), KwNo) || isKw(p.peek0(), KwToiu)) && isCtor(p.peek(1)) {
+		// 「s の JSON文字列」「s という JSON文字列」(パターンでは「という」も書ける)
 		no := p.next()
 		return &PCtor{p.next().S, items, no.Line}
 	}
@@ -918,7 +919,7 @@ func (p *ExprParser) namedPattern() Node {
 		break
 	}
 	pn := &PNamed{Fields: fields, Line: line}
-	if isKw(p.peek0(), KwNo) && isCtor(p.peek(1)) {
+	if (isKw(p.peek0(), KwNo) || isKw(p.peek0(), KwToiu)) && isCtor(p.peek(1)) {
 		p.next()
 		pn.Ctor = p.next().S
 		pn.HasCtor = true
