@@ -70,6 +70,12 @@ const (
 	Hole    = "\x00前の結果"
 )
 
+// 関数の型の宣言の終わりの飾り: 「数 を 階乗する は 数 を 返す」の「を 返す」は読み捨てる
+const (
+	KwHensu       = "返す"
+	KwHensuPolite = "返します"
+)
+
 var operators = map[string]string{
 	"+": "+", "-": "-", "−": "-", "*": "*", "×": "*", "/": "/", "÷": "/",
 	"%": "%", "^": "^", "**": "^",
@@ -79,7 +85,7 @@ var operators = map[string]string{
 
 var keywords = setOf(
 	KwTo, KwTowa, KwNo, KwGa, KwIf, KwThen, KwElse, KwLambda, KwReturn, KwProviso,
-	KwKa, KwWa, KwToiu, KwKumi, KwSeishitsu, KwSorekara, KwKatsu, KwMataha, Desu,
+	KwKa, KwWa, KwToiu, KwKumi, KwSeishitsu, KwSorekara, KwKatsu, KwMataha, Desu, KwHensu, KwHensuPolite,
 	KwImport, KwImportPolit, KwImportTe, KwUse, KwUsePolite,
 )
 var kanjiKeywords = setOf(KwKumi, KwSeishitsu)
@@ -392,7 +398,7 @@ func classify(word string, line Pos, quoted bool) ([]*Token, error) {
 			if rest != "" {
 				r0, _ := utf8.DecodeRuneInString(rest)
 				if !isHiragana(r0) {
-					if rest == KwReturn {
+					if rest == KwReturn || rest == KwHensu || rest == KwHensuPolite {
 						return []*Token{tok("PART", p, line), tok("KW", rest, line)}, nil
 					}
 					call, err := classifyCall(rest, line)
@@ -596,7 +602,7 @@ var operatorChars = func() map[rune]bool {
 	return m
 }()
 
-var mixedWords = []string{"受け取って", "返すこと", "長さ", "残り", KwImportPolit, KwImport, KwImportTe, KwUsePolite, KwUse}
+var mixedWords = []string{"受け取って", "返すこと", KwHensuPolite, KwHensu, "長さ", "残り", KwImportPolit, KwImport, KwImportTe, KwUsePolite, KwUse}
 var mixedNames = []string{"畳み込み"}
 var mixedAll = append(append([]string{}, mixedWords...), mixedNames...)
 var mixedNameSet = setOf(mixedNames...)

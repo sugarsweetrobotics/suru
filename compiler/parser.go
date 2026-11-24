@@ -1733,6 +1733,18 @@ func isTypeWord(t *Token) bool {
 	return builtinTypeSet[t.S] || curCtx.Types.Has(t.S) || (len([]rune(t.S)) == 1 && strings.Contains(typeVarNames, t.S))
 }
 
+const returnsOnlyFun = "「を 返す」は関数の型の宣言の終わりにだけ書けます(「数 を 階乗する は 数 を 返す」)"
+
+// dropReturns は型の宣言の「は」より後ろの終わりの飾り「を 返す」「を 返します」を取り除く
+func dropReturns(right []*Token) ([]*Token, bool) {
+	n := len(right)
+	if n >= 3 && right[n-2].Kind == "PART" && right[n-2].S == "を" && right[n-1].Kind == "KW" &&
+		(right[n-1].S == KwHensu || right[n-1].S == KwHensuPolite) {
+		return right[:n-2], true
+	}
+	return right, false
+}
+
 func tryParseTypeSig(tokens []*Token) Node {
 	ha := findTopLevel(tokens, KwWa)
 	if ha <= 0 || ha == len(tokens)-1 {
@@ -1741,7 +1753,9 @@ func tryParseTypeSig(tokens []*Token) Node {
 	left, right := tokens[:ha], tokens[ha+1:]
 	line := tokens[0].Line
 	last := left[len(left)-1]
+	right, returns := dropReturns(right)
 	if last.Kind == "CALL" && last.Form == Suru && !last.Negated {
+		// 関数: 「型 助詞 型 助詞 … 名前する は 型」(後ろに「を 返す」を付けてもよい)
 		var params []TypeParam
 		i := 0
 		for i < len(left)-1 {
@@ -1766,6 +1780,9 @@ func tryParseTypeSig(tokens []*Token) Node {
 	if len(left) == 1 && left[0].Kind == "WORD" && len(right) > 0 && (isTypeWord(right[0]) || right[0].Kind == "LP") {
 		if len(right) == 1 && !isTypeWord(right[0]) {
 			return nil
+		}
+		if returns {
+			raise(line, returnsOnlyFun)
 		}
 		return &TypeSig{checkName(left[0]), nil, false, parseTypeAll(right, line), line}
 	}

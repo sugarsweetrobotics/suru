@@ -29,6 +29,9 @@
       "include": "#lambda"
     },
     {
+      "include": "#returns"
+    },
+    {
       "include": "#builtin"
     },
     {
@@ -126,6 +129,10 @@
     "lambda": {
       "name": "keyword.other.lambda.suru",
       "match": "(?:受け取って|返すこと)"
+    },
+    "returns": {
+      "name": "keyword.other.declaration.suru",
+      "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(?:返します|返す)(?!こと)(?![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])"
     },
     "builtin": {
       "name": "support.function.builtin.suru",
@@ -283,6 +290,9 @@
         },
         {
           "include": "#lambda"
+        },
+        {
+          "include": "#returns"
         },
         {
           "include": "#builtin"

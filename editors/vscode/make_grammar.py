@@ -109,6 +109,11 @@ def build() -> dict:
             "name": "keyword.other.lambda.suru",
             "match": alt([suru.KW_LAMBDA, suru.KW_RETURN]),
         },
+        # 関数の型の宣言の終わりの飾り「数 を 返す」「数 を 返します」(「返すこと」は lambda)
+        "returns": {
+            "name": "keyword.other.declaration.suru",
+            "match": f"{not_before}{alt([suru.KW_HENSU, suru.KW_HENSU_POLITE])}(?!こと){not_after}",
+        },
         "builtin": {
             "name": "support.function.builtin.suru",
             "match": f"{not_before}{alt(builtins)}{forms}",
@@ -169,7 +174,7 @@ def build() -> dict:
 
     def rules(call_rule):
         return [{"include": f"#{k}"} for k in
-                ["comment", "string", "quoted-name", "import", "module", "lambda", "builtin", call_rule,
+                ["comment", "string", "quoted-name", "import", "module", "lambda", "returns", "builtin", call_rule,
                  "kanji-keyword", "number", "operator", "punctuation", "hiragana", "name"]]
 
     # 「。」か「、」を含む行(文字列・『』・コメントの中は数えない)は句読点の書き方、それ以外は空白の書き方
