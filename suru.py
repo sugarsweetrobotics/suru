@@ -134,6 +134,7 @@ KW_IMPORT_TE = "読み込んで"  # 「数学」 を 読み込んで 使う: 前
 KW_USE = "使う"
 KW_USE_POLITE = "使います"
 SOURCE_SUFFIX = ".suru"
+KW_MAIN_THREAD = "主スレッドで"  # 外部の「SDL3」 を 主スレッドで 読み込む
 KW_EXTERN = "外部の"  # 外部の「m」 を 読み込む / x を 余弦にする とは 外部の「cos」
 
 KEYWORDS = {
@@ -1098,6 +1099,7 @@ class ExternLib:
     name: str  # 書いたとおり(「m」「./libあれ.so」)
     path: str  # 短い名前(「m」)か、ファイルなら絶対パス
     line: int
+    main_thread: bool = False  # 「外部の「m」 を 主スレッドで 読み込む」
 
 
 @dataclass
@@ -1111,6 +1113,7 @@ class Extern:
     params: list = field(default_factory=list)
     result: str = ""
     action: bool = False
+    main_thread: bool = False  # 主スレッドで呼ぶ(同じファイルに「… を 主スレッドで 読み込む」がある)
     pointer: str = ""  # 「外部の（f）」なら、関数の番地を持つ引数の名前(C には渡さない)
     # 「外部の「f」（a と 0 と b）」なら、C に渡す引数の並び: ("引数", 定義の引数の番号) か ("定数", 整数)。
     # 読んだときは ("名前", 名前) で、_attach_externs が番号にする。空なら定義の引数の順
@@ -1131,12 +1134,12 @@ VIS_PRIVATE = "非公開とする"
 
 TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import, ExternLib, Visibility)
 TYPE_VAR_NAMES = "甲乙丙丁戊己庚辛壬癸"
-# 小数・整数は数の別名(外部の関数の宣言で C の double・int を表す)。番地は C のポインタ
+# 小数・整数・単精度は数の別名(外部の関数の宣言で C の double・int・float を表す)。番地は C のポインタ
 # 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
-BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作")
+BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作", "単精度")
 # 外部の関数に渡せる型 → C の型の名前(バイト列は引数だけ、無は値だけ)
 FFI_TYPES = {"数": "i64", "小数": "f64", "整数": "i32", "真偽": "bool", "文字列": "str", "番地": "ptr",
-             "バイト列": "bytes", "無": "void"}
+             "バイト列": "bytes", "無": "void", "単精度": "f32"}
 
 
 class ParseContext:
@@ -2392,7 +2395,7 @@ def _type_word(tok: Token, args: list) -> Any:
         if args:
             raise SuruError(f"「{name}」は型の引数をとりません", tok.line)
         return TypeVarName(name)
-    if name in ("数", "文字列", "真偽", "小数", "整数", "番地", "バイト列", "無") and args:
+    if name in ("数", "文字列", "真偽", "小数", "整数", "番地", "バイト列", "無", "単精度") and args:
         raise SuruError(f"「{name}」は型の引数をとりません", tok.line)
     if name in ("リスト", "動作") and len(args) != 1:
         raise SuruError(f"「{name}」の前には型を1つ書いてください(「数 の {name}」)", tok.line)
@@ -2875,16 +2878,20 @@ def extern_lib_target(node: Node, ctx: ParseContext) -> ExternLib | None:
         tokens = tokens[:-1]
     if not tokens or not (tokens[0].kind == "WORD" and tokens[0].value == KW_EXTERN and not tokens[0].quoted):
         return None
+    main_thread = len(tokens) == 5 and tokens[3].kind == "WORD" and tokens[3].value == KW_MAIN_THREAD and not tokens[3].quoted
+    if main_thread:
+        tokens = tokens[:3] + tokens[4:]
     if (len(tokens) != 4 or tokens[1].kind != "STR" or not (tokens[2].kind == "PART" and tokens[2].value == WO)
             or not (is_kw(tokens[3], KW_IMPORT) or is_kw(tokens[3], KW_IMPORT_POLITE)) or node.line.indent):
-        raise SuruError(f"外部のライブラリは一番外に「{KW_EXTERN}「m」 を {KW_IMPORT}」のように書いて読み込みます", tokens[0].line)
+        raise SuruError(f"外部のライブラリは一番外に「{KW_EXTERN}「m」 を {KW_IMPORT}」"
+                        f"(主スレッドで呼ぶなら「{KW_EXTERN}「m」 を {KW_MAIN_THREAD} {KW_IMPORT}」)のように書いて読み込みます", tokens[0].line)
     name = tokens[1].value
     if not name:
         raise SuruError("外部のライブラリの名前が空です", tokens[0].line)
     path = name
     if "/" in name or name.endswith((".so", ".dylib")):
         path = os.path.abspath(os.path.join(ctx.base_dir, name))
-    return ExternLib(name, path, tokens[0].line)
+    return ExternLib(name, path, tokens[0].line, main_thread)
 
 
 def _ffi_type(te: Any, sig: TypeSig, what: str) -> str:
@@ -2919,6 +2926,7 @@ def _parse_extern_args(inner: list, lp: Token) -> list:
 def _attach_externs(statements: list) -> None:
     """外部の関数の定義に、同じファイルのライブラリと型の宣言(C の型)を付ける"""
     libs = [s.path for s in statements if isinstance(s, ExternLib)]
+    main_thread = any(s.main_thread for s in statements if isinstance(s, ExternLib))
     sigs = {s.name: s for s in statements if isinstance(s, TypeSig)}
     seen: dict[str, str] = {}
     for d in statements:
@@ -2961,6 +2969,7 @@ def _attach_externs(statements: list) -> None:
             result = result.args[0]
         ext.result = _ffi_type(result, sig, "値")
         ext.libs = libs
+        ext.main_thread = main_thread
         if ext.pointer:
             continue
         if ext.symbol in seen:
@@ -4866,7 +4875,7 @@ def _ffi_symbol(ext: Extern, line: int) -> Any:
 def _ffi_ctype(t: str) -> Any:
     import ctypes
 
-    return {"i64": ctypes.c_int64, "f64": ctypes.c_double, "i32": ctypes.c_int32, "bool": ctypes.c_int32,
+    return {"i64": ctypes.c_int64, "f64": ctypes.c_double, "f32": ctypes.c_float, "i32": ctypes.c_int32, "bool": ctypes.c_int32,
             "str": ctypes.c_char_p, "ptr": ctypes.c_void_p, "bytes": ctypes.c_char_p, "void": None}[t]
 
 
@@ -4883,7 +4892,7 @@ def _ffi_arg(t: str, v: Any, name: str, part: str, line: int) -> Any:
         if not lo <= v <= hi:
             raise bad(f"{lo} から {hi} までの整数")
         return v
-    if t == "f64":
+    if t in ("f64", "f32"):
         if not isinstance(v, (int, float)) or isinstance(v, bool):
             raise bad("数")
         return float(v)
@@ -4916,7 +4925,7 @@ def _ffi_result(t: str, r: Any, name: str, line: int) -> Any:
         return r
     if t == "i32":
         return int(r)
-    if t == "f64":
+    if t in ("f64", "f32"):
         return float(r)
     if t == "bool":
         return r != 0
@@ -4935,7 +4944,12 @@ def extern_builtin(d: Define) -> Builtin:
 
     def call(a: dict, line: int) -> Any:
         import ctypes
+        import threading
 
+        if ext.main_thread and threading.current_thread() is not threading.main_thread():
+            # インタプリタはプログラムを最初のスレッドで動かすので、別のスレッドからは呼べない
+            raise SuruError(f"外部の関数「{d.name}」は主スレッドで呼ぶ関数なので、並行して動かしている処理からは呼べません"
+                            "(インタプリタの制限です。コンパイルしたものでは呼べます)", line)
         if ext.pointer:
             k = names.index(ext.pointer)
             fp = a[parts[k]]

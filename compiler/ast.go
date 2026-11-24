@@ -276,17 +276,20 @@ type ExternLib struct {
 	Name string // 書いたとおり
 	Path string // 短い名前か、ファイルなら絶対パス
 	Line Pos
+	// MainThread は「外部の「m」 を 主スレッドで 読み込む」
+	MainThread bool
 }
 
 // Extern は「x を 余弦にする とは 外部の「cos」」の本体
 type Extern struct {
-	Symbol  string
-	Line    Pos
-	Libs    []string
-	Params  []string // 定義の引数の順に C の型(i64 f64 i32 bool str ptr)
-	Result  string
-	Action  bool
-	Pointer string // 「外部の（f）」なら、関数の番地を持つ引数の名前(C には渡さない)
+	Symbol     string
+	Line       Pos
+	Libs       []string
+	Params     []string // 定義の引数の順に C の型(i64 f64 i32 bool str ptr)
+	Result     string
+	Action     bool
+	MainThread bool   // 主スレッドで呼ぶ(同じファイルに「… を 主スレッドで 読み込む」がある)
+	Pointer    string // 「外部の（f）」なら、関数の番地を持つ引数の名前(C には渡さない)
 	// 「外部の「f」（a と 0 と b）」なら、C に渡す引数の並び(なければ定義の引数の順)
 	CArgs []ExternArg
 }
