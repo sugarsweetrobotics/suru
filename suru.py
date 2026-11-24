@@ -2268,6 +2268,26 @@ def drop_returns(right: list[Token]) -> tuple[list[Token], bool]:
     return right, False
 
 
+def action_returning(tokens: list[Token]) -> list[Token]:
+    """型の宣言の中の「数 を 返す 動作」を「数 の 動作」にする"""
+    out: list[Token] = []
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if (t.kind == "PART" and t.value == WO and i + 2 < len(tokens) and is_kw(tokens[i + 1], KW_HENSU)
+                and tokens[i + 2].kind == "WORD" and tokens[i + 2].value == ACTION_TYPE and not tokens[i + 2].quoted):
+            out.append(Token("KW", KW_NO, t.line))
+            out.append(tokens[i + 2])
+            i += 3
+            continue
+        out.append(t)
+        i += 1
+    return out
+
+
+ACTION_TYPE = "動作"
+
+
 def try_parse_type_sig(tokens: list[Token]) -> TypeSig | None:
     """「数 を 階乗する は 数」「税率 は 数」なら型の宣言を返す(そうでなければ None)"""
     ha = find_top_level(tokens, KW_WA)
@@ -2277,6 +2297,7 @@ def try_parse_type_sig(tokens: list[Token]) -> TypeSig | None:
     line = tokens[0].line
     last = left[-1]
     right, returns = drop_returns(right)
+    left, right = action_returning(left), action_returning(right)
     if last.kind == "CALL" and last.form == SURU and not last.negated:
         # 関数: 「型 助詞 型 助詞 … 名前する は 型」(後ろに「を 返す」を付けてもよい)
         params = []
