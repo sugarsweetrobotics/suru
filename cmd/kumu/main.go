@@ -43,12 +43,18 @@ const usage = `使い方: kumu <命令> [オプション]
   試験 [名前] 試験/ の「…試験する」を1つずつ動かす(test。名前の一部で選べる)
   点検        プロジェクトの全部のファイルを点検する(check)
   公開        確かめて Git のタグ v版 を付ける。push はしない(publish)
+  書き込む    マイコン向けに作って、USB でつないだ基板に書き込む(flash)
   版          kumu の版を出す(version)
   助け        この案内を出す(help)
 
 作る・実行・試験 のオプション:
   -O0 〜 -O3  clang の最適化の強さ(既定は -O2。試験は -O0)
   --検査なし  型の検査をしない(--no-check)
+
+マイコン向け(組.suru に「対象 とは 「arduino-uno」」と書くか、--対象 で選ぶ):
+  --対象 名前  基板を選ぶ(--target。` + "arduino-uno・arduino-nano・arduino-nano-old" + `)
+  --ポート 道  書き込むシリアルポート(--port。なければ見つけたもの)
+  新規・初期化 にも --対象 を付けられます(L チカの雛形を作る)
 `
 
 // commands は命令の名前(日本語と英語の別名)→ 正の名前
@@ -64,6 +70,7 @@ var commands = map[string]string{
 	"試験": "試験", "test": "試験",
 	"点検": "点検", "check": "点検", "lint": "点検",
 	"公開": "公開", "publish": "公開",
+	"書き込む": "書き込む", "flash": "書き込む", "upload": "書き込む",
 	"版": "版", "version": "版", "--版": "版", "--version": "版",
 	"助け": "助け", "help": "助け", "-h": "助け", "--help": "助け",
 }
@@ -94,26 +101,32 @@ func (k *kumu) run(args []string) int {
 		fmt.Fprint(k.stdout, usage)
 		return 0
 	case "新規":
-		if len(rest) != 1 {
-			fmt.Fprintln(k.stderr, "使い方: kumu 新規 名前")
+		rest, target, ok := targetOption(rest)
+		if !ok || len(rest) != 1 {
+			fmt.Fprintln(k.stderr, "使い方: kumu 新規 名前 [--対象 基板]")
 			return 2
 		}
 		name := rest[0]
-		if err := CreateProject(filepath.Join(k.dir, name), filepath.Base(name), true); err != nil {
+		if err := CreateProject(filepath.Join(k.dir, name), filepath.Base(name), true, target); err != nil {
 			return k.fail(err)
 		}
-		fmt.Fprintf(k.stderr, "「%s」を作りました(cd %s してから kumu 実行)\n", filepath.Base(name), name)
+		next := "kumu 実行"
+		if target != "" {
+			next = "kumu 書き込む"
+		}
+		fmt.Fprintf(k.stderr, "「%s」を作りました(cd %s してから %s)\n", filepath.Base(name), name, next)
 		return 0
 	case "初期化":
-		if len(rest) != 0 {
-			fmt.Fprintln(k.stderr, "使い方: kumu 初期化")
+		rest, target, ok := targetOption(rest)
+		if !ok || len(rest) != 0 {
+			fmt.Fprintln(k.stderr, "使い方: kumu 初期化 [--対象 基板]")
 			return 2
 		}
 		abs, err := filepath.Abs(k.dir)
 		if err != nil {
 			return k.fail(err)
 		}
-		if err := CreateProject(abs, filepath.Base(abs), false); err != nil {
+		if err := CreateProject(abs, filepath.Base(abs), false, target); err != nil {
 			return k.fail(err)
 		}
 		fmt.Fprintf(k.stderr, "「%s」を作りました\n", filepath.Base(abs))
@@ -131,9 +144,16 @@ func (k *kumu) run(args []string) int {
 		opt = "-O0"
 	}
 	var progArgs []string
+	target, port := "", ""
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
 		switch {
+		case (a == "--対象" || a == "--target") && i+1 < len(rest) && cmd != "試験":
+			target = rest[i+1]
+			i++
+		case (a == "--ポート" || a == "--port") && i+1 < len(rest) && cmd == "書き込む":
+			port = rest[i+1]
+			i++
 		case a == "--":
 			progArgs = append(progArgs, rest[i+1:]...)
 			i = len(rest)
@@ -158,6 +178,15 @@ func (k *kumu) run(args []string) int {
 	}
 	if err := CheckSysDeps(p, deps, k.stderr); err != nil {
 		return k.fail(err)
+	}
+	if target == "" {
+		target = p.Target
+	}
+	if target != "" {
+		return k.mcu(cmd, p, target, port)
+	}
+	if cmd == "書き込む" {
+		return k.fail(fmt.Errorf("書き込む には マイコンの対象 が要ります(%s に「対象 とは 「arduino-uno」」と書くか、--対象 で選んでください)", ConfigName))
 	}
 	if cmd == "試験" {
 		return k.test(p, progArgs, opt, check)

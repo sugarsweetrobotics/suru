@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	suru "github.com/suru-lang/suru"
+	"github.com/suru-lang/suru/cmd/internal/mcu"
 	"github.com/suru-lang/suru/cmd/internal/native"
 	"github.com/suru-lang/suru/compiler"
 )
@@ -25,7 +26,7 @@ import (
 // version はリリースのときに -ldflags "-X main.version=…" で書きかえる
 var version = "0.3.0"
 
-const usage = "使い方: suruc [--ll] [--検査なし] [-O0|-O1|-O2|-O3] プログラム.suru [-o 出力]"
+const usage = "使い方: suruc [--ll] [--検査なし] [-O0|-O1|-O2|-O3] [--対象 基板] プログラム.suru [-o 出力]"
 
 func run(args []string) int {
 	if len(args) >= 1 && (args[0] == "--version" || args[0] == "--版") {
@@ -36,6 +37,7 @@ func run(args []string) int {
 	check := true
 	opt := "-O2"
 	out := ""
+	target := ""
 	var files []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -52,6 +54,13 @@ func run(args []string) int {
 				return 2
 			}
 			out = args[i+1]
+			i++
+		case a == "--対象" || a == "--target":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, usage)
+				return 2
+			}
+			target = args[i+1]
 			i++
 		case strings.HasPrefix(a, "--"):
 		default:
@@ -72,6 +81,9 @@ func run(args []string) int {
 	abs, _ := filepath.Abs(srcPath)
 	baseDir := filepath.Dir(abs)
 	stem := strings.TrimSuffix(srcPath, filepath.Ext(srcPath))
+	if target != "" {
+		return buildMCU(source, abs, stem, out, target, llOnly)
+	}
 	ir, serr := compiler.CompileSource(source, baseDir, abs, check)
 	if serr != nil {
 		fmt.Fprintln(os.Stderr, compiler.FormatError(serr, source, true))
@@ -94,6 +106,48 @@ func run(args []string) int {
 			return 1
 		}
 		os.Remove(llPath)
+	}
+	return 0
+}
+
+// buildMCU はマイコン向けの .hex(--ll なら IR)を作る
+func buildMCU(source, abs, stem, out, target string, llOnly bool) int {
+	b, err := mcu.Lookup(target)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "エラー: "+err.Error())
+		return 1
+	}
+	ir, err := mcu.Compile(source, abs, b)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if llOnly {
+		if out == "" {
+			out = stem + ".ll"
+		}
+		if err := os.WriteFile(out, []byte(ir), 0o644); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	}
+	tools, err := mcu.FindTools(false)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "エラー: "+err.Error())
+		return 1
+	}
+	if out == "" {
+		out = stem
+	}
+	out = strings.TrimSuffix(out, ".hex")
+	r, err := mcu.Build(ir, out, b, tools)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "エラー: "+err.Error())
+		return 1
+	}
+	if s := r.Summary(); s != "" {
+		fmt.Fprintln(os.Stderr, s)
 	}
 	return 0
 }

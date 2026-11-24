@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/suru-lang/suru/cmd/internal/mcu"
 	"github.com/suru-lang/suru/compiler"
 )
 
@@ -29,6 +30,7 @@ type Project struct {
 	depLine int      // 「依存 とは …」の行(なければ 0)
 	SysDeps []SysDep // 外部依存: システムの C のライブラリ(pkg-config の名前)
 	Guide   []string // 導入案内: 外部依存が無いときに見せる入れ方
+	Target  string   // 対象: マイコンの基板(「arduino-uno」など。空ならこの計算機)
 }
 
 // SysDep は 組.suru の外部依存の1つ。「libpcre2-8」か、最低の版を付けた「libpcre2-8@10.30」
@@ -50,7 +52,7 @@ func (p *Project) EntryPath() string {
 }
 
 // configKeys は 組.suru に書ける項目(書く順)
-var configKeys = []string{"名前", "版", "入口", "依存", "外部依存", "導入案内"}
+var configKeys = []string{"名前", "版", "入口", "依存", "外部依存", "導入案内", "対象"}
 
 // ParseConfig は 組.suru の中身を読む。する の定義「名前 とは 「…」」だけを書ける
 func ParseConfig(source, root string) (*Project, error) {
@@ -121,6 +123,11 @@ func ParseConfig(source, root string) (*Project, error) {
 				return nil, configError(&compiler.SuruError{Message: "入口には、プロジェクトのフォルダの中のファイルの名前を書きます", Line: pos}, source)
 			}
 			p.Entry = e
+		case "対象":
+			if _, err := mcu.Lookup(s.Value); err != nil {
+				return nil, configError(&compiler.SuruError{Message: err.Error(), Line: pos}, source)
+			}
+			p.Target = s.Value
 		}
 	}
 	if p.Name == "" {
@@ -179,15 +186,32 @@ func FindProject(dir string) (*Project, error) {
 }
 
 // 雛形のファイル
-func configTemplate(name string) string {
-	return "名前 とは 「" + name + "」\n版 とは 「0.1.0」\n入口 とは 「本体」\n"
+func configTemplate(name, target string) string {
+	s := "名前 とは 「" + name + "」\n版 とは 「0.1.0」\n入口 とは 「本体」\n"
+	if target != "" {
+		s += "対象 とは 「" + target + "」\n"
+	}
+	return s
 }
 
 const entryTemplate = "「こんにちは」 を 表示する\n"
+
+// mcuEntryTemplate はマイコン向けの雛形(基板の LED を点滅させ、シリアルに挨拶する)
+const mcuEntryTemplate = `「マイコン」 を 読み込んで 使う
+
+点滅する とは 手順
+  内蔵灯 を 反転出力する
+  500 を ミリ秒待機する
+  点滅する
+
+内蔵灯 を 出力設定する
+「こんにちは」 を 表示する
+点滅する
+`
 const gitignoreTemplate = "/" + OutDir + "/\n"
 
 // CreateProject は dir に雛形を書く。fresh なら dir は新しく作る(既にあればエラー)
-func CreateProject(dir, name string, fresh bool) error {
+func CreateProject(dir, name string, fresh bool, target string) error {
 	if err := checkName(name); err != nil {
 		return err
 	}
@@ -201,9 +225,18 @@ func CreateProject(dir, name string, fresh bool) error {
 	} else if _, err := os.Stat(filepath.Join(dir, ConfigName)); err == nil {
 		return fmt.Errorf("「%s」は既にあります", filepath.Join(dir, ConfigName))
 	}
+	if target != "" {
+		if _, err := mcu.Lookup(target); err != nil {
+			return err
+		}
+	}
+	entry := entryTemplate
+	if target != "" {
+		entry = mcuEntryTemplate
+	}
 	files := []struct{ name, body string }{
-		{ConfigName, configTemplate(name)},
-		{"本体" + compiler.SourceSuffix, entryTemplate},
+		{ConfigName, configTemplate(name, target)},
+		{"本体" + compiler.SourceSuffix, entry},
 		{".gitignore", gitignoreTemplate},
 	}
 	for _, f := range files {
