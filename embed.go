@@ -15,3 +15,8 @@ var Lib embed.FS
 //
 //go:embed runtime/suru_rt.c
 var Runtime []byte
+
+// RuntimeAVR はマイコン(AVR)向けの小さい実行時ライブラリ(C)のソース
+//
+//go:embed runtime/avr/suru_avr.c
+var RuntimeAVR []byte
