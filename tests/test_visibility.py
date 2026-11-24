@@ -80,13 +80,52 @@ def test_非公開の名前はぶつからない(tmp_path):
     assert r.returncode == 0, r.stderr
 
 
+def fails(d: pathlib.Path, main: pathlib.Path) -> list:
+    """インタプリタと(あれば)Python 版・Go 版のコンパイラで、動かす前か動かして失敗した結果"""
+    out = [subprocess.run([sys.executable, str(ROOT / "suru.py"), str(main)], capture_output=True, text=True, timeout=60)]
+    if suru_compile.find_cc() is not None:
+        out.append(subprocess.run([sys.executable, str(ROOT / "suru_compile.py"), str(main), "-o", str(d / "p")],
+                                  capture_output=True, text=True, timeout=120))
+        exe = suruc()
+        if exe:
+            out.append(subprocess.run([exe, str(main), "-o", str(d / "g")], capture_output=True, text=True, timeout=60))
+    return out
+
+
 @pytest.mark.parametrize("use", ["部品内の補助する", "部品二内の補助する"])
 def test_非公開の名前は前置きでも使えない(tmp_path, use):
     main = write(tmp_path, {"部品.suru": PART, "部品二.suru": PART2,
                             "main.suru": f"「部品」 を 読み込む\n「部品二」 を 読み込む\n3 を {use}\n"})
-    for r in runs(tmp_path, main):
+    for r in fails(tmp_path, main):
         assert r.returncode == 1
         assert f"「{use}」は定義されていません" in r.stderr
+
+
+@pytest.mark.parametrize("body, name", [
+    ("  s を 成功にして 結果にする", "成功にする"),
+    ("  s を 標準内の成功にして 結果にする", "標準内の成功にする"),
+    ("  Base64字表 を 結果にする", "Base64字表"),
+], ids=["前置きなし", "前置き", "値"])
+def test_非公開の名前はコンパイルで見つける(tmp_path, body, name):
+    # #118: 関数の中で使っても、動かす前(型の検査)に「定義されていません」にする
+    src = ("「標準」 を 読み込んで 使う\n"
+           "s を 試する とは 入出力手順\n" + body + "\n"
+           "「呼ばない」 を 表示する\n")
+    main = write(tmp_path, {"main.suru": src})
+    for r in fails(tmp_path, main):
+        assert r.returncode == 1
+        assert "3行目" in r.stderr
+        assert f"「{name}」は定義されていません(「標準」で非公開とされています)" in r.stderr
+
+
+def test_同じ名前を自分で定義すれば使える(tmp_path):
+    src = ("「標準」 を 読み込んで 使う\n"
+           "x を 成功にする とは x + 1\n"
+           "1 を 成功にして 表示する\n")
+    main = write(tmp_path, {"main.suru": src})
+    for r in runs(tmp_path, main):
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == "2\n"
 
 
 @pytest.mark.parametrize("part, message", [

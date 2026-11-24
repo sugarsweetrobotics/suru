@@ -341,12 +341,24 @@ class TEnv:
     def __init__(self, parent: "TEnv | None" = None):
         self.vars: dict[str, Any] = {}  # 名前 → 型 か Scheme
         self.parent = parent
+        # 読み込んだファイルの「非公開とする」名前 → そのファイルの名前(見えないが、
+        # 呼べば型の検査で「定義されていません」にする)
+        self.hidden: dict[str, str] = {}
 
     def lookup(self, name: str) -> Any:
         e: TEnv | None = self
         while e is not None:
             if name in e.vars:
                 return e.vars[name]
+            e = e.parent
+        return None
+
+    def hidden_in(self, name: str) -> str | None:
+        """name が読み込んだファイルの非公開の名前なら、そのファイルの名前"""
+        e: TEnv | None = self
+        while e is not None:
+            if name in e.hidden:
+                return e.hidden[name]
             e = e.parent
         return None
 
@@ -674,6 +686,10 @@ class Checker:
         for s in program:
             if isinstance(s, Import):
                 scope = self.check_module(s.module, s.line)
+                for name in s.module.private:
+                    local.hidden[s.module.name + MODULE_SEP + name] = s.module.name
+                    if s.open:
+                        local.hidden[name] = s.module.name
                 for name, v in scope.vars.items():
                     if not name.startswith("\0") and MODULE_SEP not in name and name not in s.module.private:
                         local.vars[s.module.name + MODULE_SEP + name] = v
@@ -1044,6 +1060,7 @@ class Checker:
         info = self.ctx.ctors.get(node.name)
         if info is not None and not info[1]:
             return self.ctor_type(node.name)  # 中身のない形(「赤」)
+        self.check_hidden(node.name, env, node.line)
         return TVar()  # 分からない名前は実行時にエラーになる
 
     def infer_ListLit(self, node: ListLit, env: TEnv) -> Any:
@@ -1232,7 +1249,15 @@ class Checker:
         if typer is not None:
             self.env = env
             return typer(self, args, line)
+        self.check_hidden(name, env, line)
         return TVar()  # 実行時にエラーになる名前
+
+    def check_hidden(self, name: str, env: TEnv, line: Any) -> None:
+        """読み込んだファイルの非公開の名前を使っていれば「定義されていません」にする
+        (分からない名前はふつう実行時にエラーになるが、非公開の名前は動かす前に知らせる #118)"""
+        m = env.hidden_in(name)
+        if m is not None:
+            raise self.err(f"「{name}」は定義されていません(「{m}」で非公開とされています)", line)
 
     def call_fun(self, name: str, t: TFun, args: dict, line: Any) -> Any:
         params = dict(t.params)
@@ -1263,6 +1288,7 @@ class Checker:
         sig = BUILTIN_FUNS.get(name)
         if sig is not None:
             return sig()
+        self.check_hidden(name, env, line)
         return TVar()
 
     def infer_Ref(self, node: Ref, env: TEnv) -> Any:

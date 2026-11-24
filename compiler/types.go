@@ -524,11 +524,24 @@ type PrimRef struct{ Name string }
 type TEnv struct {
 	vars   map[string]any // 型 / *Scheme / *PrimRef
 	parent *TEnv
+	// hidden は読み込んだファイルの「非公開とする」名前 → そのファイルの名前(見えないが、
+	// 呼べば型の検査で「定義されていません」にする)
+	hidden map[string]string
 	// 自由な型変数を求めるための覚え: 各名前の型の自由な型変数(入れたとき)。
 	// 型変数は後で決まっても、その中の自由な型変数を見ればよいので、覚えは作り直さなくてよい
 	cand      []*TVar
 	candOK    bool
 	candEpoch int
+}
+
+// hiddenIn は name が読み込んだファイルの非公開の名前なら、そのファイルの名前
+func (e *TEnv) hiddenIn(name string) (string, bool) {
+	for ; e != nil; e = e.parent {
+		if m, ok := e.hidden[name]; ok {
+			return m, true
+		}
+	}
+	return "", false
 }
 
 func (e *TEnv) set(name string, v any) {
