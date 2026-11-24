@@ -144,6 +144,8 @@ type ParseContext struct {
 	InPrelude bool
 	// Qualify は読み込んだファイル(lib/ のものを除く)を解析しているときの「部品内の」。そのファイルの型と形の名前に付ける
 	Qualify string
+	// Path は解析しているファイルの絶対パス(自分と同じ名前のファイルを読み込むときに飛ばす。分からなければ "")
+	Path string
 }
 
 func NewParseContext(baseDir string) *ParseContext {
@@ -1322,7 +1324,7 @@ func parseDefinitionHead(tokens []*Token, line Pos) (string, []Param, bool) {
 		return last.S, nil, false
 	}
 	if last.Kind != "CALL" || last.Form != Suru {
-		raise(last.Line, "関数名は「する」で終わる必要があります")
+		panic(notSuruError(last))
 	}
 	for _, t := range tokens[:len(tokens)-1] {
 		if isPatternToken(t) {
@@ -1786,7 +1788,7 @@ func tryParseTypeSig(tokens []*Token) Node {
 		i := 0
 		for i < len(left)-1 {
 			var t Node
-			t, i = parseType(left, i)
+			t, i = parseParamType(left, i, len(left)-1)
 			if i >= len(left)-1 || !(left[i].Kind == "PART" || isKw(left[i], GA)) {
 				raise(line, "型の宣言では、引数の型の後に助詞を書いてください(「数 を 階乗する は 数」)")
 			}
@@ -1803,6 +1805,11 @@ func tryParseTypeSig(tokens []*Token) Node {
 		}
 		return &TypeSig{name, params, true, parseTypeAll(right, line), line}
 	}
+	if (last.Kind == "WORD" || last.Kind == "CALL") && len(left) >= 2 && (left[len(left)-2].Kind == "PART" || isKw(left[len(left)-2], GA)) &&
+		parsesAsType(right, line) {
+		// 「数 で 流す は 数 を 返す 入出力動作」: 関数の型の宣言のつもりで、名前が「する」で終わっていない
+		panic(notSuruError(last))
+	}
 	if len(left) == 1 && left[0].Kind == "WORD" && len(right) > 0 && (isTypeWord(right[0]) || right[0].Kind == "LP") {
 		if len(right) == 1 && !isTypeWord(right[0]) {
 			return nil
@@ -1813,6 +1820,19 @@ func tryParseTypeSig(tokens []*Token) Node {
 		return &TypeSig{checkName(left[0]), nil, false, parseTypeAll(right, line), line}
 	}
 	return nil
+}
+
+// notSuruError は関数名が「する」で終わっていないときのエラー(「x で 流す とは …」「数 で 流す は 数」)
+func notSuruError(last *Token) *SuruError {
+	word := last.Value()
+	if last.Kind == "CALL" && strings.HasSuffix(word, Suru) {
+		word = strings.TrimSuffix(word, Suru) + last.Form
+	}
+	return &SuruError{Message: "関数名は「する」で終わる必要があります(「" + word + "」)", Line: last.Line}
+}
+
+func parsesAsType(tokens []*Token, line Pos) bool {
+	return try(func() { parseTypeAll(tokens, line) }) == nil
 }
 
 func parseTypeAll(tokens []*Token, line Pos) Node {
@@ -1840,6 +1860,24 @@ func matching(tokens []*Token, i int) int {
 	}
 	raise(tokens[i].Line, "「（」が閉じていません")
 	return 0
+}
+
+// TupleType は引数の「文字列 と JSON を」の型(長さと要素ごとの型が決まったリスト)の TypeName の名前
+const TupleType = "と"
+
+// parseParamType は引数の型を1つ読む。「文字列 と JSON を」のように「と」でつなげば、定義の「名 と 値 を」に合わせて
+// 要素ごとに型の違うリスト(TypeName{"と", [文字列, JSON]})
+func parseParamType(tokens []*Token, i, end int) (Node, int) {
+	t, i := parseType(tokens, i)
+	items := []Node{t}
+	for i < end-1 && isKw(tokens[i], KwTo) {
+		t, i = parseType(tokens, i+1)
+		items = append(items, t)
+	}
+	if len(items) == 1 {
+		return t, i
+	}
+	return &TypeName{TupleType, items}, i
 }
 
 func parseType(tokens []*Token, i int) (Node, int) {
@@ -1916,7 +1954,7 @@ func parseFunType(tokens []*Token, line Pos) Node {
 		i := 0
 		for i < k {
 			var t Node
-			t, i = parseType(tokens[:k], i)
+			t, i = parseParamType(tokens[:k], i, k)
 			if i >= k || !(tokens[i].Kind == "PART" || isKw(tokens[i], GA)) {
 				raise(line, "関数の型では、引数の型の後に助詞を書いてください")
 			}
@@ -2992,13 +3030,28 @@ func loadModule(name string, ctx *ParseContext, line Pos) *Module {
 	if ctx.Packages == nil && !strings.HasPrefix(ctx.BaseDir, embeddedLibPrefix) {
 		ctx.Packages = FindPackages(ctx.BaseDir)
 	}
+	lib := embeddedLibPrefix + filepath.Clean(file)
+	if LibDir != "" {
+		lib = absPath(filepath.Join(LibDir, file))
+	}
+	if ctx.Path != "" && path == ctx.Path {
+		// 「試験/会話帳.suru」の「「会話帳」 を 読み込む」: 自分自身は飛ばして、依存・プロジェクトのフォルダ・標準の lib を探す
+		if p, ok := packagePath(name, ctx, line); ok {
+			return loadPath(p, file, ctx, line, false)
+		}
+		if p, ok := projectFile(file, ctx.BaseDir); ok {
+			return loadPath(p, file, ctx, line, false)
+		}
+		if exists(lib) {
+			return loadPath(lib, file, ctx, line, false)
+		}
+		raise(line, "「"+file+"」を読み込むと、自分自身を読み込むことになります(同じ名前の別のファイルなら、置き場所かファイルの名前を変えてください)")
+	}
 	if !exists(path) {
 		if p, ok := packagePath(name, ctx, line); ok {
 			path = p
-		} else if LibDir != "" {
-			path = absPath(filepath.Join(LibDir, file))
 		} else {
-			path = embeddedLibPrefix + filepath.Clean(file)
+			path = lib
 		}
 	}
 	return loadPath(path, file, ctx, line, false)
@@ -3024,7 +3077,7 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 	if ctx.Order != nil {
 		*ctx.Order = append(*ctx.Order, path)
 	}
-	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude, Order: ctx.Order}
+	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Path: path, Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude, Order: ctx.Order}
 	if !isLibPath(path) {
 		sub.Qualify = stem + ModuleSep
 	}

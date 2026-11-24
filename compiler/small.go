@@ -180,6 +180,7 @@ func sfail(line Pos, format string, args ...any) {
 func CompileSmall(source, baseDir, path string, target SmallTarget) (ir string, err *SuruError) {
 	err = try(func() {
 		ctx := NewParseContext(baseDir)
+		ctx.Path = filePath(path)
 		program := ParseProgram(source, ctx)
 		var uses []Use
 		if e := typeCheck(program, ctx, true, func(c *Checker) { uses = c.uses }); e != nil {

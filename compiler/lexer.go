@@ -448,6 +448,24 @@ func findRune(rs []rune, c rune, from int) int {
 	return -1
 }
 
+// findStringClose は rs[i] の「に対応する」の位置(なければ -1)。文字列の中の「」は入れ子として数える
+// (「失敗: 「abc」は数にできません」は1つの文字列)
+func findStringClose(rs []rune, i int) int {
+	depth := 0
+	for j := i; j < len(rs); j++ {
+		switch rs[j] {
+		case '「':
+			depth++
+		case '」':
+			depth--
+			if depth == 0 {
+				return j
+			}
+		}
+	}
+	return -1
+}
+
 func reservedError(here Pos) *SuruError {
 	return errAt(here, "中黒「・」は将来の書き方のために予約されています(文字列の中では使えます)")
 }
@@ -489,7 +507,7 @@ func tokenizeLine(text string, line int) ([]*Token, error) {
 			if err := flush(); err != nil {
 				return nil, err
 			}
-			j := findRune(rs, '」', i+1)
+			j := findStringClose(rs, i)
 			if j < 0 {
 				return nil, errAt(here, "文字列の「に対応する」がありません")
 			}
@@ -971,7 +989,7 @@ func tokenizePunctLine(text string, line int) ([]*Token, error) {
 			if err := flush(); err != nil {
 				return nil, err
 			}
-			j := findRune(rs, '」', i+1)
+			j := findStringClose(rs, i)
 			if j < 0 {
 				return nil, errAt(here, "文字列の「に対応する」がありません")
 			}
@@ -1022,11 +1040,10 @@ func isPunctLine(text string) bool {
 	for i := 0; i < n; i++ {
 		c := rs[i]
 		if c == '「' || c == '『' {
-			close := '」'
+			j := findStringClose(rs, i)
 			if c == '『' {
-				close = '』'
+				j = findRune(rs, '』', i+1)
 			}
-			j := findRune(rs, close, i+1)
 			if j < 0 {
 				return false
 			}

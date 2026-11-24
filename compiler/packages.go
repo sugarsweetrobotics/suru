@@ -112,6 +112,28 @@ func FindPackages(dir string) map[string]Package {
 	}
 }
 
+// projectFile はプロジェクト(組.suru のあるフォルダ)の一番上にある file。dir 自身がそのフォルダなら探さない
+func projectFile(file, dir string) (string, bool) {
+	if dir == "" || strings.HasPrefix(dir, embeddedLibPrefix) {
+		return "", false
+	}
+	start := absPath(dir)
+	for d := start; ; {
+		if _, err := os.Stat(filepath.Join(d, ProjectConfig)); err == nil {
+			p := filepath.Join(d, file)
+			if d == start || !exists(p) {
+				return "", false
+			}
+			return p, true
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return "", false
+		}
+		d = parent
+	}
+}
+
 // packagePath は読み込む名前「X」「X/部品」が依存のものなら、そのファイルのパス
 func packagePath(name string, ctx *ParseContext, line Pos) (string, bool) {
 	if ctx.Packages == nil {

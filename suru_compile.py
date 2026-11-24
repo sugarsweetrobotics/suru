@@ -1117,8 +1117,8 @@ def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check
     if check:
         from suru_check import check as type_check
 
-        type_check(source, base_dir)
-    ctx = S.ParseContext(base_dir=base_dir)
+        type_check(source, base_dir, path)
+    ctx = S.ParseContext(base_dir=base_dir, path=path)
     program = S.parse_program(source, ctx)
     LINE_BASE.clear()
     base = line_count(source)
