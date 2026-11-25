@@ -239,6 +239,21 @@ def test_定義と使用(kind, tmp_path):
         "mixed.suru:3:1: 書き方の混在: このファイルは空白の書き方が3文、句読点の書き方が2文あります。空白の書き方にそろえると読みやすくなります\n")
 
 
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_局所の名前を名前するで呼ぶのは使用(kind, tmp_path):
+    # #140: 局所の定義に入れた関数を「変換する」「変換した」で呼ぶなら、使ったと数える
+    (tmp_path / "local.suru").write_text(
+        "値 を 発行する とは 手順\n"
+        "  変換 とは （a を 受け取って a * 2 を 返すこと）\n"
+        "  加工 とは （a を 受け取って a + 1 を 返すこと）\n"
+        "  他 とは （a を 受け取って a * 3 を 返すこと）\n"
+        "  b とは 値 を 変換する\n"
+        "  （b を 加工して） を 表示する\n"
+        "3 を 発行する\n", encoding="utf-8")
+    r = run_lint(kind, tmp_path, "local.suru")
+    assert r.stdout == "local.suru:4:3: 未使用の定義: 「他」は定義されていますが、使われていません\n", r.stderr
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_構文木の規則(kind, tmp_path):
     (tmp_path / "型.suru").write_text(TYPES, encoding="utf-8")
