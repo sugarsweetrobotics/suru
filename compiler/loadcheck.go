@@ -31,9 +31,22 @@ var stdPrimitives = []builtinInfo{
 	{"バイト数にする", nil}, {"文字にする", nil}, {"文字コードにする", nil}, {"試行する", nil}, {"後始末実行する", nil},
 	{"バイト列にする", nil}, {"バイト列組立する", nil}, {"数列にする", nil}, {"文字列にする", nil},
 	{"バイト長にする", nil}, {"番地にする", nil}, {"番地数値にする", nil}, {"直列化する", nil}, {"復元する", nil}, {"固定直列化する", nil}, {"固定復元する", nil}, {"バイト列取得する", nil},
-	{"書込する", nil}, {"エラー番号取得する", nil}, {"失敗する", nil}, {"引数取得する", nil}, {"終了する", nil},
+	{"書込する", nil}, {"番地加算する", nil}, {"エラー番号取得する", nil}, {"失敗する", nil}, {"引数取得する", nil}, {"終了する", nil},
 	{"ビット積にする", nil}, {"ビット和にする", nil}, {"排他的論理和にする", nil}, {"左シフトする", nil}, {"右シフトする", nil},
 	{"バイト列排他和にする", nil},
+}
+
+// cMemTypes は「…読取する」「…書込する」で読み書きできる C の型(suru.py の C_MEM_TYPES と同じ順)
+var cMemTypes = []string{"符号付き8", "符号付き16", "符号付き32", "符号付き64", "符号なし8", "符号なし16", "符号なし32", "符号なし64",
+	"単精度", "小数", "番地", "真偽", "C文字列"}
+
+func init() {
+	for _, t := range cMemTypes {
+		stdPrimitives = append(stdPrimitives, builtinInfo{t + "読取する", nil}, builtinInfo{t + "書込する", nil})
+	}
+	for _, n := range []string{"C形作成する", "入れ子設定する", "C大きさにする", "C揃えにする", "C位置にする", "C直列化する", "C復元する", "構造体読取する", "構造体書込する"} {
+		stdPrimitives = append(stdPrimitives, builtinInfo{n, nil})
+	}
 }
 
 // 通信.suru の中と「通信内の…」でだけ使える組み込み

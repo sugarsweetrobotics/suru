@@ -34,7 +34,7 @@
 
 typedef int64_t V;
 
-enum { T_INT = 0, T_FLT = 1, T_BOOL, T_STR, T_LIST, T_REC, T_FN, T_ACT, T_PURE, T_LAZY, T_ADDR, T_BYTES };
+enum { T_INT = 0, T_FLT = 1, T_BOOL, T_STR, T_LIST, T_REC, T_FN, T_ACT, T_PURE, T_LAZY, T_ADDR, T_BYTES, T_CSHAPE };
 
 typedef struct { int32_t tag; } Hdr;
 typedef struct { int32_t tag; double d; } Flt;
@@ -69,12 +69,15 @@ typedef struct Fn {
     struct Trait *trait;    /* FK_TRAIT */
     int32_t wo, wo_list;
 } Fn;
-enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_SENDB, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT,
+enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_SENDB, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT, A_MEMR, A_MEMW, A_STRUCTR, A_STRUCTW,
        A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_FIFO_NEW, A_CH_FIFO_OPEN, A_CH_FIFO_DEL, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
        A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY, A_INPUT_OPT, A_RECVB, A_TIMEOUT,
        A_UDP_OPEN, A_UDP_SEND, A_UDP_RECV, A_LOCAL_PORT, A_PEER_ADDR, A_PEER_PORT,
        A_BROADCAST, A_MC_JOIN, A_MC_LEAVE };
-typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; V c, d; } Act; /* c・d は引数が3つ以上の動作だけ(UDPバイト列送信する) */
+typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; V c, d; } Act;
+/* C形(「C形作成する」): 見本の組と欄。ctype は C_MEM の番号か -1(構造体)、count は配列の要素の数(配列でなければ -1) */
+typedef struct { int32_t ctype; int64_t count; V inner; } CFieldC;
+typedef struct { int32_t tag; int32_t n; V sample; CFieldC f[]; } CShapeObj; /* c・d は引数が3つ以上の動作だけ(UDPバイト列送信する) */
 typedef struct { int32_t tag; V v; } Pure;
 typedef struct { int32_t tag, state; Code code; void *up; V v; } Lazy;
 
@@ -1007,6 +1010,7 @@ static const char *type_name_of(V v) {
     case T_LIST: return "リスト";
     case T_ADDR: return "番地";
     case T_BYTES: return "バイト列";
+    case T_CSHAPE: return "C形";
     default: return "関数";
     }
 }
@@ -1078,6 +1082,7 @@ static void fmt_value(Buf *b, V v, int nested, int use_traits) {
     case T_ACT: buf_printf(b, "<動作 %s>", AS(Act, v)->name); return;
     case T_PURE: buf_cat(b, "<動作 結果にする>"); return;
     case T_ADDR: buf_printf(b, "番地(0x%llx)", (unsigned long long)(uintptr_t)AS(Addr, v)->p); return;
+    case T_CSHAPE: buf_printf(b, "<C形 %s>", short_type_name(AS(Rec, AS(CShapeObj, v)->sample)->c->name)); return;
     case T_BYTES: {
         Bytes *x = AS(Bytes, v);
         buf_cat(b, "バイト列（");
@@ -1652,7 +1657,7 @@ static V act_run(Act *a) {
         return (V)(intptr_t)out;
     }
     case A_CALL: return apply1(a->a, V_EMPTY, a->pos); /* 外部の関数を呼ぶ動作 */
-    case A_PEEK: case A_POKE: case A_ERRNO: case A_FAIL: case A_ARGS: case A_EXIT: return mem_run(a);
+    case A_PEEK: case A_POKE: case A_ERRNO: case A_FAIL: case A_ARGS: case A_EXIT: case A_MEMR: case A_MEMW: case A_STRUCTR: case A_STRUCTW: return mem_run(a);
     case A_SPAWN: case A_JOIN: case A_NCPU: case A_CH_NEW: case A_CH_PIPE: case A_CH_FIFO_NEW: case A_CH_FIFO_OPEN: case A_CH_FIFO_DEL: case A_CH_SEND: case A_CH_RECV: case A_CH_CLOSE: case A_CH_EACH:
     case A_LOCK_NEW: case A_LOCKED: case A_SLOT_NEW: case A_SLOTTED: case A_BOX_NEW: case A_BOX_GET: case A_BOX_UPDATE: case A_BOX_SET:
         return thread_run(a);
@@ -2762,7 +2767,7 @@ BI(n_udp_recv) { return mk_net(A_UDP_RECV, "UDPバイト列受信する", a[0], 
 
 static const int32_t P1_DE[] = {P_DE}, P2_DE_WO[] = {P_DE, P_WO}, P1_WO[] = {P_WO}, P2_WO_NI[] = {P_WO, P_NI}, P2_KARA_WO[] = {P_KARA, P_WO},
                      P2_WO_DE[] = {P_WO, P_DE}, P2_KARA_DE[] = {P_KARA, P_DE}, P3_WO_KARA_DE[] = {P_WO, P_KARA, P_DE},
-                     P2_GA_WO[] = {P_GA, P_WO}, P1_KARA[] = {P_KARA}, P2_WO_HE[] = {P_WO, P_HE}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P2_GA_DE[] = {P_GA, P_DE}, P2_NI_DE[] = {P_NI, P_DE},
+                     P2_GA_WO[] = {P_GA, P_WO}, P1_KARA[] = {P_KARA}, P2_WO_HE[] = {P_WO, P_HE}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P3_WO_HE_DE[] = {P_WO, P_HE, P_DE}, P3_WO_DE_NI[] = {P_WO, P_DE, P_NI}, P3_KARA_DE_WO[] = {P_KARA, P_DE, P_WO}, P4_WO_HE_DE_NI[] = {P_WO, P_HE, P_DE, P_NI}, P2_GA_DE[] = {P_GA, P_DE}, P2_NI_DE[] = {P_NI, P_DE},
                      P4_WO_KARA_NI_DE[] = {P_WO, P_KARA, P_NI, P_DE}, P2_WO_KARA[] = {P_WO, P_KARA};
 static const uint8_t R_OPT1[] = {0}, R_1_OPT[] = {1, 0};
 
@@ -3145,6 +3150,440 @@ BI(m_poke) { /* を, へ */
     need_addr(a[1], "「書込する」の「へ」", pos);
     return mk_act_pos(A_POKE, "書込する", a[0], a[1], pos);
 }
+/* C のメモリを型を決めて読み書きする(番地 + 位置のところの値を1つ。suru.py の C_SCALARS と同じ並び) */
+enum { CK_INT, CK_FLT, CK_PTR, CK_BOOL, CK_STR };
+typedef struct { const char *name; int32_t size, kind, sign; const char *rd, *wr; } CMemType;
+static const CMemType C_MEM[] = {
+    {"符号付き8", 1, CK_INT, 1, "符号付き8読取する", "符号付き8書込する"},
+    {"符号付き16", 2, CK_INT, 1, "符号付き16読取する", "符号付き16書込する"},
+    {"符号付き32", 4, CK_INT, 1, "符号付き32読取する", "符号付き32書込する"},
+    {"符号付き64", 8, CK_INT, 1, "符号付き64読取する", "符号付き64書込する"},
+    {"符号なし8", 1, CK_INT, 0, "符号なし8読取する", "符号なし8書込する"},
+    {"符号なし16", 2, CK_INT, 0, "符号なし16読取する", "符号なし16書込する"},
+    {"符号なし32", 4, CK_INT, 0, "符号なし32読取する", "符号なし32書込する"},
+    {"符号なし64", 8, CK_INT, 0, "符号なし64読取する", "符号なし64書込する"},
+    {"単精度", 4, CK_FLT, 0, "単精度読取する", "単精度書込する"},
+    {"小数", 8, CK_FLT, 0, "小数読取する", "小数書込する"},
+    {"番地", 8, CK_PTR, 0, "番地読取する", "番地書込する"},
+    {"真偽", 1, CK_BOOL, 0, "真偽読取する", "真偽書込する"},
+    {"C文字列", 0, CK_STR, 0, "C文字列読取する", "C文字列書込する"},
+};
+enum { CM_I8, CM_I16, CM_I32, CM_I64, CM_U8, CM_U16, CM_U32, CM_U64, CM_F32, CM_F64, CM_PTR, CM_BOOL, CM_STR };
+
+/* 整数の型に入る範囲(64 ビットはコンパイルしたプログラムの整数の範囲にそろえる) */
+static void c_int_range(const CMemType *t, int64_t *lo, int64_t *hi) {
+    int bits = t->size * 8;
+    if (!t->sign) {
+        *lo = 0;
+        *hi = bits >= 63 ? INT_MAX62 : (int64_t)((1ULL << bits) - 1);
+    } else {
+        *lo = bits >= 63 ? INT_MIN62 : -(int64_t)(1ULL << (bits - 1));
+        *hi = bits >= 63 ? INT_MAX62 : (int64_t)((1ULL << (bits - 1)) - 1);
+    }
+}
+
+static int64_t c_offset(V v, const char *fn, int32_t pos) {
+    if (IS_INT(v)) return INT_VAL(v);
+    if (TAG(v) == T_FLT) {
+        double d = AS(Flt, v)->d;
+        if (d == floor(d) && d >= (double)INT_MIN62 && d <= (double)INT_MAX62) return (int64_t)d;
+    }
+    fail(pos, "「%s」の「で」は位置(整数のバイト数)でなければなりません(「%s」が渡されました)", fn, plain(v).s);
+}
+
+/* する の値 v が C の型 t に入るかを確かめる(入らなければエラー)。文字列は書くバイト数(NUL を含む)を返す */
+static int64_t c_check(const CMemType *t, V v, const char *what, int32_t pos) {
+    switch (t->kind) {
+    case CK_STR: {
+        Str *s = need_str(v, what, pos);
+        if ((int64_t)strlen(s->s) != s->n) fail(pos, "%sは途中に文字コード 0 を含まない文字列でなければなりません", what);
+        return s->n + 1;
+    }
+    case CK_PTR: need_addr(v, what, pos); return t->size;
+    case CK_BOOL:
+        if (TAG(v) != T_BOOL) fail(pos, "%sは真偽でなければなりません(「%s」が渡されました)", what, plain(v).s);
+        return t->size;
+    }
+    if (!is_num(v)) fail(pos, "%sは数でなければなりません(「%s」が渡されました)", what, plain(v).s);
+    if (t->kind == CK_INT) {
+        int64_t lo, hi;
+        c_int_range(t, &lo, &hi);
+        int ok = IS_INT(v) && INT_VAL(v) >= lo && INT_VAL(v) <= hi;
+        if (!IS_INT(v)) {
+            double d = AS(Flt, v)->d;
+            ok = d == floor(d) && d >= (double)lo && d <= (double)hi;
+        }
+        if (!ok) fail(pos, "「%s」は%sに入りません(%lld から %lld までの整数です)", plain(v).s, t->name, (long long)lo, (long long)hi);
+    }
+    return t->size;
+}
+
+/* C の型 t の値 v を p に書く(c_check を通したもの) */
+static void c_store(const CMemType *t, V v, uint8_t *p) {
+    switch (t->kind) {
+    case CK_STR: memcpy(p, AS(Str, v)->s, AS(Str, v)->n + 1); return;
+    case CK_PTR: memcpy(p, &AS(Addr, v)->p, sizeof(void *)); return;
+    case CK_BOOL: *p = AS(Bool, v)->b ? 1 : 0; return;
+    case CK_FLT:
+        if (t->size == 4) {
+            float f = (float)num_d(v);
+            memcpy(p, &f, 4);
+        } else {
+            double d = num_d(v);
+            memcpy(p, &d, 8);
+        }
+        return;
+    }
+    int64_t n = IS_INT(v) ? INT_VAL(v) : (int64_t)AS(Flt, v)->d;
+    memcpy(p, &n, (size_t)t->size); /* リトルエンディアン(x86-64・arm64) */
+}
+
+/* p にある C の型 t の値を する の値にする */
+static V c_load(const CMemType *t, const uint8_t *p, int32_t pos) {
+    switch (t->kind) {
+    case CK_STR: return cstr((const char *)p);
+    case CK_PTR: {
+        void *q;
+        memcpy(&q, p, sizeof q);
+        return rt_ffi_from_ptr(q);
+    }
+    case CK_BOOL: return rt_bool(*p != 0);
+    case CK_FLT:
+        if (t->size == 4) {
+            float f;
+            memcpy(&f, p, 4);
+            return rt_float(f);
+        } else {
+            double d;
+            memcpy(&d, p, 8);
+            return rt_float(d);
+        }
+    }
+    if (t->sign) {
+        int64_t n;
+        switch (t->size) {
+        case 1: n = *(const int8_t *)p; break;
+        case 2: { int16_t x; memcpy(&x, p, 2); n = x; break; }
+        case 4: { int32_t x; memcpy(&x, p, 4); n = x; break; }
+        default: memcpy(&n, p, 8);
+        }
+        if (n > INT_MAX62 || n < INT_MIN62) fail(pos, "%sの値 %lld が大きすぎます(整数は ±%lld までです)", t->name, (long long)n, (long long)INT_MAX62);
+        return mk_int(n, pos);
+    }
+    uint64_t u = 0;
+    memcpy(&u, p, (size_t)t->size);
+    if (u > (uint64_t)INT_MAX62) fail(pos, "%sの値 %llu が大きすぎます(整数は ±%lld までです)", t->name, (unsigned long long)u, (long long)INT_MAX62);
+    return mk_int((int64_t)u, pos);
+}
+
+static V mem_read(int k, V *a, int32_t pos) { /* から, で */
+    char what[96];
+    snprintf(what, sizeof what, "「%s」の「から」", C_MEM[k].rd);
+    need_addr(a[0], what, pos);
+    V off = mk_int(c_offset(a[1], C_MEM[k].rd, pos), pos);
+    Act *x = AS(Act, mk_act_pos(A_MEMR, C_MEM[k].rd, a[0], off, pos));
+    x->d = mk_int(k, pos);
+    return (V)(intptr_t)x;
+}
+static V mem_write(int k, V *a, int32_t pos) { /* を, へ, で */
+    char what[96];
+    snprintf(what, sizeof what, "「%s」の「を」", C_MEM[k].wr);
+    c_check(&C_MEM[k], a[0], what, pos);
+    snprintf(what, sizeof what, "「%s」の「へ」", C_MEM[k].wr);
+    need_addr(a[1], what, pos);
+    Act *x = AS(Act, mk_act_pos(A_MEMW, C_MEM[k].wr, a[0], a[1], pos));
+    x->c = mk_int(c_offset(a[2], C_MEM[k].wr, pos), pos);
+    x->d = mk_int(k, pos);
+    return (V)(intptr_t)x;
+}
+#define MEM_BI(K, rd, wr) \
+    BI(rd) { return mem_read(K, a, pos); } \
+    BI(wr) { return mem_write(K, a, pos); }
+MEM_BI(CM_I8, m_rd_i8, m_wr_i8)
+MEM_BI(CM_I16, m_rd_i16, m_wr_i16)
+MEM_BI(CM_I32, m_rd_i32, m_wr_i32)
+MEM_BI(CM_I64, m_rd_i64, m_wr_i64)
+MEM_BI(CM_U8, m_rd_u8, m_wr_u8)
+MEM_BI(CM_U16, m_rd_u16, m_wr_u16)
+MEM_BI(CM_U32, m_rd_u32, m_wr_u32)
+MEM_BI(CM_U64, m_rd_u64, m_wr_u64)
+MEM_BI(CM_F32, m_rd_f32, m_wr_f32)
+MEM_BI(CM_F64, m_rd_f64, m_wr_f64)
+MEM_BI(CM_PTR, m_rd_ptr, m_wr_ptr)
+MEM_BI(CM_BOOL, m_rd_bool, m_wr_bool)
+MEM_BI(CM_STR, m_rd_str, m_wr_str)
+
+/* C の構造体の形(「C形作成する」): 組と、C と同じ並び(揃えと詰め物)のメモリを行き来する(suru.py の CShape と同じ) */
+#define CSHAPE_MAX_COUNT (1 << 20)
+
+static CShapeObj *need_cshape(V v, const char *what, int32_t pos) {
+    if (TAG(v) != T_CSHAPE) fail(pos, "%sはC形でなければなりません(「%s」が渡されました)", what, plain(v).s);
+    return AS(CShapeObj, v);
+}
+static const char *cshape_name(CShapeObj *s) { return short_type_name(AS(Rec, s->sample)->c->name); }
+static void cfield_name(Buf *b, const CFieldC *f) {
+    buf_cat(b, f->ctype < 0 ? "構造体" : C_MEM[f->ctype].name);
+    if (f->count >= 0) buf_printf(b, "[%lld]", (long long)f->count);
+}
+
+/* 「符号付き32」「符号なし8[16]」「構造体」「構造体[3]」を読む */
+static CFieldC cfield_spec(Str *s, int32_t pos) {
+    CFieldC f = {-2, -1, 0};
+    size_t n = (size_t)s->n;
+    const char *open = n && s->s[n - 1] == ']' ? memchr(s->s, '[', n) : NULL;
+    size_t name_n = open ? (size_t)(open - s->s) : n;
+    if (open) {
+        const char *d = open + 1, *e = s->s + n - 1;
+        int ok = d < e;
+        int64_t k = 0;
+        for (; ok && d < e; d++) {
+            if (*d < '0' || *d > '9') ok = 0;
+            else if ((k = k * 10 + (*d - '0')) > CSHAPE_MAX_COUNT) ok = 0;
+        }
+        if (!ok || k < 1)
+            fail(pos, "C形の欄「%s」の配列の大きさは 1 から %d までの整数で書きます(「符号なし8[16]」)", s->s, CSHAPE_MAX_COUNT);
+        f.count = k;
+    }
+    if (name_n == strlen("構造体") && memcmp(s->s, "構造体", name_n) == 0) f.ctype = -1;
+    for (int i = 0; i < CM_STR; i++)
+        if (strlen(C_MEM[i].name) == name_n && memcmp(C_MEM[i].name, s->s, name_n) == 0) f.ctype = i;
+    if (f.ctype == -2)
+        fail(pos, "「%s」はC形の欄の型ではありません(符号付き8〜64・符号なし8〜64・単精度・小数・番地・真偽・構造体、配列は「符号なし8[16]」)", s->s);
+    return f;
+}
+
+/* 見本のフィールドの値 x が欄 f に合うか(合わなければエラー) */
+static void cfield_fits(const CFieldC *f, V x, int k, int32_t pos) {
+    const char *want = NULL;
+    char wbuf[256];
+    x = rt_force(x);
+    int64_t n = 1;
+    V *items = &x;
+    if (f->count >= 0) {
+        if (TAG(x) != T_LIST) want = "リスト";
+        else {
+            n = AS(List, x)->n;
+            items = AS(List, x)->it;
+        }
+    }
+    for (int64_t i = 0; !want && i < n; i++) {
+        V y = rt_force(items[i]);
+        if (f->ctype < 0) {
+            if (TAG(y) != T_REC) want = "組";
+            else if (f->inner && strcmp(AS(Rec, y)->c->name, AS(Rec, AS(CShapeObj, f->inner)->sample)->c->name) != 0) {
+                snprintf(wbuf, sizeof wbuf, "「%s」の組", cshape_name(AS(CShapeObj, f->inner)));
+                want = wbuf;
+            }
+            continue;
+        }
+        switch (C_MEM[f->ctype].kind) {
+        case CK_PTR: if (TAG(y) != T_ADDR) want = "番地"; break;
+        case CK_BOOL: if (TAG(y) != T_BOOL) want = "真偽"; break;
+        default: if (!is_num(y)) want = "数";
+        }
+    }
+    if (want) {
+        Buf b = {0};
+        cfield_name(&b, f);
+        fail(pos, "C形の見本の%d番目のフィールド「%s」は%sでなければなりません(欄は「%s」)", k, plain(x).s, want, b.s);
+    }
+}
+
+static V mk_cshape(V sample, int32_t n) {
+    CShapeObj *s = rt_alloc(sizeof(CShapeObj) + (size_t)n * sizeof(CFieldC));
+    s->tag = T_CSHAPE;
+    s->n = n;
+    s->sample = sample;
+    return (V)(intptr_t)s;
+}
+
+BI(m_cshape_make) { /* を, で */
+    V sample = rt_force(a[0]);
+    if (TAG(sample) != T_REC || AS(Rec, sample)->c->n == 0)
+        fail(pos, "「C形作成する」の「を」はフィールドのある組でなければなりません(「%s」が渡されました)", plain(sample).s);
+    List *specs = need_list(a[1], "「C形作成する」の「で」", pos);
+    Rec *r = AS(Rec, sample);
+    if (specs->n != r->c->n)
+        fail(pos, "C形の欄の数(%lld)が、見本のフィールドの数(%d)と違います", (long long)specs->n, r->c->n);
+    V v = mk_cshape(sample, r->c->n);
+    CShapeObj *s = AS(CShapeObj, v);
+    for (int i = 0; i < r->c->n; i++) s->f[i] = cfield_spec(need_str(rt_force(specs->it[i]), "C形の欄", pos), pos);
+    for (int i = 0; i < r->c->n; i++) cfield_fits(&s->f[i], r->v[i], i + 1, pos);
+    return v;
+}
+
+static int64_t cfield_index(V k, CShapeObj *s, const char *fn, int32_t pos) {
+    if (!IS_INT(k) || INT_VAL(k) < 1 || INT_VAL(k) > s->n)
+        fail(pos, "「%s」の「で」は 1 から %d までの欄の番号です(「%s」が渡されました)", fn, s->n, plain(k).s);
+    return INT_VAL(k) - 1;
+}
+
+BI(m_cshape_nest) { /* を, で, に */
+    CShapeObj *s = need_cshape(a[0], "「入れ子設定する」の「を」", pos);
+    need_cshape(a[2], "「入れ子設定する」の「に」", pos);
+    int64_t k = cfield_index(rt_force(a[1]), s, "入れ子設定する", pos);
+    if (s->f[k].ctype >= 0) {
+        Buf b = {0};
+        cfield_name(&b, &s->f[k]);
+        fail(pos, "C形の%lld番目の欄は「%s」なので、入れ子にできません(「構造体」と書いた欄だけです)", (long long)k + 1, b.s);
+    }
+    V v = mk_cshape(s->sample, s->n);
+    CShapeObj *t = AS(CShapeObj, v);
+    memcpy(t->f, s->f, (size_t)s->n * sizeof(CFieldC));
+    t->f[k].inner = rt_force(a[2]);
+    cfield_fits(&t->f[k], AS(Rec, s->sample)->v[k], (int)k + 1, pos);
+    return v;
+}
+
+static void cshape_layout(CShapeObj *s, int64_t *size, int64_t *align, int64_t *offs, int32_t pos);
+/* 欄の要素1つの (大きさ, 揃え) */
+static void cfield_layout(const CFieldC *f, int64_t *size, int64_t *align, int32_t pos) {
+    if (f->ctype < 0) {
+        if (!f->inner) fail(pos, "C形に、中の形が決まっていない「構造体」の欄があります(「入れ子設定する」で決めます)");
+        cshape_layout(AS(CShapeObj, f->inner), size, align, NULL, pos);
+    } else *size = *align = C_MEM[f->ctype].size;
+}
+/* C と同じ規則: 欄はその揃えの倍数の位置に置き、全体は一番大きい揃えの倍数 */
+static void cshape_layout(CShapeObj *s, int64_t *size, int64_t *align, int64_t *offs, int32_t pos) {
+    int64_t off = 0, top = 1;
+    for (int i = 0; i < s->n; i++) {
+        int64_t sz, al;
+        cfield_layout(&s->f[i], &sz, &al, pos);
+        off = (off + al - 1) / al * al;
+        if (offs) offs[i] = off;
+        off += sz * (s->f[i].count >= 0 ? s->f[i].count : 1);
+        if (al > top) top = al;
+    }
+    *size = (off + top - 1) / top * top;
+    *align = top;
+}
+static int64_t cshape_size(CShapeObj *s, int32_t pos) {
+    int64_t size, align;
+    cshape_layout(s, &size, &align, NULL, pos);
+    return size;
+}
+
+/* 組 x を out に C の並びで書く */
+static void cshape_put(CShapeObj *s, V x, uint8_t *out, int32_t pos) {
+    x = rt_force(x);
+    Rec *proto = AS(Rec, s->sample);
+    if (TAG(x) != T_REC || strcmp(AS(Rec, x)->c->name, proto->c->name) != 0)
+        fail(pos, "「%s」はC形と違う組です(C形は「%s」)", plain(x).s, cshape_name(s));
+    Rec *r = AS(Rec, x);
+    int64_t *offs = malloc((size_t)s->n * sizeof(int64_t)), size, align;
+    if (!offs) fail(pos, "メモリが足りません");
+    cshape_layout(s, &size, &align, offs, pos);
+    for (int k = 0; k < s->n; k++) {
+        const CFieldC *f = &s->f[k];
+        V v = rt_force(r->v[k]);
+        int64_t n = 1;
+        V *items = &v;
+        if (f->count >= 0) {
+            if (TAG(v) != T_LIST || AS(List, v)->n != f->count)
+                fail(pos, "「%s」は%lld個の要素のリストではありません(%d番目のフィールド「%s」)", plain(v).s, (long long)f->count, k + 1, r->c->fields[k]);
+            items = AS(List, v)->it;
+            n = f->count;
+        }
+        int64_t sz, al;
+        cfield_layout(f, &sz, &al, pos);
+        char what[256];
+        snprintf(what, sizeof what, "%d番目のフィールド「%s」", k + 1, r->c->fields[k]);
+        for (int64_t i = 0; i < n; i++) {
+            uint8_t *p = out + offs[k] + i * sz;
+            V y = rt_force(items[i]);
+            if (f->ctype < 0) cshape_put(AS(CShapeObj, f->inner), y, p, pos);
+            else {
+                c_check(&C_MEM[f->ctype], y, what, pos);
+                c_store(&C_MEM[f->ctype], y, p);
+            }
+        }
+    }
+    free(offs);
+}
+
+static V cshape_get(CShapeObj *s, const uint8_t *data, int32_t pos) {
+    Rec *proto = AS(Rec, s->sample);
+    int64_t *offs = malloc((size_t)s->n * sizeof(int64_t)), size, align;
+    if (!offs) fail(pos, "メモリが足りません");
+    cshape_layout(s, &size, &align, offs, pos);
+    Rec *r = rt_alloc(sizeof(Rec) + (size_t)s->n * sizeof(V));
+    r->tag = T_REC;
+    r->c = proto->c;
+    for (int k = 0; k < s->n; k++) {
+        const CFieldC *f = &s->f[k];
+        int64_t sz, al;
+        cfield_layout(f, &sz, &al, pos);
+        int64_t n = f->count >= 0 ? f->count : 1;
+        List *l = f->count >= 0 ? new_list(n) : NULL;
+        for (int64_t i = 0; i < n; i++) {
+            const uint8_t *p = data + offs[k] + i * sz;
+            V y = f->ctype < 0 ? cshape_get(AS(CShapeObj, f->inner), p, pos) : c_load(&C_MEM[f->ctype], p, pos);
+            if (l) l->it[i] = y;
+            else r->v[k] = y;
+        }
+        if (l) r->v[k] = (V)(intptr_t)l;
+    }
+    free(offs);
+    return (V)(intptr_t)r;
+}
+
+BI(m_cshape_size) { return mk_int(cshape_size(need_cshape(a[0], "「C大きさにする」の「を」", pos), pos), pos); }
+BI(m_cshape_align) {
+    int64_t size, align;
+    cshape_layout(need_cshape(a[0], "「C揃えにする」の「を」", pos), &size, &align, NULL, pos);
+    return mk_int(align, pos);
+}
+BI(m_cshape_offset) { /* を, で */
+    CShapeObj *s = need_cshape(a[0], "「C位置にする」の「を」", pos);
+    int64_t k = cfield_index(rt_force(a[1]), s, "C位置にする", pos), size, align;
+    int64_t *offs = rt_alloc_atomic((size_t)s->n * sizeof(int64_t));
+    cshape_layout(s, &size, &align, offs, pos);
+    return mk_int(offs[k], pos);
+}
+static V cshape_bytes(V x, CShapeObj *s, int32_t pos) {
+    int64_t n = cshape_size(s, pos);
+    uint8_t *d = calloc(1, (size_t)n ? (size_t)n : 1);
+    if (!d) fail(pos, "メモリが足りません");
+    cshape_put(s, x, d, pos); /* 失敗したら d は残るが、すぐ終わるのでよしとする */
+    V r = mk_bytes(d, n);
+    free(d);
+    return r;
+}
+BI(m_cshape_ser) { return cshape_bytes(a[0], need_cshape(a[1], "「C直列化する」の「で」", pos), pos); } /* を, で */
+BI(m_cshape_de) { /* を, で */
+    Bytes *b = need_bytes(a[0], "「C復元する」の「を」", pos);
+    CShapeObj *s = need_cshape(a[1], "「C復元する」の「で」", pos);
+    int64_t n = cshape_size(s, pos);
+    if (b->n != n) fail(pos, "バイト列の長さがC形と違います(C形は %lld バイト、バイト列は %lld バイト)", (long long)n, (long long)b->n);
+    return cshape_get(s, b->d, pos);
+}
+BI(m_struct_read) { /* から, で, を */
+    need_addr(a[0], "「構造体読取する」の「から」", pos);
+    V off = mk_int(c_offset(a[1], "構造体読取する", pos), pos);
+    CShapeObj *s = need_cshape(a[2], "「構造体読取する」の「を」", pos);
+    cshape_size(s, pos);
+    Act *x = AS(Act, mk_act_pos(A_STRUCTR, "構造体読取する", a[0], off, pos));
+    x->c = (V)(intptr_t)s;
+    return (V)(intptr_t)x;
+}
+BI(m_struct_write) { /* を, へ, で, に */
+    CShapeObj *s = need_cshape(a[3], "「構造体書込する」の「に」", pos);
+    V data = cshape_bytes(a[0], s, pos);
+    need_addr(a[1], "「構造体書込する」の「へ」", pos);
+    Act *x = AS(Act, mk_act_pos(A_STRUCTW, "構造体書込する", data, a[1], pos));
+    x->c = mk_int(c_offset(a[2], "構造体書込する", pos), pos);
+    return (V)(intptr_t)x;
+}
+BI(m_addr_add) { /* を, で */
+    Addr *p = need_addr(a[0], "「番地加算する」の「を」", pos);
+    V n = a[1];
+    int64_t k;
+    if (IS_INT(n)) k = INT_VAL(n);
+    else if (TAG(n) == T_FLT && AS(Flt, n)->d == floor(AS(Flt, n)->d) && AS(Flt, n)->d >= (double)INT_MIN62 && AS(Flt, n)->d <= (double)INT_MAX62)
+        k = (int64_t)AS(Flt, n)->d;
+    else fail(pos, "「番地加算する」の「で」は整数でなければなりません(「%s」が渡されました)", plain(n).s);
+    return rt_ffi_from_ptr((void *)((uintptr_t)p->p + (uintptr_t)k));
+}
 BI(m_errno) { return mk_act_pos(A_ERRNO, "エラー番号取得する", 0, 0, pos); }
 static int prog_argc;
 static char **prog_argv;
@@ -3215,6 +3654,30 @@ static V mem_run(Act *a) {
         if (!p && b->n > 0) fail(a->pos, "番地(0x0)へは書き込めません");
         if (b->n) memcpy(p, b->d, b->n);
         return mk_int(b->n, a->pos);
+    }
+    case A_MEMR: {
+        uint8_t *p = AS(Addr, a->a)->p;
+        if (!p) fail(a->pos, "番地(0x0)からは読み取れません");
+        return c_load(&C_MEM[INT_VAL(a->d)], p + INT_VAL(a->b), a->pos);
+    }
+    case A_STRUCTR: {
+        uint8_t *p = AS(Addr, a->a)->p;
+        if (!p) fail(a->pos, "番地(0x0)からは読み取れません");
+        return cshape_get(AS(CShapeObj, a->c), p + INT_VAL(a->b), a->pos);
+    }
+    case A_STRUCTW: {
+        uint8_t *p = AS(Addr, a->b)->p;
+        Bytes *b = AS(Bytes, a->a);
+        if (!p) fail(a->pos, "番地(0x0)へは書き込めません");
+        memcpy(p + INT_VAL(a->c), b->d, (size_t)b->n);
+        return mk_int(b->n, a->pos);
+    }
+    case A_MEMW: {
+        uint8_t *p = AS(Addr, a->b)->p;
+        const CMemType *t = &C_MEM[INT_VAL(a->d)];
+        if (!p) fail(a->pos, "番地(0x0)へは書き込めません");
+        c_store(t, a->a, p + INT_VAL(a->c));
+        return mk_int(t->kind == CK_STR ? AS(Str, a->a)->n + 1 : t->size, a->pos);
     }
     case A_ERRNO: return mk_int(ffi_errno, a->pos);
     case A_FAIL: fail(a->pos, "%s", AS(Str, a->a)->s);
@@ -3866,6 +4329,42 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"左シフトする", 2, P2_WO_DE, NULL, m_shl},
     {"右シフトする", 2, P2_WO_DE, NULL, m_shr},
     {"バイト列排他和にする", 2, P2_WO_DE, NULL, m_bytes_xor},
+    {"番地加算する", 2, P2_WO_DE, NULL, m_addr_add},
+    {"C形作成する", 2, P2_WO_DE, NULL, m_cshape_make},
+    {"入れ子設定する", 3, P3_WO_DE_NI, NULL, m_cshape_nest},
+    {"C大きさにする", 1, P1_WO, NULL, m_cshape_size},
+    {"C揃えにする", 1, P1_WO, NULL, m_cshape_align},
+    {"C位置にする", 2, P2_WO_DE, NULL, m_cshape_offset},
+    {"C直列化する", 2, P2_WO_DE, NULL, m_cshape_ser},
+    {"C復元する", 2, P2_WO_DE, NULL, m_cshape_de},
+    {"構造体読取する", 3, P3_KARA_DE_WO, NULL, m_struct_read},
+    {"構造体書込する", 4, P4_WO_HE_DE_NI, NULL, m_struct_write},
+    {"符号付き8読取する", 2, P2_KARA_DE, NULL, m_rd_i8},
+    {"符号付き8書込する", 3, P3_WO_HE_DE, NULL, m_wr_i8},
+    {"符号付き16読取する", 2, P2_KARA_DE, NULL, m_rd_i16},
+    {"符号付き16書込する", 3, P3_WO_HE_DE, NULL, m_wr_i16},
+    {"符号付き32読取する", 2, P2_KARA_DE, NULL, m_rd_i32},
+    {"符号付き32書込する", 3, P3_WO_HE_DE, NULL, m_wr_i32},
+    {"符号付き64読取する", 2, P2_KARA_DE, NULL, m_rd_i64},
+    {"符号付き64書込する", 3, P3_WO_HE_DE, NULL, m_wr_i64},
+    {"符号なし8読取する", 2, P2_KARA_DE, NULL, m_rd_u8},
+    {"符号なし8書込する", 3, P3_WO_HE_DE, NULL, m_wr_u8},
+    {"符号なし16読取する", 2, P2_KARA_DE, NULL, m_rd_u16},
+    {"符号なし16書込する", 3, P3_WO_HE_DE, NULL, m_wr_u16},
+    {"符号なし32読取する", 2, P2_KARA_DE, NULL, m_rd_u32},
+    {"符号なし32書込する", 3, P3_WO_HE_DE, NULL, m_wr_u32},
+    {"符号なし64読取する", 2, P2_KARA_DE, NULL, m_rd_u64},
+    {"符号なし64書込する", 3, P3_WO_HE_DE, NULL, m_wr_u64},
+    {"単精度読取する", 2, P2_KARA_DE, NULL, m_rd_f32},
+    {"単精度書込する", 3, P3_WO_HE_DE, NULL, m_wr_f32},
+    {"小数読取する", 2, P2_KARA_DE, NULL, m_rd_f64},
+    {"小数書込する", 3, P3_WO_HE_DE, NULL, m_wr_f64},
+    {"番地読取する", 2, P2_KARA_DE, NULL, m_rd_ptr},
+    {"番地書込する", 3, P3_WO_HE_DE, NULL, m_wr_ptr},
+    {"真偽読取する", 2, P2_KARA_DE, NULL, m_rd_bool},
+    {"真偽書込する", 3, P3_WO_HE_DE, NULL, m_wr_bool},
+    {"C文字列読取する", 2, P2_KARA_DE, NULL, m_rd_str},
+    {"C文字列書込する", 3, P3_WO_HE_DE, NULL, m_wr_str},
     /* 「基本」の組み込み */
     {"中断する", 1, P1_WO, NULL, m_abort},
     {"失敗説明する", 2, P2_WO_DE, NULL, f_explain},

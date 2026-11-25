@@ -250,6 +250,44 @@ func init() {
 	})
 	simple("バイト列取得する", []TParam{{"から", addr}, {WO, NUM}}, act(bytesT))
 	simple("書込する", []TParam{{WO, bytesT}, {"へ", addr}}, act(NUM))
+	simple("番地加算する", []TParam{{WO, addr}, {"で", NUM}}, addr)
+	// C形: 型の引数に組の型をとる(params と result は x(組の型)と y(どんな型でもよい)から作る)
+	cshape := func(t Type) Type { return &TCon{CShapeType, []Type{t}} }
+	shapePrim := func(name string, params func(x, y Type) []TParam, result func(x, y Type) Type) {
+		var reqs []partReq
+		for _, p := range params(newTVar(), newTVar()) {
+			reqs = append(reqs, req(p.Part))
+		}
+		prim(name, reqs, func() Type {
+			x, y := newTVar(), newTVar()
+			return &TFun{Params: params(x, y), Result: result(x, y)}
+		}, func(c *Checker, a typedArgs, line Pos) Type {
+			x, y := newTVar(), newTVar()
+			for _, p := range params(x, y) {
+				need(c, a, p.Part, p.T, line, name)
+			}
+			return result(x, y)
+		})
+	}
+	shapePrim("C形作成する", func(x, y Type) []TParam { return []TParam{{WO, x}, {"で", lst(STR)}} }, func(x, y Type) Type { return cshape(x) })
+	shapePrim("入れ子設定する", func(x, y Type) []TParam { return []TParam{{WO, cshape(x)}, {"で", NUM}, {"に", cshape(y)}} }, func(x, y Type) Type { return cshape(x) })
+	shapePrim("C大きさにする", func(x, y Type) []TParam { return []TParam{{WO, cshape(x)}} }, func(x, y Type) Type { return NUM })
+	shapePrim("C揃えにする", func(x, y Type) []TParam { return []TParam{{WO, cshape(x)}} }, func(x, y Type) Type { return NUM })
+	shapePrim("C位置にする", func(x, y Type) []TParam { return []TParam{{WO, cshape(x)}, {"で", NUM}} }, func(x, y Type) Type { return NUM })
+	shapePrim("C直列化する", func(x, y Type) []TParam { return []TParam{{WO, x}, {"で", cshape(x)}} }, func(x, y Type) Type { return bytesT })
+	shapePrim("C復元する", func(x, y Type) []TParam { return []TParam{{WO, bytesT}, {"で", cshape(x)}} }, func(x, y Type) Type { return x })
+	shapePrim("構造体読取する", func(x, y Type) []TParam { return []TParam{{"から", addr}, {"で", NUM}, {WO, cshape(x)}} }, func(x, y Type) Type { return act(x) })
+	shapePrim("構造体書込する", func(x, y Type) []TParam { return []TParam{{WO, x}, {"へ", addr}, {"で", NUM}, {"に", cshape(x)}} }, func(x, y Type) Type { return act(NUM) })
+	// C のメモリを型を決めて読み書きする(suru.py の C_MEM_TYPES)
+	for _, m := range []struct {
+		name string
+		t    Type
+	}{{"符号付き8", NUM}, {"符号付き16", NUM}, {"符号付き32", NUM}, {"符号付き64", NUM}, {"符号なし8", NUM},
+		{"符号なし16", NUM}, {"符号なし32", NUM}, {"符号なし64", NUM}, {"単精度", NUM}, {"小数", NUM},
+		{"番地", addr}, {"真偽", BOOL}, {"C文字列", STR}} {
+		simple(m.name+"読取する", []TParam{{"から", addr}, {"で", NUM}}, act(m.t))
+		simple(m.name+"書込する", []TParam{{WO, m.t}, {"へ", addr}, {"で", NUM}}, act(NUM))
+	}
 	simple("エラー番号取得する", nil, act(NUM))
 	simple("引数取得する", nil, act(lst(STR)))
 	prim("終了する", []partReq{req(WO)}, func() Type {

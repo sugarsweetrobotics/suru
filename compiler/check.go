@@ -36,7 +36,7 @@ func pruneIsRecord(t Type) bool {
 		return false
 	}
 	switch c.Name {
-	case "数", "文字列", "真偽", "リスト", "動作", "番地", "バイト列":
+	case "数", "文字列", "真偽", "リスト", "動作", "番地", "バイト列", CShapeType:
 		return false
 	}
 	return true
@@ -1163,6 +1163,9 @@ func (c *Checker) typeOf(te Node, tvars *tvarMap, line Pos) Type {
 	}
 	if monadTypes[tn.Name] {
 		return &TCon{tn.Name, []Type{args[0]}}
+	}
+	if tn.Name == CShapeType {
+		return &TCon{CShapeType, []Type{args[0]}}
 	}
 	if _, ok := c.shapes.keys[tn.Name]; !ok {
 		return newTVar()

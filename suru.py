@@ -1151,7 +1151,7 @@ TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import, ExternLib, Vis
 TYPE_VAR_NAMES = "甲乙丙丁戊己庚辛壬癸"
 # 小数・整数・単精度は数の別名(外部の関数の宣言で C の double・int・float を表す)。番地は C のポインタ
 # 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
-BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作", "単精度")
+BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作", "単精度", "C形")
 # 外部の関数に渡せる型 → C の型の名前(バイト列は引数だけ、無は値だけ)
 FFI_TYPES = {"数": "i64", "小数": "f64", "整数": "i32", "真偽": "bool", "文字列": "str", "番地": "ptr",
              "バイト列": "bytes", "無": "void", "単精度": "f32"}
@@ -2448,7 +2448,7 @@ def _type_word(tok: Token, args: list) -> Any:
         return TypeVarName(name)
     if name in ("数", "文字列", "真偽", "小数", "整数", "番地", "バイト列", "無", "単精度") and args:
         raise SuruError(f"「{name}」は型の引数をとりません", tok.line)
-    if name in ("リスト", "動作") and len(args) != 1:
+    if name in ("リスト", "動作", "C形") and len(args) != 1:
         raise SuruError(f"「{name}」の前には型を1つ書いてください(「数 の {name}」)", tok.line)
     if name not in BUILTIN_TYPES and name not in _CTX.types:
         raise SuruError(f"「{name}」という型はありません", tok.line)
@@ -3310,6 +3310,8 @@ def type_name_of(v: Any) -> str:
         return v.type_name
     if isinstance(v, Address):
         return "番地"
+    if isinstance(v, CShape):
+        return "C形"
     if isinstance(v, bytes):
         return "バイト列"
     if isinstance(v, ACTION_TYPES):
@@ -3948,6 +3950,7 @@ STD_PRIMITIVES = [
     Builtin("固定復元する", [(WO, True), ("で", True)], lambda it, a, line: _fixed_deserialize(a[WO], a["で"], line)),
     Builtin("バイト列取得する", [("から", True), (WO, True)], lambda it, a, line: _peek(a["から"], a[WO], line)),
     Builtin("書込する", [(WO, True), ("へ", True)], lambda it, a, line: _poke(a[WO], a["へ"], line)),
+    Builtin("番地加算する", [(WO, True), ("で", True)], lambda it, a, line: _addr_add(a[WO], a["で"], line)),
     Builtin("エラー番号取得する", [], lambda it, a, line: Action("エラー番号取得する", lambda it2: _errno())),
     Builtin("失敗する", [(WO, True)], lambda it, a, line: _fail_action(a[WO], line)),
     # 環境(lib/環境.suru が使う)
@@ -4068,6 +4071,366 @@ def _poke(b: Any, p: Any, line: int) -> Action:
             ctypes.memmove(addr.value, data, len(data))
         return len(data)
     return Action("書込する", perform)
+
+
+# --- C のメモリを型を決めて読み書きする(番地 + 位置のところの値を1つ) ---
+# C の型の名前 → (struct の書式, 大きさ, 種類)。種類: i 整数、f 小数、p 番地、b 真偽(ほかに C文字列: NUL で終わる文字列)
+C_SCALARS = {
+    "符号付き8": ("b", 1, "i"), "符号付き16": ("h", 2, "i"), "符号付き32": ("i", 4, "i"), "符号付き64": ("q", 8, "i"),
+    "符号なし8": ("B", 1, "i"), "符号なし16": ("H", 2, "i"), "符号なし32": ("I", 4, "i"), "符号なし64": ("Q", 8, "i"),
+    "単精度": ("f", 4, "f"), "小数": ("d", 8, "f"), "番地": ("Q", 8, "p"), "真偽": ("B", 1, "b"),
+}
+C_MEM_TYPES = tuple(C_SCALARS) + ("C文字列",)
+
+
+def _int_range(t: str) -> tuple[int, int]:
+    """C の整数の型に入る範囲(64 ビットはコンパイルしたプログラムの整数の範囲にそろえる)"""
+    unsigned = t.startswith("符号なし")
+    bits = int(t[4:])
+    if unsigned:
+        return 0, min((1 << bits) - 1, MAX_COMPILED_INT)
+    return max(-(1 << (bits - 1)), MIN_COMPILED_INT), min((1 << (bits - 1)) - 1, MAX_COMPILED_INT)
+
+
+def _c_offset(v: Any, fn: str, line: int) -> int:
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    if isinstance(v, bool) or not isinstance(v, int) or not MIN_COMPILED_INT <= v <= MAX_COMPILED_INT:
+        raise SuruError(f"「{fn}」の「で」は位置(整数のバイト数)でなければなりません(「{format_value(v)}」が渡されました)", line)
+    return v
+
+
+def _c_encode(t: str, v: Any, what: str, line: int) -> bytes:
+    """する の値を C の型 t のバイト列にする(入らなければエラー)"""
+    import struct
+
+    if t == "C文字列":
+        if not isinstance(v, str):
+            raise SuruError(f"{what}は文字列でなければなりません(「{format_value(v)}」が渡されました)", line)
+        data = v.encode("utf-8")
+        if b"\0" in data:
+            raise SuruError(f"{what}は途中に文字コード 0 を含まない文字列でなければなりません", line)
+        return data + b"\0"
+    fmt, _, kind = C_SCALARS[t]
+    if kind == "p":
+        return struct.pack("=" + fmt, _addr(v, what, line).value)
+    if kind == "b":
+        if not isinstance(v, bool):
+            raise SuruError(f"{what}は真偽でなければなりません(「{format_value(v)}」が渡されました)", line)
+        return struct.pack("=" + fmt, 1 if v else 0)
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise SuruError(f"{what}は数でなければなりません(「{format_value(v)}」が渡されました)", line)
+    if kind == "f":
+        return struct.pack("=" + fmt, float(v))
+    lo, hi = _int_range(t)
+    n = int(v) if isinstance(v, float) and v.is_integer() else v
+    if not isinstance(n, int) or not lo <= n <= hi:
+        raise SuruError(f"「{format_value(v)}」は{t}に入りません({lo} から {hi} までの整数です)", line)
+    return struct.pack("=" + fmt, n)
+
+
+def _c_decode(t: str, data: bytes, line: int) -> Any:
+    """C の型 t のバイト列を する の値にする"""
+    import struct
+
+    fmt, _, kind = C_SCALARS[t]
+    (r,) = struct.unpack("=" + fmt, data)
+    if kind == "p":
+        return Address(r)
+    if kind == "b":
+        return r != 0
+    if kind == "f":
+        return float(r)
+    if not MIN_COMPILED_INT <= r <= MAX_COMPILED_INT:
+        raise SuruError(f"{t}の値 {r} が大きすぎます(整数は ±{MAX_COMPILED_INT} までです)", line)
+    return r
+
+
+def _mem_read(t: str, p: Any, off: Any, line: int) -> Action:
+    fn = t + "読取する"
+    base = _addr(p, f"「{fn}」の「から」", line)
+    k = _c_offset(off, fn, line)
+
+    def perform(it: "Interpreter") -> Any:
+        import ctypes
+
+        if base.value == 0:
+            raise SuruError("番地(0x0)からは読み取れません", line)
+        at = (base.value + k) & 0xFFFFFFFFFFFFFFFF
+        if t == "C文字列":
+            return ctypes.string_at(at).decode("utf-8", "replace")
+        return _c_decode(t, ctypes.string_at(at, C_SCALARS[t][1]), line)
+    return Action(fn, perform)
+
+
+def _mem_write(t: str, v: Any, p: Any, off: Any, line: int) -> Action:
+    fn = t + "書込する"
+    data = _c_encode(t, v, f"「{fn}」の「を」", line)
+    base = _addr(p, f"「{fn}」の「へ」", line)
+    k = _c_offset(off, fn, line)
+
+    def perform(it: "Interpreter") -> int:
+        import ctypes
+
+        if base.value == 0:
+            raise SuruError("番地(0x0)へは書き込めません", line)
+        ctypes.memmove((base.value + k) & 0xFFFFFFFFFFFFFFFF, data, len(data))
+        return len(data)
+    return Action(fn, perform)
+
+
+def _addr_add(p: Any, n: Any, line: int) -> Address:
+    base = _addr(p, "「番地加算する」の「を」", line)
+    if isinstance(n, float) and n.is_integer():
+        n = int(n)
+    if isinstance(n, bool) or not isinstance(n, int) or not MIN_COMPILED_INT <= n <= MAX_COMPILED_INT:
+        raise SuruError(f"「番地加算する」の「で」は整数でなければなりません(「{format_value(n)}」が渡されました)", line)
+    return Address((base.value + n) & 0xFFFFFFFFFFFFFFFF)
+
+
+def _mem_builtins() -> list:
+    out = []
+    for t in C_MEM_TYPES:
+        out.append(Builtin(t + "読取する", [("から", True), ("で", True)],
+                           lambda it, a, line, t=t: _mem_read(t, a["から"], a["で"], line)))
+        out.append(Builtin(t + "書込する", [(WO, True), ("へ", True), ("で", True)],
+                           lambda it, a, line, t=t: _mem_write(t, a[WO], a["へ"], a["で"], line)))
+    return out
+
+
+STD_PRIMITIVES.extend(_mem_builtins())
+
+
+# --- C の構造体の形(「C形作成する」): 組と、C と同じ並び(揃えと詰め物)のメモリを行き来する ---
+@dataclass(frozen=True, eq=False)
+class CField:
+    """C形の欄: 型の名前(C_SCALARS か「構造体」)、配列なら要素の数、構造体なら中の形"""
+
+    ctype: str
+    count: Any  # 配列の要素の数(配列でなければ None)
+    inner: Any = None  # 構造体の欄の形(入れ子設定するまで None)
+
+
+@dataclass(frozen=True, eq=False)
+class CShape:
+    """C形: 見本の組と、フィールドごとの欄"""
+
+    sample: Record
+    fields: tuple
+
+    def __str__(self) -> str:
+        return f"<C形 {short_type_name(self.sample.ctor)}>"
+
+
+CSHAPE_STRUCT = "構造体"
+CSHAPE_MAX_COUNT = 1 << 20  # 配列の欄の要素の数の上限
+
+
+def _cshape(v: Any, what: str, line: int) -> CShape:
+    if not isinstance(v, CShape):
+        raise SuruError(f"{what}はC形でなければなりません(「{format_value(v)}」が渡されました)", line)
+    return v
+
+
+def _cfield_spec(s: str, line: int) -> CField:
+    """「符号付き32」「符号なし8[16]」「構造体」「構造体[3]」を読む"""
+    name, count = s, None
+    if s.endswith("]") and "[" in s:
+        name, num = s[:-1].split("[", 1)
+        if not num.isdigit() or not num.isascii() or not 1 <= int(num) <= CSHAPE_MAX_COUNT:
+            raise SuruError(f"C形の欄「{s}」の配列の大きさは 1 から {CSHAPE_MAX_COUNT} までの整数で書きます(「符号なし8[16]」)", line)
+        count = int(num)
+    if name not in C_SCALARS and name != CSHAPE_STRUCT:
+        raise SuruError(f"「{s}」はC形の欄の型ではありません(符号付き8〜64・符号なし8〜64・単精度・小数・番地・真偽・構造体、"
+                        "配列は「符号なし8[16]」)", line)
+    return CField(name, count)
+
+
+def _cfield_fits(f: CField, x: Any, k: int, line: int) -> None:
+    """見本のフィールドの値 x が欄 f に合うか(合わなければエラー)"""
+    def bad(want: str) -> SuruError:
+        return SuruError(f"C形の見本の{k}番目のフィールド「{format_value(x)}」は{want}でなければなりません(欄は「{_cfield_name(f)}」)", line)
+
+    if f.count is not None:
+        if not isinstance(x, tuple):
+            raise bad("リスト")
+        items = x
+    else:
+        items = (x,)
+    for y in items:
+        if f.ctype == CSHAPE_STRUCT:
+            if not isinstance(y, Record):
+                raise bad("組")
+            if f.inner is not None and y.ctor != f.inner.sample.ctor:
+                raise bad(f"「{short_type_name(f.inner.sample.ctor)}」の組")
+            continue
+        kind = C_SCALARS[f.ctype][2]
+        if kind == "p" and not isinstance(y, Address):
+            raise bad("番地")
+        if kind == "b" and not isinstance(y, bool):
+            raise bad("真偽")
+        if kind in ("i", "f") and (isinstance(y, bool) or not isinstance(y, (int, float))):
+            raise bad("数")
+
+
+def _cfield_name(f: CField) -> str:
+    return f.ctype + (f"[{f.count}]" if f.count is not None else "")
+
+
+def _cshape_make(sample: Any, specs: Any, line: int) -> CShape:
+    if not isinstance(sample, Record) or not sample.fields:
+        raise SuruError(f"「C形作成する」の「を」はフィールドのある組でなければなりません(「{format_value(sample)}」が渡されました)", line)
+    specs = _list(specs, "「C形作成する」の「で」", line)
+    if len(specs) != len(sample.fields):
+        raise SuruError(f"C形の欄の数({len(specs)})が、見本のフィールドの数({len(sample.fields)})と違います", line)
+    fields = tuple(_cfield_spec(_str(s, "C形の欄", line), line) for s in specs)
+    for k, (f, x) in enumerate(zip(fields, sample.values), 1):
+        _cfield_fits(f, x, k, line)
+    return CShape(sample, fields)
+
+
+def _cshape_nest(shape: Any, k: Any, inner: Any, line: int) -> CShape:
+    s = _cshape(shape, "「入れ子設定する」の「を」", line)
+    sub = _cshape(inner, "「入れ子設定する」の「に」", line)
+    if isinstance(k, bool) or not isinstance(k, int) or not 1 <= k <= len(s.fields):
+        raise SuruError(f"「入れ子設定する」の「で」は 1 から {len(s.fields)} までの欄の番号です(「{format_value(k)}」が渡されました)", line)
+    old = s.fields[k - 1]
+    if old.ctype != CSHAPE_STRUCT:
+        raise SuruError(f"C形の{k}番目の欄は「{_cfield_name(old)}」なので、入れ子にできません(「構造体」と書いた欄だけです)", line)
+    f = CField(CSHAPE_STRUCT, old.count, sub)
+    _cfield_fits(f, s.sample.values[k - 1], k, line)
+    return CShape(s.sample, s.fields[:k - 1] + (f,) + s.fields[k:])
+
+
+def _cfield_layout(f: CField, line: int) -> tuple[int, int]:
+    """欄の (大きさ, 揃え)"""
+    if f.ctype == CSHAPE_STRUCT:
+        if f.inner is None:
+            raise SuruError("C形に、中の形が決まっていない「構造体」の欄があります(「入れ子設定する」で決めます)", line)
+        size, align = _cshape_layout(f.inner, line)[:2]
+    else:
+        size = align = C_SCALARS[f.ctype][1]
+    return size * (f.count or 1), align
+
+
+def _cshape_layout(s: CShape, line: int) -> tuple[int, int, tuple]:
+    """C と同じ規則の (大きさ, 揃え, 欄ごとの位置): 欄はその揃えの倍数の位置に置き、全体は一番大きい揃えの倍数"""
+    off, top, offs = 0, 1, []
+    for f in s.fields:
+        size, align = _cfield_layout(f, line)
+        off = (off + align - 1) // align * align
+        offs.append(off)
+        off += size
+        top = max(top, align)
+    return (off + top - 1) // top * top, top, tuple(offs)
+
+
+def _cshape_put(s: CShape, x: Any, out: bytearray, at: int, line: int) -> None:
+    """組 x を out[at:] に C の並びで書く"""
+    if not isinstance(x, Record) or x.ctor != s.sample.ctor:
+        raise SuruError(f"「{format_value(x)}」はC形と違う組です(C形は「{short_type_name(s.sample.ctor)}」)", line)
+    _, _, offs = _cshape_layout(s, line)
+    for k, (f, v, off) in enumerate(zip(s.fields, x.values, offs), 1):
+        items = (v,)
+        if f.count is not None:
+            if not isinstance(v, tuple) or len(v) != f.count:
+                raise SuruError(f"「{format_value(v)}」は{f.count}個の要素のリストではありません({k}番目のフィールド「{x.fields[k - 1]}」)", line)
+            items = v
+        size = _cfield_layout(CField(f.ctype, None, f.inner), line)[0]
+        for i, y in enumerate(items):
+            if f.ctype == CSHAPE_STRUCT:
+                _cshape_put(f.inner, y, out, at + off + i * size, line)
+            else:
+                data = _c_encode(f.ctype, y, f"{k}番目のフィールド「{x.fields[k - 1]}」", line)
+                out[at + off + i * size:at + off + (i + 1) * size] = data
+
+
+def _cshape_get(s: CShape, data: bytes, at: int, line: int) -> Record:
+    _, _, offs = _cshape_layout(s, line)
+    values = []
+    for f, off in zip(s.fields, offs):
+        size = _cfield_layout(CField(f.ctype, None, f.inner), line)[0]
+        items = []
+        for i in range(f.count or 1):
+            p = at + off + i * size
+            if f.ctype == CSHAPE_STRUCT:
+                items.append(_cshape_get(f.inner, data, p, line))
+            else:
+                items.append(_c_decode(f.ctype, data[p:p + size], line))
+        values.append(tuple(items) if f.count is not None else items[0])
+    return Record(s.sample.ctor, s.sample.type_name, s.sample.fields, tuple(values))
+
+
+def _cshape_bytes(x: Any, shape: Any, line: int) -> bytes:
+    s = _cshape(shape, "「C直列化する」の「で」", line)
+    out = bytearray(_cshape_layout(s, line)[0])
+    _cshape_put(s, x, out, 0, line)
+    return bytes(out)
+
+
+def _cshape_from_bytes(b: Any, shape: Any, line: int) -> Record:
+    data = _bytes(b, "「C復元する」の「を」", line)
+    s = _cshape(shape, "「C復元する」の「で」", line)
+    n = _cshape_layout(s, line)[0]
+    if len(data) != n:
+        raise SuruError(f"バイト列の長さがC形と違います(C形は {n} バイト、バイト列は {len(data)} バイト)", line)
+    return _cshape_get(s, data, 0, line)
+
+
+def _struct_read(p: Any, off: Any, shape: Any, line: int) -> Action:
+    base = _addr(p, "「構造体読取する」の「から」", line)
+    k = _c_offset(off, "構造体読取する", line)
+    s = _cshape(shape, "「構造体読取する」の「を」", line)
+    n = _cshape_layout(s, line)[0]
+
+    def perform(it: "Interpreter") -> Any:
+        import ctypes
+
+        if base.value == 0:
+            raise SuruError("番地(0x0)からは読み取れません", line)
+        return _cshape_get(s, ctypes.string_at((base.value + k) & 0xFFFFFFFFFFFFFFFF, n), 0, line)
+    return Action("構造体読取する", perform)
+
+
+def _struct_write(x: Any, p: Any, off: Any, shape: Any, line: int) -> Action:
+    s = _cshape(shape, "「構造体書込する」の「に」", line)
+    data = _cshape_bytes(x, s, line)
+    base = _addr(p, "「構造体書込する」の「へ」", line)
+    k = _c_offset(off, "構造体書込する", line)
+
+    def perform(it: "Interpreter") -> int:
+        import ctypes
+
+        if base.value == 0:
+            raise SuruError("番地(0x0)へは書き込めません", line)
+        ctypes.memmove((base.value + k) & 0xFFFFFFFFFFFFFFFF, data, len(data))
+        return len(data)
+    return Action("構造体書込する", perform)
+
+
+STD_PRIMITIVES.extend([
+    Builtin("C形作成する", [(WO, True), ("で", True)], lambda it, a, line: _cshape_make(a[WO], a["で"], line)),
+    Builtin("入れ子設定する", [(WO, True), ("で", True), ("に", True)],
+            lambda it, a, line: _cshape_nest(a[WO], a["で"], a["に"], line)),
+    Builtin("C大きさにする", [(WO, True)],
+            lambda it, a, line: _cshape_layout(_cshape(a[WO], "「C大きさにする」の「を」", line), line)[0]),
+    Builtin("C揃えにする", [(WO, True)],
+            lambda it, a, line: _cshape_layout(_cshape(a[WO], "「C揃えにする」の「を」", line), line)[1]),
+    Builtin("C位置にする", [(WO, True), ("で", True)], lambda it, a, line: _cshape_offset(a[WO], a["で"], line)),
+    Builtin("C直列化する", [(WO, True), ("で", True)], lambda it, a, line: _cshape_bytes(a[WO], a["で"], line)),
+    Builtin("C復元する", [(WO, True), ("で", True)], lambda it, a, line: _cshape_from_bytes(a[WO], a["で"], line)),
+    Builtin("構造体読取する", [("から", True), ("で", True), (WO, True)],
+            lambda it, a, line: _struct_read(a["から"], a["で"], a[WO], line)),
+    Builtin("構造体書込する", [(WO, True), ("へ", True), ("で", True), ("に", True)],
+            lambda it, a, line: _struct_write(a[WO], a["へ"], a["で"], a["に"], line)),
+])
+
+
+def _cshape_offset(shape: Any, k: Any, line: int) -> int:
+    s = _cshape(shape, "「C位置にする」の「を」", line)
+    if isinstance(k, bool) or not isinstance(k, int) or not 1 <= k <= len(s.fields):
+        raise SuruError(f"「C位置にする」の「で」は 1 から {len(s.fields)} までの欄の番号です(「{format_value(k)}」が渡されました)", line)
+    return _cshape_layout(s, line)[2][k - 1]
 
 
 def _errno() -> int:
