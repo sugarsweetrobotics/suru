@@ -6529,18 +6529,21 @@ class Interpreter:
         else:
             env.vars[d.name] = Lazy(d.body, env)
 
+    def force(self, v: Any) -> Any:
+        """値の定義(Lazy)なら、初めて使うときに計算する。関数として呼ぶときも同じ(#141)"""
+        if isinstance(v, Lazy):
+            if not v.done:
+                v.value, v.done = self.eval(v.expr, v.env), True
+            return v.value
+        return v
+
     def eval(self, node: Any, env: Env) -> Any:
         if isinstance(node, Num):
             return node.value
         if isinstance(node, Str):
             return node.value
         if isinstance(node, Var):
-            v = env.lookup(node.name, node.line)
-            if isinstance(v, Lazy):
-                if not v.done:
-                    v.value, v.done = self.eval(v.expr, v.env), True
-                return v.value
-            return v
+            return self.force(env.lookup(node.name, node.line))
         if isinstance(node, ListLit):
             return tuple(self.eval(i, env) for i in node.items)
         if isinstance(node, Prop):
@@ -6631,7 +6634,7 @@ class Interpreter:
             cond = self.eval(node.cond, env)
             return self.eval(node.then if cond else node.other, env)
         if isinstance(node, Call):
-            fn = env.lookup(node.name, node.line)
+            fn = self.force(env.lookup(node.name, node.line))
             args = {}
             lifted = []  # 「入力 の 結果 を …」: 動作の結果に関数を適用する(写像)
             for p, a in node.args.items():
@@ -6658,7 +6661,7 @@ class Interpreter:
                 for i in range(lengths.pop())
             )
         if isinstance(node, Ref):
-            fn = env.lookup(node.name, node.line)
+            fn = self.force(env.lookup(node.name, node.line))
             if not isinstance(fn, FUNCTION_TYPES):
                 raise SuruError(f"「{node.name}」は関数ではありません", node.line)
             if not node.args:
