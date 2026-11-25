@@ -1,85 +1,89 @@
-# 日本語関数型プログラミング言語「する」(プロトタイプ)
+English | [日本語](README_jp.md)
 
-Python 3.10 以降だけで動くインタプリタです(外部ライブラリ不要。テストに pytest を使います)。
+# Suru (「する」): a functional programming language in Japanese (prototype)
+
+Suru is a programming language whose programs read like Japanese sentences. Function names end in する ("to do"), arguments are marked with Japanese case particles (を, に, で, から, へ, より) instead of being placed by position, and you can write either with spaces between words or packed tightly with Japanese punctuation (「。」 and 「、」).
+
+The interpreter runs on Python 3.10 or later alone (no external libraries; the tests use pytest).
 
 ```sh
-python3 suru.py examples/basic.suru   # 型を調べてから実行(トップレベルの式の値を1行ずつ表示)
-python3 suru.py --検査 examples/basic.suru  # 実行せずに型の間違いを探す(--check も可)
-python3 suru.py --検査なし examples/basic.suru  # 型を調べずに実行(--no-check も可)
-python3 suru.py                       # 対話モード(1行ずつ入力して、値と型をすぐ表示)
-python3 suru.py --対話 examples/数学.suru  # ファイルを読んでから対話モード(-i も可)
-python3 suru.py --翻訳 examples/basic.suru  # バイナリ examples/basic を作る(--compile も可。clang が必要)
-python3 -m pytest tests               # テスト
+python3 suru.py examples/basic.suru   # check types, then run (prints the value of each top-level expression on its own line)
+python3 suru.py --検査 examples/basic.suru  # look for type errors without running (--check also works)
+python3 suru.py --検査なし examples/basic.suru  # run without checking types (--no-check also works)
+python3 suru.py                       # interactive mode (type one line at a time and see its value and type right away)
+python3 suru.py --対話 examples/数学.suru  # load a file, then enter interactive mode (-i also works)
+python3 suru.py --翻訳 examples/basic.suru  # build the binary examples/basic (--compile also works; needs clang)
+python3 -m pytest tests               # tests
 ```
 
-### 入れ方
+### Installing
 
-| 方法 | 入れ方 | 入るもの |
+| Method | How to install | What you get |
 |---|---|---|
 | pip | `pip install suru-lang` | `suru` |
-| Homebrew(macOS・Linux) | `brew install suru-lang/suru/suru` | `suru`・`suruc`・`suru-ls`・`kumu` |
-| バイナリ | [GitHub Releases](https://github.com/suru-lang/suru/releases) の `suru-版-OS-CPU.tar.gz` | `suruc`・`suru-ls`・`kumu` |
-| VS Code | 拡張機能ビューで「する」を検索 | 拡張(`suru-ls` を同梱) |
+| Homebrew (macOS, Linux) | `brew install suru-lang/suru/suru` | `suru`, `suruc`, `suru-ls`, `kumu` |
+| Binaries | `suru-VERSION-OS-CPU.tar.gz` from [GitHub Releases](https://github.com/suru-lang/suru/releases) | `suruc`, `suru-ls`, `kumu` |
+| VS Code | Search for 「する」 in the Extensions view | The extension (bundles `suru-ls`) |
 
-バイナリを作る(`suru --翻訳`、`suruc`)には、どの方法でも手元に clang が要ります。macOS では `xcode-select --install`、Ubuntu などでは `sudo apt install clang` で入ります。Windows 用は `suru-ls` だけです(作ったプログラムの実行時ライブラリが POSIX 向けなので、WSL を使ってください)。
+Building binaries (`suru --翻訳`, `suruc`) needs clang on your machine, whichever method you use. On macOS install it with `xcode-select --install`; on Ubuntu and similar, with `sudo apt install clang`. For Windows only `suru-ls` is provided (the runtime library of compiled programs targets POSIX, so please use WSL).
 
-### pip で入れる
+### Installing with pip
 
 ```sh
-pip install suru-lang   # 最新のリポジトリからなら pip install git+https://github.com/suru-lang/suru(取ってきたフォルダで pip install . も可)
-suru examples/basic.suru          # python3 suru.py と同じ(--検査・--検査なし・--翻訳 も使えます)
+pip install suru-lang   # for the latest repository: pip install git+https://github.com/suru-lang/suru (or pip install . in a cloned folder)
+suru examples/basic.suru          # same as python3 suru.py (--検査, --検査なし and --翻訳 work too)
 suru --version
 ```
 
-標準ライブラリ(`lib/標準.suru`)とコンパイラの実行時ライブラリ(`runtime/suru_rt.c`)も一緒に入ります。`--翻訳` には clang が別に必要です。
+The standard library (`lib/標準.suru`) and the compiler's runtime library (`runtime/suru_rt.c`) are installed along with it. `--翻訳` needs clang separately.
 
-### 速いコンパイラ(Go 版)
+### Fast compiler (Go version)
 
-`--翻訳` と同じことを、Go で書いたコンパイラ `suruc` でもできます。出す LLVM IR は Python 版と一字一句同じで、IR を作るまでが 14〜35 倍ほど速くなります(Go 1.23 以降が必要です)。
+You can do the same thing as `--翻訳` with `suruc`, a compiler written in Go. It emits LLVM IR identical to the Python version, character for character, and gets to the IR about 14 to 35 times faster (requires Go 1.23 or later).
 
 ```sh
-go install github.com/suru-lang/suru/cmd/suruc@latest   # または、取ってきたフォルダで go build ./cmd/suruc
-suruc examples/basic.suru          # バイナリ examples/basic を作る(clang が必要)
-suruc -O0 examples/basic.suru      # clang の最適化を弱めて、もっと速く作る(-O0 〜 -O3。既定は -O2)
-suruc --ll examples/basic.suru     # LLVM IR だけを出す
+go install github.com/suru-lang/suru/cmd/suruc@latest   # or go build ./cmd/suruc in a cloned folder
+suruc examples/basic.suru          # build the binary examples/basic (needs clang)
+suruc -O0 examples/basic.suru      # weaker clang optimization for a faster build (-O0 to -O3; the default is -O2)
+suruc --ll examples/basic.suru     # emit only the LLVM IR
 ```
 
-`suruc` は1つの実行ファイルで、標準ライブラリと実行時ライブラリを中に持っています(`SURU_LIB` で lib/ の場所を変えられます)。
+`suruc` is a single executable with the standard library and the runtime library built in (`SURU_LIB` changes where lib/ is looked up).
 
-### プロジェクトを組む(kumu)
+### Building projects (kumu)
 
-`kumu`(組む)は、プロジェクトの雛形作り・ビルド・実行を1つでこなす道具です(cargo のようなもの)。中に Go 版のコンパイラを持っているので、`suruc` は別に要りません(clang は必要です)。
+`kumu` (組む, "to assemble") is one tool that creates project skeletons, builds and runs (something like cargo). It contains the Go compiler, so you don't need `suruc` separately (you do need clang).
 
 ```sh
-go install github.com/suru-lang/suru/cmd/kumu@latest   # または、取ってきたフォルダで go build ./cmd/kumu
-kumu 新規 挨拶      # 挨拶/ に 組.suru・本体.suru・.gitignore を作る(new)
+go install github.com/suru-lang/suru/cmd/kumu@latest   # or go build ./cmd/kumu in a cloned folder
+kumu 新規 挨拶      # create 組.suru, 本体.suru and .gitignore in 挨拶/ (new)
 cd 挨拶
-kumu 実行           # 出力/挨拶 を作って実行する(run。-- の後ろはプログラムへの引数)
-kumu 作る           # 出力/挨拶 を作るだけ(build。-O0 〜 -O3・--検査なし も使えます)
-kumu 初期化         # 今のフォルダに雛形を作る(init)
-kumu 追加 github.com/someone/計算   # 依存を足す。版を書かなければ一番新しいタグ(add。…@1.2.0 で版を決める)
-kumu 更新           # 依存を一番新しいタグにする(update。kumu 更新 計算 なら1つだけ)
-kumu 削除 計算      # 依存を外す(remove)
-kumu 取得           # 依存を取ってきて 組.lock を書く(fetch。作る・実行 でも行います)
-kumu 試験           # 試験/ の「…試験する」を1つずつ動かす(test。kumu 試験 二倍 で名前の一部から選ぶ)
-kumu 点検           # プロジェクトの全部のファイルを点検する(check)
-kumu 公開           # 確かめてから Git のタグ v版 を付ける(publish。push は自分で)
+kumu 実行           # build 出力/挨拶 and run it (run; arguments after -- go to the program)
+kumu 作る           # only build 出力/挨拶 (build; -O0 to -O3 and --検査なし work too)
+kumu 初期化         # create the skeleton in the current folder (init)
+kumu 追加 github.com/someone/計算   # add a dependency; without a version, the newest tag (add; …@1.2.0 picks a version)
+kumu 更新           # move dependencies to their newest tags (update; kumu 更新 計算 updates just one)
+kumu 削除 計算      # remove a dependency (remove)
+kumu 取得           # fetch dependencies and write 組.lock (fetch; 作る and 実行 do this too)
+kumu 試験           # run each 「…試験する」 in 試験/ one by one (test; kumu 試験 二倍 picks by part of the name)
+kumu 点検           # lint every file in the project (check)
+kumu 公開           # check, then put the Git tag vVERSION (publish; push it yourself)
 ```
 
-試験は `試験/` のフォルダのファイルに、名前が「試験する」で終わる手順として書きます。
+Tests are written in files in the `試験/` ("tests") folder, as procedures whose names end in 「試験する」.
 
 ```
 「試験」 を 読み込んで 使う
-「計算」 を 読み込む                       # 組.suru の名前で、プロジェクトのファイルを読み込む
+「計算」 を 読み込む                       # load a project file by its name in 組.suru
 
 二倍試験する とは 手順
   （2 を 計算内の二倍する） を 4 に 一致確認する
   1 < 2 を 確認する
 ```
 
-ライブラリの公開の手順は [docs/ライブラリを公開する.md](docs/ライブラリを公開する.md) にあります。VS Code の拡張からも、コマンドパレットで kumu の命令を使えます。
+The steps for publishing a library are in [docs/ライブラリを公開する.md](docs/ライブラリを公開する.md) (in Japanese). You can also run kumu's commands from the command palette of the VS Code extension.
 
-プロジェクトの設定は `組.suru` に する の定義で書きます。
+A project's settings are written in `組.suru` as Suru definitions.
 
 ```
 名前 とは 「挨拶」
@@ -88,17 +92,17 @@ kumu 公開           # 確かめてから Git のタグ v版 を付ける(publi
 依存 とは 「github.com/someone/計算@1.2.0」 と 「../手元の部品」
 ```
 
-依存は、ふつうのファイルと同じく `「計算」 を 読み込む` で読み込み、`計算内の二倍する` のように使います。
+(名前 = name, 版 = version, 入口 = entry file, 依存 = dependencies.) Dependencies are loaded just like ordinary files, with `「計算」 を 読み込む`, and used as `計算内の二倍する`.
 
-### マイコン(Arduino)に書き込む
+### Flashing a microcontroller (Arduino)
 
-Arduino Uno・Nano(ATmega328P)向けに作って、USB でつないだ基板にブートローダー経由で書き込めます。マイコンの RAM は 2KB しかないので、使える書き方は「数・真偽・文字列の定数」を使う範囲に限ります(下の「マイコン向けの小さい する」)。
+You can build for the Arduino Uno and Nano (ATmega328P) and write the program to a board connected over USB through its bootloader. The microcontroller has only 2KB of RAM, so what you can write is limited to constants of numbers, booleans and strings ("Small Suru for microcontrollers" below).
 
 ```sh
-kumu 新規 点滅 --対象 arduino-uno   # 基板の LED を点滅させる雛形を作る
+kumu 新規 点滅 --対象 arduino-uno   # create a skeleton that blinks the board's LED
 cd 点滅
-kumu 作る           # 出力/arduino-uno/点滅.hex を作る(フラッシュと RAM の大きさも出す)
-kumu 書き込む       # 作って、見つけたシリアルポートに avrdude で書き込む(flash。--ポート /dev/cu.usbmodem1101 で選ぶ)
+kumu 作る           # build 出力/arduino-uno/点滅.hex (also prints the flash and RAM sizes)
+kumu 書き込む       # build, then write to the serial port it finds with avrdude (flash; choose with --ポート /dev/cu.usbmodem1101)
 ```
 
 ```
@@ -110,17 +114,17 @@ kumu 書き込む       # 作って、見つけたシリアルポートに avrdu
   点滅する
 
 内蔵灯 を 出力設定する
-「こんにちは」 を 表示する      # シリアル(9600)に出る
+「こんにちは」 を 表示する      # goes to the serial port (9600)
 点滅する
 ```
 
-組.suru に `対象 とは 「arduino-uno」` と書くと、作る・書き込む がマイコン向けになります(`arduino-nano`・古いブートローダーの `arduino-nano-old` も選べます)。`suruc --対象 arduino-uno 点滅.suru` でも .hex を作れます。道具は AVR に対応した clang・avr-gcc(avr-libc)・avrdude が要ります。macOS では `brew install llvm avrdude` と `brew tap osx-cross/avr && brew install avr-gcc` で入ります(Apple の clang は AVR を作れないので、kumu は Homebrew の llvm の clang を探します)。Ubuntu では `sudo apt install clang gcc-avr avr-libc avrdude` です。Arduino IDE が入れた avr-gcc と avrdude も見つけて使います。
+Writing `対象 とは 「arduino-uno」` in 組.suru makes 作る and 書き込む target the microcontroller (`arduino-nano` and `arduino-nano-old`, for the old bootloader, are also available). `suruc --対象 arduino-uno 点滅.suru` also builds the .hex. The tools needed are a clang that supports AVR, avr-gcc (avr-libc) and avrdude. On macOS, install them with `brew install llvm avrdude` and `brew tap osx-cross/avr && brew install avr-gcc` (Apple's clang can't build for AVR, so kumu looks for the clang of Homebrew's llvm). On Ubuntu, use `sudo apt install clang gcc-avr avr-libc avrdude`. kumu also finds and uses the avr-gcc and avrdude installed by the Arduino IDE.
 
-### VS Code 拡張
+### VS Code extension
 
-`editors/vscode/` に VS Code 拡張があります。色分け(関数名・格助詞・キーワード・文字列・『』の名前など。空白の書き方と句読点の書き方の両方)、書きながらの型の検査(間違いに波線)、型のホバー、定義へ移動、定義の一覧、補完、名前の変更、型の名前の色分け、▷ か F5 での実行、バイナリ作りができます。書きながらの検査・ホバー・定義へ移動は、Go 版の検査を使う言語サーバー `suru-ls`(`cmd/suru-ls`)が行います。入れ方は [editors/vscode/README.md](editors/vscode/README.md) にあります。
+There is a VS Code extension in `editors/vscode/`. It offers syntax highlighting (function names, case particles, keywords, strings, names in 『』 and so on, in both the spaced style and the punctuation style), type checking as you type (errors get squiggly underlines), type hovers, go to definition, a list of definitions, completion, rename, coloring of type names, running with ▷ or F5, and building binaries. Checking as you type, hovers and go to definition are handled by the language server `suru-ls` (`cmd/suru-ls`), which uses the Go version's checker. Installation is described in [editors/vscode/README.md](editors/vscode/README.md).
 
-## 例
+## Examples
 
 ```
 a　と　b　を加算する　とは　a + b
@@ -131,9 +135,11 @@ a　と　b　を加算する　とは　a + b
 5　を三倍する             # → 15
 ```
 
+This defines 加算する ("add") taking a list `a と b` ("a and b") marked with を, and 三倍する ("triple") built as a pipeline: add the argument to itself, then (して, "and then") add the argument again.
+
 ```
 a を b で 割った数にする とは a / b
-2 で 10 を 割った数にする              # → 5(助詞で引数が決まるので語順は自由)
+2 で 10 を 割った数にする              # → 5 (the particles decide the arguments, so word order is free)
 
 リスト とは 1 と 2 と 3
 リスト の それぞれ を 三倍する        # → （3 と 6 と 9）
@@ -141,15 +147,17 @@ a を b で 割った数にする とは a / b
 5 に （1 を 加算すること） を 適用する  # → 6
 ```
 
-空白や改行を使わず、句読点で詰めて書くこともできます(両方の書き方を同じファイルで混ぜてもかまいません)。
+Here リスト の それぞれ ("each of the list") maps a function over a list, …すること ("the act of doing …") turns a function into a value, and 選別する ("select") is filter.
+
+You can also write without spaces or line breaks, packed tightly with punctuation (you may mix both styles in the same file).
 
 ```
 aとbを加算するとは、a+b。引数を三倍するとは、引数と引数を加算して、引数を加算する。
 1と2を加算する。5を三倍する。                         # → 3、15
-aとbを平均するとは、合計/2。ただし、合計とは、a+b。   # 局所定義は「ただし」で
+aとbを平均するとは、合計/2。ただし、合計とは、a+b。   # local definitions use 「ただし」 ("where")
 ```
 
-組(名前付きタプル)、選択肢のある型、パターンマッチ、性質(型クラス)も使えます。
+Records (named tuples), types with alternatives, pattern matching and traits (type classes) are available too.
 
 ```
 図形 とは 半径 の 円 か 幅 と 高 の 長方形
@@ -163,7 +171,9 @@ aとbを平均するとは、合計/2。ただし、合計とは、a+b。   # �
 幅 は 2 で 高 は 3 の 長方形 を 面積にする    # → 6
 ```
 
-引数に値や形を書くと、場合ごとに関数を定義できます。パターンには「かつ」で条件を付けられます。
+(A 図形 "shape" is either a 円 "circle" with a 半径 "radius", or (か) a 長方形 "rectangle" with a 幅 "width" and 高 "height". もし … が … ならば reads "if … is … then".)
+
+Writing values or shapes in place of arguments defines a function case by case. Patterns can take a condition with 「かつ」 ("and").
 
 ```
 0 を 階乗する とは 1
@@ -179,7 +189,7 @@ n を 階乗する とは n * （n - 1 を 階乗する）
     そうでなければ 「長方形」
 ```
 
-「…である」で終わる名前は述語(真か偽を返す関数)で、主語を「が」で受けます。
+A name ending in 「…である」 ("is …") is a predicate (a function returning true or false), and takes its subject with 「が」.
 
 ```
 n が 偶数である とは n % 2 が 0
@@ -188,291 +198,291 @@ n が 偶数である とは n % 2 が 0
 リスト から 偶数であること で 選別する
 ```
 
-画面への出力や入力のような副作用は「動作」という値で扱い、「手順」で順に行います。
+Side effects such as printing and input are handled as values called 「動作」 ("actions"), and carried out in order with 「手順」 ("procedure").
 
 ```
 挨拶するとは、手順（
-  名前とは、「お名前は? 」を入力した結果。     # 「…した 結果」で動作の結果を受け取る
+  名前とは、「お名前は? 」を入力した結果。     # 「…した 結果」 ("the result of having done …") receives an action's result
   「こんにちは、」+名前+「さん」を表示する。
   名前の長さを結果にする）。
-挨拶してから、表示する。                       # 「してから」は前の動作の結果を「を」に渡す
+挨拶してから、表示する。                       # 「してから」 ("after doing") passes the previous action's result to 「を」
 「はじめ」を表示する。それから、「おわり」を表示する。
 ```
 
-`examples/stdlib.suru` と `examples/stdlib_open.suru` には標準ライブラリの例、`examples/predicate.suru` には述語の例、`examples/cases.suru` には場合ごとの関数定義とパターンの条件の例、`examples/io.suru` には動作と手順の例、`examples/fib_input.suru` には個数を尋ねてフィボナッチ数列を表示する例、`examples/data.suru` には組・パターンマッチ・性質の例、`examples/punct.suru` には句読点の書き方の例、`examples/more.suru` には改行・インデント、局所定義、条件分岐と再帰、長いパイプラインの例、`examples/list.suru` には助詞の引数、リスト、高階関数の例があります。`examples/通信/` には TCP と UDP のエコーサーバーとエコークライアントの例があります(2つの端末で動かします)。
+More examples: `examples/stdlib.suru` and `examples/stdlib_open.suru` show the standard library, `examples/predicate.suru` predicates, `examples/cases.suru` case-by-case function definitions and pattern conditions, `examples/io.suru` actions and procedures, `examples/fib_input.suru` asks for a count and prints the Fibonacci sequence, `examples/data.suru` records, pattern matching and traits, `examples/punct.suru` the punctuation style, `examples/more.suru` line breaks and indentation, local definitions, conditionals and recursion, and long pipelines, and `examples/list.suru` particle arguments, lists and higher-order functions. `examples/通信/` has TCP and UDP echo servers and echo clients (run them in two terminals).
 
-## 文法のまとめ
+## Grammar summary
 
-| 書き方 | 意味 |
+| Syntax | Meaning |
 |---|---|
-| `a を b で 除算する とは a / b` | 関数の定義。引数名の後に**格助詞**(を・に・で・から・へ・より)を付ける。関数名は「する」で終わる |
-| `10 を 2 で 除算する` / `2 で 10 を 除算する` | 呼び出し。引数は助詞で対応するので語順は自由 |
-| `答えする とは 42` | 引数なしの関数 |
-| `税率 とは 0.1` | 値の定義(名前が「する」で終わらないもの) |
-| `10 を 2 で 除算して 3 に 加算する` | パイプライン。「…して」の結果が次の関数の**「を」**に入る |
-| `1 と 2 と 3`、`空` | リスト、空リスト |
-| `a と b を 加算する とは a + b` | 「を」にリストを受け取り、分解して a・b に入れる |
-| `リスト の 先頭` `の 残り` `の 最後` `の 長さ` | リストの性質 |
-| `x を リスト に 追加する` / `挿入する` | 末尾 / 先頭に足した新しいリスト |
-| `もし リスト が 空 ならば …` | 「が」は等しいかどうか(`==` と同じ) |
-| `n が 偶数である とは …` | 述語(真偽を返す関数)の定義。主語は「が」 |
-| `4 が 偶数である` / `3 が 偶数でない` / `偶数であること` | 述語の呼び出し / 否定 / 述語そのもの(値) |
-| `三倍すること`、`1 を 加算すること` | 関数そのもの(値)。引数が足りなければ部分適用 |
-| `x を 受け取って x * 2 を 返すこと` | 無名関数 |
-| `リスト の それぞれ を 三倍する` | 要素ごとに呼び出して、結果のリストを返す(map) |
-| `もし 条件 ならば 式 そうでなければ 式` | 条件分岐(式なので必ず値を返す) |
-| `+ - * / % ^`、`× ÷`、全角の `＋－＊／` | 算術(`^` はべき乗)。リストどうしの `+` は連結 |
-| `== != < > <= >=`、`= ≠ ≦ ≧` | 比較。結果は `真` / `偽`。大小(`<` など)は数どうしか文字列どうし(文字の番号の順) |
-| `条件 かつ 条件`、`条件 または 条件` | 真偽の「かつ」「または」(左で決まれば右は計算しない) |
-| `( … )` `（ … ）` | 括弧。呼び出しを算術式や引数に埋め込むときにも使う |
-| `「文字列」` | 文字列。`+` で連結 |
-| `#`・`＃`・`※` | 行末までコメント |
-| `5を三倍する。` | 句読点の書き方。「。」で文が終わり、「、」は区切り。空白なしで詰めて書ける |
-| `5を三倍します。`、`5を三倍しまして、表示します。`、`p とは 3 と 4 の 点 です。` | 丁寧語の文末。「します」は「する」、「しまして」は「して」と同じ。文末の「です」は読み捨てる |
-| `数 を 階乗する は 数 を 返す`、`数を階乗するは、数を返します。` | 関数の型の宣言の終わりの「を 返す」「を 返します」は読みやすくするための飾り(`… は 数` と同じ) |
-| `挨拶する は 数 を 返す 動作`、`… は 数 を 返す 入出力動作` | 型の「数 を 返す 動作」は「数 の 動作」と同じ。「入出力動作」は「動作」の別名 |
-| `… とは 入出力手順` + 深い行 / `入出力手順（文。文。）` | 動作(IO)だけの手順。値が動作でなければ型の検査でエラー |
-| `… とは、本体。ただし、合計とは、a+b。` | 「ただし」で直前の定義に局所定義を付け足す |
-| `（合計とは、a+b。合計/2）` | 括弧の中に「。」で文を並べたブロック(最後の文が値) |
-| `『おやつの数』` | ひらがなを含む名前(『』で囲む) |
-| `点 とは 横 と 縦 の 組` | 組(名前付きタプル)の型の定義 |
-| `図形 とは 半径 の 円 か 幅 と 高 の 長方形`、`信号 とは 赤 か 黄 か 青` | 選択肢のある型(「か」で形を並べる) |
-| `3 と 4 の 点` / `横 は 3 で 縦 は 4 の 点` | 組を作る(順番どおり / 名前つき) |
-| `p の 横`、`横 は 10 の p` | フィールドを取り出す、1つだけ変えた新しい組を作る |
-| `もし 形 が` + 深い行に `半径 の 円 ならば …` | パターンマッチ(場合分け) |
-| `先頭 は x で 残り は 他 ならば …` | 空でないリストを先頭と残りに分解する |
-| `半径 の 円 かつ 半径 > 10 ならば …` | パターンの条件(ガード) |
-| `（s という JSON文字列） を …`、`半径 という 円 ならば …` | パターンでは「の 形名」を「という 形名」とも書ける |
-| `0 を 階乗する とは 1` + `n を 階乗する とは …` | 場合ごとの関数定義(引数にパターンを書く。上から順に使う) |
-| `比較可能 という 性質 とは …` / `点 は 比較可能` | 性質(型クラス)の定義と実装 |
-| `x を 表示する`、`入力する` | 動作(副作用)を作る。トップレベルに書くと行われる |
-| `手順（文。文。…）` / `… とは 手順` + 深い行 | 文を順に行う(do 記法)。最後の文が全体の動作 |
-| `名前 とは 入力した 結果` | 手順の中で動作を行い、その結果に名前を付ける(バインド) |
-| `入力してから 表示する` | 前の動作の結果を次の関数の「を」に渡す(バインド) |
-| `（入力する） の 結果 を 数値にする` | 動作の結果に関数を適用する(写像) |
-| `x を 結果にする` | 何もせずに x を結果とする動作(pure / return) |
-| `…。それから、…。` | 前の文の後に続けて行う |
+| `a を b で 除算する とは a / b` | A function definition. Each parameter name is followed by a **case particle** (を, に, で, から, へ, より). Function names end in 「する」 |
+| `10 を 2 で 除算する` / `2 で 10 を 除算する` | A call. Arguments are matched by particle, so word order is free |
+| `答えする とは 42` | A function with no arguments |
+| `税率 とは 0.1` | A value definition (a name that does not end in 「する」) |
+| `10 を 2 で 除算して 3 に 加算する` | A pipeline. The result of 「…して」 goes into the next function's **「を」** |
+| `1 と 2 と 3`, `空` | A list, the empty list |
+| `a と b を 加算する とは a + b` | Takes a list as 「を」, destructured into a and b |
+| `リスト の 先頭` `の 残り` `の 最後` `の 長さ` | List properties (head, rest, last, length) |
+| `x を リスト に 追加する` / `挿入する` | A new list with x added at the end / front |
+| `もし リスト が 空 ならば …` | 「が」 tests equality (same as `==`) |
+| `n が 偶数である とは …` | A predicate (function returning a boolean) definition. The subject takes 「が」 |
+| `4 が 偶数である` / `3 が 偶数でない` / `偶数であること` | Calling a predicate / its negation / the predicate itself (as a value) |
+| `三倍すること`, `1 を 加算すること` | A function itself (as a value). With missing arguments it is a partial application |
+| `x を 受け取って x * 2 を 返すこと` | An anonymous function ("take x and return x * 2") |
+| `リスト の それぞれ を 三倍する` | Calls the function for each element and returns the list of results (map) |
+| `もし 条件 ならば 式 そうでなければ 式` | A conditional (an expression, so it always returns a value) |
+| `+ - * / % ^`, `× ÷`, full-width `＋－＊／` | Arithmetic (`^` is exponentiation). `+` on two lists concatenates |
+| `== != < > <= >=`, `= ≠ ≦ ≧` | Comparison. The result is `真` (true) / `偽` (false). Ordering (`<` etc.) works between numbers or between strings (by character code) |
+| `条件 かつ 条件`, `条件 または 条件` | Boolean "and" and "or" (the right side is not evaluated if the left decides) |
+| `( … )` `（ … ）` | Parentheses. Also used to embed a call in arithmetic or in an argument |
+| `「文字列」` | A string. Concatenate with `+` |
+| `#`, `＃`, `※` | Comment to end of line |
+| `5を三倍する。` | The punctuation style. 「。」 ends a sentence and 「、」 separates. You can write packed without spaces |
+| `5を三倍します。`, `5を三倍しまして、表示します。`, `p とは 3 と 4 の 点 です。` | Polite sentence endings. 「します」 is the same as 「する」, 「しまして」 as 「して」. A trailing 「です」 is ignored |
+| `数 を 階乗する は 数 を 返す`, `数を階乗するは、数を返します。` | The trailing 「を 返す」 / 「を 返します」 ("returns …") of a function's type declaration is decoration for readability (same as `… は 数`) |
+| `挨拶する は 数 を 返す 動作`, `… は 数 を 返す 入出力動作` | The type 「数 を 返す 動作」 ("action returning a number") is the same as 「数 の 動作」. 「入出力動作」 ("IO action") is another name for 「動作」 |
+| `… とは 入出力手順` + deeper lines / `入出力手順（文。文。）` | A procedure of actions (IO) only. A value that is not an action is a type error |
+| `… とは、本体。ただし、合計とは、a+b。` | 「ただし」 ("where") adds local definitions to the definition just before |
+| `（合計とは、a+b。合計/2）` | A block of sentences separated by 「。」 inside parentheses (the last sentence is the value) |
+| `『おやつの数』` | A name containing hiragana (enclosed in 『』) |
+| `点 とは 横 と 縦 の 組` | Defining a record (named tuple) type |
+| `図形 とは 半径 の 円 か 幅 と 高 の 長方形`, `信号 とは 赤 か 黄 か 青` | A type with alternatives (shapes listed with 「か」, "or") |
+| `3 と 4 の 点` / `横 は 3 で 縦 は 4 の 点` | Building a record (positional / named) |
+| `p の 横`, `横 は 10 の p` | Reading a field, making a new record with one field changed |
+| `もし 形 が` + deeper lines like `半径 の 円 ならば …` | Pattern matching (case analysis) |
+| `先頭 は x で 残り は 他 ならば …` | Splits a non-empty list into its head and rest |
+| `半径 の 円 かつ 半径 > 10 ならば …` | A pattern condition (guard) |
+| `（s という JSON文字列） を …`, `半径 という 円 ならば …` | In patterns, 「の 形名」 can also be written 「という 形名」 |
+| `0 を 階乗する とは 1` + `n を 階乗する とは …` | Case-by-case function definitions (patterns in the parameters, tried from the top) |
+| `比較可能 という 性質 とは …` / `点 は 比較可能` | Defining and implementing a trait (type class) |
+| `x を 表示する`, `入力する` | Make actions (side effects). Written at the top level, they are carried out |
+| `手順（文。文。…）` / `… とは 手順` + deeper lines | Carry out sentences in order (do notation). The last sentence is the action of the whole |
+| `名前 とは 入力した 結果` | Inside a procedure, carry out an action and name its result (bind) |
+| `入力してから 表示する` | Pass the previous action's result to the next function's 「を」 (bind) |
+| `（入力する） の 結果 を 数値にする` | Apply a function to an action's result (map) |
+| `x を 結果にする` | An action that does nothing and has x as its result (pure / return) |
+| `…。それから、…。` | Carry on after the previous sentence ("and then") |
 
-### 組み込み関数
+### Built-in functions
 
-| 呼び出し | 意味 |
+| Call | Meaning |
 |---|---|
-| `x を 表示する` | x を表示する動作(結果は x) |
-| `x を 続表示する` | 改行を付けずに表示する動作(結果は x) |
-| `入力する`、`「質問」 を 入力する` | 1行読む動作(結果は文字列)。「を」があれば先に表示する |
-| `「12」 を 数値にする` | 文字列を数にする(全角も可。数にできなければエラー) |
-| `動作のリスト を 実行する` | 動作を順に行う動作(結果は結果のリスト) |
-| `x を 結果にする` | 何もせずに x を結果とする動作 |
-| `m を f で 連鎖する` | m を行い、結果を f に渡す(性質「連鎖可能」の関数。リストなら f の結果をつなげる) |
-| `x を 絶対値にする` | 絶対値 |
-| `xs を 加算する`、`x を y に 加算する` | 合計(「を」がリストなら全部足す。「に」は省略可) |
-| `xs を 乗算する`、`x を y に 乗算する` | 積 |
+| `x を 表示する` | An action that prints x (its result is x) |
+| `x を 続表示する` | An action that prints without a newline (its result is x) |
+| `入力する`, `「質問」 を 入力する` | An action that reads one line (its result is a string). With 「を」, prints it first |
+| `「12」 を 数値にする` | Turns a string into a number (full-width digits are fine; an error if it isn't a number) |
+| `動作のリスト を 実行する` | An action that carries out actions in order (its result is the list of results) |
+| `x を 結果にする` | An action that does nothing and has x as its result |
+| `m を f で 連鎖する` | Carries out m and passes the result to f (a function of the trait 「連鎖可能」, chainable; for lists it joins the results of f) |
+| `x を 絶対値にする` | Absolute value |
+| `xs を 加算する`, `x を y に 加算する` | Sum (if 「を」 is a list, adds everything; 「に」 can be left out) |
+| `xs を 乗算する`, `x を y に 乗算する` | Product |
 | `a から b を 減算する` | a - b |
 | `a を b で 除算する` | a / b |
-| `x を リスト に 追加する` / `挿入する` | 末尾 / 先頭に足したリスト |
-| `関数 を x に 適用する` | 関数を x に適用(「に」を省くと引数なしで呼ぶ) |
-| `リスト から 関数 で 選別する` | 関数が 真 を返す要素だけのリスト(filter) |
-| `リスト を 関数 で 写像する` | 各要素に関数を適用したリスト(map)。性質「写像可能」の関数で、動作にも使える |
-| `リスト を 初期値 から 関数 で 畳み込みする` | 左からの畳み込み(fold) |
+| `x を リスト に 追加する` / `挿入する` | The list with x added at the end / front |
+| `関数 を x に 適用する` | Applies the function to x (without 「に」, calls it with no arguments) |
+| `リスト から 関数 で 選別する` | The list of elements for which the function returns 真 (filter) |
+| `リスト を 関数 で 写像する` | The list with the function applied to each element (map). A function of the trait 「写像可能」 (mappable), so it works on actions too |
+| `リスト を 初期値 から 関数 で 畳み込みする` | Left fold |
 
-組み込みと同じ名前の関数を定義すると、定義したほうが使われます。
+If you define a function with the same name as a built-in, your definition is used.
 
-## 決めたこと(仕様で曖昧だった点)
+## Decisions (points the spec left open)
 
-1. **引数は格助詞で区別する。** 使える助詞は「を・に・で・から・へ・より」。1つの関数で同じ助詞は1回までです(定義でも呼び出しでも、2回目はエラー)。足りない引数や、受け取らない助詞を渡すとエラーです。
-2. **助詞は関数名にくっついていてよい。** `を加算する` と `を 加算する` は同じです。`で除算する`、`を返すこと` なども同様です。**ひらがなだけの関数名は使えません**(`へんかんする` はエラー。「する」の前に漢字かカタカナが必要です)。
-3. **「…して」は関数合成(パイプライン)。** 前の結果は次の関数の「を」に入ります。次の区間に「を」の引数も書いてあるときは、**前の結果を先頭に並べたリスト**になります。`引数 と 引数 を加算して 引数 を加算する` は `加算(を = (加算(を = (引数, 引数)) と 引数))` です。式は必ず「…する」で終わります(「…して」で終わるとエラー)。
-4. **「と」はリストを作る。** `1 と 2 と 3` は3要素のリストです。算術と比較は「と」より強く結びつくので、`1 + 1 と 2 * 3` は `（2 と 6）` です。1要素のリストは `1 を 空 に 追加する` で作ります。リストは変更できない値で、`（1 と 2 と 3）` のように表示します。
-5. **定義の「a と b を」はリストの分解。** 渡されたリストの長さが合わないとエラーです。これで最初の例 `a と b を加算する とは a + b` は今まで通り動きます。
-6. **読点「、」は句読点の書き方の区切り、中黒「・」は予約。** 「、」はリストの区切りには使いません(20 以降を参照)。「・」は文字列の外に書くとエラーです。
-7. **「の」の後はリストの性質かフィールド名。** 先頭・残り・最後・長さ・それぞれ はリストの性質、それ以外の名前は組のフィールドです(`p の 横`)。算術より強く結びつきます(`リスト の 先頭 + 1` は `(リスト の 先頭) + 1`)。「の」の後が型の形の名前のときだけは組を作る意味になり、結びつきが変わります(28番)。
-8. **「が」は等しいかどうか。** `リスト が 空` は `リスト == 空` と同じです。「もし」の直後の「が」はパターンマッチになりますが、パターンが値だけなら意味は同じです(31番)。
-9. **「〜すること」は関数の値。** 区間の最後にある「こと」は、前に並んだ引数を受け取って部分適用になります(`1 を 加算すること`)。後ろに助詞が続く「こと」は、それ自体が外側の呼び出しの引数になり、前の引数は外側のものです(`リスト を 0 から 加算すること で 畳み込みする` の `0 から` は 畳み込み の引数)。部分適用した関数を外側の引数に渡すときは括弧で囲みます: `5 に （1 を 加算すること） を 適用する`。
-10. **関数の値に値を渡すときは、まだ渡していない引数を定義の順に埋める。** 組み込みは表の順(加算する なら を → に)です。必須の引数が残れば、さらに部分適用になります。畳み込みでは、必須の引数が2つ以上ある関数には「累積値」「要素」を別々に、1つの関数には `（累積値 と 要素）` のリストとして渡します。
-11. **「それぞれ」は1回の呼び出しにだけかかる。** `リスト の それぞれ を 三倍する` は三倍した結果のリストを返します。同じ呼び出しに「それぞれ」が2つあると、同じ位置の要素どうしで呼び出します(長さが違うとエラー)。呼び出しの引数以外に書いた `リスト の それぞれ` はリストそのものです。
-12. **無名関数** `x を 受け取って 本体 を 返すこと`。引数の書き方は定義と同じです(`a と b を 受け取って` も可)。外側の変数を覚えます(クロージャ)。他の引数より前に書くときは括弧で囲みます。
-13. **名前の予約。** 「する」「して」「すること」で終わる単語は常に関数とみなすので、変数名には使えません。`と` `とは` `の` `が` `を` `に` `で` `から` `へ` `より` `もし` `ならば` `そうでなければ` `受け取って` `返すこと` `ただし` `か` `は` `という` `組` `性質` `それから` `かつ` `または` `読み込む` `読み込んで` `使う` `真` `偽` `空` も予約語です。「…した」で終わる単語(`入力した`)と「…してから」で終わる単語も関数の呼び出しです。「…である」「…でない」「…であること」で終わる単語は述語の呼び出しです(47番)。`結果` と `手順` は予約語ではなく、決まった位置(36番以降)でだけ特別な意味になります。
-14. **算術は呼び出しより強く結びつく。** 呼び出しの結果を計算に使うときは `( 1 と 2 を加算する ) * 3` と括弧で囲みます。
-15. **空白の書き方ではトークンはスペース区切り。** `a+b` のように詰めて書くと1つの名前になります。例外として括弧と「」『』は詰めて書いても区切ります。詰めて書きたいときは句読点の書き方(下の「句読点の書き方」)を使ってください。
-16. **オフサイドルール。** 行頭のインデント幅で構造を決めます(半角スペース=1、全角スペース=2、タブ=4)。
-   - 「とは」で行が終わると、次の深い行たちが本体ブロックになります。ブロックの中には局所定義を並べられ、**最後の行の式が値**になります。
-   - 「とは」の後に同じ行で本体を書いた場合や、普通の式の行の後に深い行が続く場合、深い行は式の**続き**です。
-   - 同じ深さの行が `ならば` / `そうでなければ` で始まるときは、前の行の続きとみなします(条件分岐を縦に並べて書けるように)。
-   - 深さが前のどのブロックとも合わない行はエラーです。
-17. **定義の順番は自由。** トップレベルの定義は先にすべて登録されるので、使う場所より後ろで定義しても、相互再帰でも動きます。
-18. **割り算。** 整数どうしで割り切れるときは整数、そうでなければ小数になります。0 で割るとエラーです。
-19. **エラーは日本語で、行番号と何文字目か付き。** `2行目 6文字目: 「存在しない数にする」は定義されていません` のように出し、ファイルを実行したときや対話モードでは、その行と位置の印(`^`)も表示します。全角の文字は2文字分の幅で印の位置を合わせます。実行時のエラーは、その式の始まり(算術ならその演算子)の位置を指します。
+1. **Arguments are distinguished by case particles.** The particles are 「を・に・で・から・へ・より」. A function can use each particle at most once (a second one is an error, both in definitions and calls). Missing arguments, or particles the function does not take, are errors.
+2. **Particles may be attached to the function name.** `を加算する` and `を 加算する` are the same, as are `で除算する`, `を返すこと` and so on. **Function names made only of hiragana are not allowed** (`へんかんする` is an error; there must be a kanji or katakana before 「する」).
+3. **「…して」 is function composition (a pipeline).** The previous result goes into the next function's 「を」. When the next segment also has a 「を」 argument, the two become **a list with the previous result first**. `引数 と 引数 を加算して 引数 を加算する` is `加算(を = (加算(を = (引数, 引数)) と 引数))`. An expression always ends with 「…する」 (ending with 「…して」 is an error).
+4. **「と」 builds a list.** `1 と 2 と 3` is a three-element list. Arithmetic and comparison bind tighter than 「と」, so `1 + 1 と 2 * 3` is `（2 と 6）`. A one-element list is made with `1 を 空 に 追加する`. Lists are immutable values and print as `（1 と 2 と 3）`.
+5. **「a と b を」 in a definition destructures a list.** If the list passed in has the wrong length, it is an error. This keeps the first example, `a と b を加算する とは a + b`, working as before.
+6. **The reading comma 「、」 is the separator of the punctuation style, and the middle dot 「・」 is reserved.** 「、」 is not used to separate list items (see item 20 onward). 「・」 outside a string is an error.
+7. **After 「の」 comes a list property or a field name.** 先頭・残り・最後・長さ・それぞれ (head, rest, last, length, each) are list properties; any other name is a record field (`p の 横`). It binds tighter than arithmetic (`リスト の 先頭 + 1` is `(リスト の 先頭) + 1`). Only when the name after 「の」 is the name of a type's shape does it mean building a record, and the binding changes (item 28).
+8. **「が」 tests equality.** `リスト が 空` is the same as `リスト == 空`. A 「が」 right after 「もし」 becomes pattern matching, but when the patterns are just values the meaning is the same (item 31).
+9. **「〜すること」 is a function value.** A 「こと」 at the end of a segment takes the arguments before it and becomes a partial application (`1 を 加算すること`). A 「こと」 followed by a particle is itself an argument of the outer call, and the arguments before it belong to the outer call (in `リスト を 0 から 加算すること で 畳み込みする`, `0 から` is an argument of 畳み込み). To pass a partially applied function to an outer argument, wrap it in parentheses: `5 に （1 を 加算すること） を 適用する`.
+10. **Passing values to a function value fills the not-yet-given arguments in definition order.** For built-ins, the order is the one in the table (for 加算する, を then に). If required arguments remain, the result is again a partial application. In a fold, a function with two or more required arguments receives the "accumulator" and the "element" separately, and a function with one receives them as the list `（累積値 と 要素）`.
+11. **「それぞれ」 applies to one call only.** `リスト の それぞれ を 三倍する` returns the list of tripled results. With two 「それぞれ」 in the same call, the elements at the same positions are paired (different lengths are an error). `リスト の それぞれ` written anywhere other than a call argument is just the list.
+12. **Anonymous functions** are `x を 受け取って 本体 を 返すこと`. Parameters are written as in a definition (`a と b を 受け取って` also works). They capture outer variables (closures). Wrap one in parentheses when it comes before other arguments.
+13. **Reserved names.** Words ending in 「する」, 「して」 or 「すること」 are always treated as functions, so they can't be variable names. `と` `とは` `の` `が` `を` `に` `で` `から` `へ` `より` `もし` `ならば` `そうでなければ` `受け取って` `返すこと` `ただし` `か` `は` `という` `組` `性質` `それから` `かつ` `または` `読み込む` `読み込んで` `使う` `真` `偽` `空` are also reserved. Words ending in 「…した」 (`入力した`) and words ending in 「…してから」 are function calls too. Words ending in 「…である」, 「…でない」 or 「…であること」 are predicate calls (item 47). `結果` and `手順` are not reserved; they have a special meaning only in fixed positions (item 36 onward).
+14. **Arithmetic binds tighter than calls.** To use a call's result in a calculation, wrap it in parentheses: `( 1 と 2 を加算する ) * 3`.
+15. **In the spaced style, tokens are separated by spaces.** Writing `a+b` packed together makes it one name. As exceptions, parentheses and 「」『』 separate tokens even when packed. To write packed, use the punctuation style ("Punctuation style" below).
+16. **The off-side rule.** The indentation width at the start of a line decides the structure (a half-width space = 1, a full-width space = 2, a tab = 4).
+   - When a line ends with 「とは」, the following deeper lines form the body block. A block can hold local definitions, and **the expression on its last line is the value**.
+   - When the body is written on the same line after 「とは」, or when deeper lines follow an ordinary expression line, the deeper lines **continue** the expression.
+   - A line at the same depth starting with `ならば` / `そうでなければ` is taken as a continuation of the previous line (so conditionals can be laid out vertically).
+   - A line whose depth matches no earlier block is an error.
+17. **Definitions can come in any order.** All top-level definitions are registered first, so a definition may come after where it is used, and mutual recursion works.
+18. **Division.** Dividing integers gives an integer when it divides evenly, otherwise a decimal. Dividing by 0 is an error.
+19. **Errors are in Japanese, with the line number and the column.** They look like `2行目 6文字目: 「存在しない数にする」は定義されていません` ("line 2, column 6: 「存在しない数にする」 is not defined"); when running a file or in interactive mode, the line itself and a marker (`^`) under the position are shown too. Full-width characters count as two columns when placing the marker. A runtime error points at the start of its expression (for arithmetic, the operator).
 
-### 句読点の書き方
+### Punctuation style
 
-1. **「。」か「、」を含む行は句読点の書き方。** その行から始まる文は「。」で終わります。「。」までは改行をまたいでよく(字下げも自由)、1行に何文書いてもかまいません。「。」で終わらないまま最後まで来るとエラーです。「、」は空白と同じ区切りで、どこに書いてもよく、パターンマッチの場合の区切り(31番)のほかは意味を持ちません(`とは、` や `して、` の後に置くと読みやすい)。文字列の中の「。」「、」は関係ありません。「。」や「、」のない行は今まで通り空白とインデントの書き方なので、両方を1つのファイルに混ぜられます。
-2. **単語は文字の種類の境目で切る。** 漢字・カタカナ・英字の並びは名前(英字の後の数字は名前の続き: `x1`)、数字の並びは数、記号の並びは演算子です。ひらがなの並びは 助詞(を・に・で・から・へ・より)、キーワード(と・とは・の・が・もし・ならば・そうでなければ・それぞれ・ただし・か・は・という)、「する/して/すること」に分けます。`長さ` `残り` `受け取って` `返すこと` と組み込みの `畳み込み` はひらがなを含みますが、決まった言葉として読みます。
-3. **関数名は「する」の直前の名前から。** `リストを三倍する` は `リスト を 三倍する` です。「する」と同じひらがなの並びにある前の部分は関数名に入ります(`三倍にする` `絶対値にする`)。
-4. **名前は漢字・カタカナ・英字で書く。** 送り仮名などのひらがなは助詞と区別できないので、ひらがなを含む名前は 『おやつの数』 のように『』で囲みます(「」は文字列なので『』にしました)。ひらがなの混ざった関数名は 『割った数に』する のように書けます(空白の書き方の `割った数にする` と同じ関数です)。
-5. **ひらがなだけの名前はエラー。** どちらの書き方でも、ひらがなだけの名前(`するめいか とは 3`、`あ を 受け取って …`)を定義しようとすると、漢字かカタカナを使うか『』で囲むよう案内するエラーになります。『』で囲めばひらがなだけの変数名も使えますが、**ひらがなだけの関数名は『』で囲んでも使えません**。
-6. **局所定義は「ただし」で付け足す。** `aとbを平均するとは、合計/2。ただし、合計とは、a+b。` の「ただし」の文は、直前の(ただしでない)定義の中の局所定義になります。続けて何個でも書けます。空白の書き方でも `ただし 合計 とは a + b` の行として使えます。定義でない文の後に「ただし」を書くとエラーです。
-7. **括弧の中に文を並べられる。** 括弧の中に「。」か「とは」があれば、「。」で区切った文の並び(ブロック)として読み、最後の文の値が括弧の値になります: `（積とは、a*b。積^0.5）`。局所定義の中にさらに局所定義を書くときや、式の途中で名前を付けたいときに使います。
-8. **「もし」は閉じなくてよい。** 「もし … ならば … そうでなければ …」は必ず両方の枝があるので、入れ子にしても区切りが一意に決まります。「そうでなければ」の後は文の終わり(か閉じ括弧)まで続くので、途中で終わらせたいときは括弧で囲みます。パターンマッチの場合分け(31番)は、形が全部そろっていれば「そうでなければ」を省けます。
+1. **A line containing 「。」 or 「、」 uses the punctuation style.** Sentences starting on that line end with 「。」. A sentence may span line breaks up to its 「。」 (indentation is free too), and a line may hold any number of sentences. Reaching the end without a closing 「。」 is an error. 「、」 is a separator just like a space; it may go anywhere and has no meaning except as the separator between cases of a pattern match (item 31) (it reads well after `とは、` or `して、`). 「。」 and 「、」 inside strings don't count. Lines without 「。」 or 「、」 keep the spaced, indented style, so both styles can be mixed in one file.
+2. **Words are split where the kind of character changes.** A run of kanji, katakana or Latin letters is a name (digits after Latin letters continue the name: `x1`), a run of digits is a number, and a run of symbols is an operator. A run of hiragana is split into particles (を・に・で・から・へ・より), keywords (と・とは・の・が・もし・ならば・そうでなければ・それぞれ・ただし・か・は・という) and 「する/して/すること」. `長さ` `残り` `受け取って` `返すこと` and the built-in `畳み込み` contain hiragana but are read as fixed words.
+3. **A function name is the name right before 「する」.** `リストを三倍する` is `リスト を 三倍する`. Any part of the same hiragana run before 「する」 goes into the function name (`三倍にする`, `絶対値にする`).
+4. **Names are written in kanji, katakana and Latin letters.** Hiragana such as okurigana can't be told apart from particles, so a name containing hiragana is enclosed in 『』, like 『おやつの数』 (「」 already means a string, so 『』 was chosen). A function name with hiragana mixed in can be written like 『割った数に』する (the same function as `割った数にする` in the spaced style).
+5. **Names made only of hiragana are errors.** In either style, defining a hiragana-only name (`するめいか とは 3`, `あ を 受け取って …`) gives an error suggesting to use kanji or katakana or to enclose it in 『』. Enclosed in 『』, a hiragana-only variable name is fine, but **a hiragana-only function name is not allowed even in 『』**.
+6. **Local definitions are added with 「ただし」.** In `aとbを平均するとは、合計/2。ただし、合計とは、a+b。`, the 「ただし」 sentence becomes a local definition inside the preceding (non-ただし) definition. You can write as many in a row as you like. The spaced style can use it too, as a line `ただし 合計 とは a + b`. 「ただし」 after a sentence that is not a definition is an error.
+7. **Sentences can be listed inside parentheses.** If there is a 「。」 or 「とは」 inside parentheses, they are read as a sequence of sentences separated by 「。」 (a block), and the value of the last sentence is the value of the parentheses: `（積とは、a*b。積^0.5）`. Use this for local definitions inside local definitions, or to name something in the middle of an expression.
+8. **「もし」 needs no closing.** 「もし … ならば … そうでなければ …」 always has both branches, so even nested, the boundaries are unambiguous. What follows 「そうでなければ」 runs to the end of the sentence (or a closing parenthesis), so wrap it in parentheses to end it earlier. Case analysis by pattern matching (item 31) may leave out 「そうでなければ」 when all shapes are covered.
 
-### 組・パターンマッチ・性質
+### Records, pattern matching and traits
 
-1. **組の型は「… の 組」、選択肢のある型は「か」で定義する。** `点 とは 横 と 縦 の 組` は、横・縦を持つ型「点」です(形の名前も「点」)。`図形 とは 半径 の 円 か 幅 と 高 の 長方形` は、円か長方形のどちらかの形をとる型です。中身のない形だけを並べると列挙型になります(`信号 とは 赤 か 黄 か 青`、`赤` はそのまま値)。型の定義は一番外側に書き、どこで使うより後ろに書いてもかまいません。型名・形の名前・フィールド名は変数名と同じ決まり(ひらがなを含むなら『』)で、形の名前はプログラム全体で1つの型にしか使えません。フィールド名を型や形の名前と同じにするとエラーです。
-2. **組を作る。** 順番どおりなら `3 と 4 の 点`、名前つきなら `横 は 3 で 縦 は 4 の 点`(順番は自由。全部のフィールドが必要)です。**「… の 形の名前」は、「と」で並べた左側の値の全体にかかります**(`3 と 4 の 点` は `（3 と 4） の 点`)。そのため、組を「と」で並べるときは `（1 と 2 の 点） と （3 と 4 の 点）` と括弧で囲みます(囲まないとエラーで案内します)。`（3 と 4） の 点` のようにリストを1つ渡しても作れます。`名前 は 値` の後の「で」は、次に `名前 は` が続くときだけ組の続きと読みます。
-3. **組は変更できない値。** `p の 横` で取り出し、`横 は 10 の p` で横だけ変えた新しい組を作ります(p はそのまま)。中身が同じなら `が` で等しくなります。表示は `（横 は 3 で 縦 は 4 の 点）` で、そのまま書き戻せます。
-4. **パターンマッチは「もし 値 が パターン ならば …」。** `もし 形 が` の後の深い行(句読点の書き方では「、」の区切り)に `パターン ならば 式` を並べ、上から順に最初に当てはまった場合を使います。最後に `そうでなければ …` を書くと、残りすべてに当てはまります。1つだけなら `もし 形 が 半径 の 円 ならば 半径 そうでなければ 0` と1行でも書けます。場合の本体の途中で式を区切りの先まで続けたいときや、場合の本体にさらに場合分けを書くときは括弧で囲みます。
-   - パターンの `… の 形の名前` と `名前 は …` の中の名前だけが新しい変数になり、その場合の式の中で使えます。`空`、数、文字列、`真`/`偽`、中身のない形(`赤`)、すでにある変数、`a と b` のような値は「等しいか」を調べます(今までの `もし xs が 空 ならば …` は意味が変わりません)。
-   - 入れ子は括弧で書きます: `（x と y の 点） と r の 円`。同じ名前を2回使うとエラーです。
-   - `先頭 は x で 残り は 他` は、空でないリストを先頭と残りに分けます。名前つきのパターンでは `の 形の名前` を省けて、省くと「そのフィールドを持つ値なら何でも」になります。
-   - 選択肢のある型の場合分けで形が足りず、`そうでなければ` もないときは、読み込み時に「「長方形」の場合がありません」のエラーになります。どれにも当てはまらない値が来ると実行時エラーです。
-5. **性質(型クラス)は「… という 性質 とは」で定義する。** 深い行に、関数の宣言(本体なし: `a と b を 比較する`)と、既定の実装(`… とは …`)を並べます。句読点の書き方では `比較可能という性質とは、aとbを比較する。ただし、…とは、…。` のように「ただし」で付け足します(「ただし」の後には本体のない宣言も書けます)。
-6. **性質の実装は「型 は 性質」。** `点 は 比較可能` の下の深い行(句読点の書き方では「ただし」)に、その型での関数を定義します。助詞は宣言と同じにします。宣言だけの関数を定義しないとエラーです。組み込みの型名は `数` `文字列` `真偽` `リスト` `関数` です。
-7. **どの実装を使うかは「を」の値の型で決める。** 「を」を `a と b` で分解する関数なら最初の要素の型です(「を」がない関数は最初の引数)。実装していない型で呼ぶと「「文字列」は性質「比較可能」を持っていません」のエラーです。性質の関数は普通の関数と同じく `比較すること` で値にできます。性質の関数や中身のない形の名前は、ほかの定義で上書きできません。
-8. **組み込みの性質「表示可能」。** 関数は `x を 文字列化する` の1つで、実装しなくてもすべての型が持っています(いつもの表示の文字列を返す)。実装すると、`表示する` やトップレベルの結果の表示、リストの中の表示がそれを使います。
+1. **Record types are defined with 「… の 組」, and types with alternatives with 「か」.** `点 とは 横 と 縦 の 組` is a type 「点」 ("point") with 横 and 縦 (the shape is also named 「点」). `図形 とは 半径 の 円 か 幅 と 高 の 長方形` is a type taking the shape of either a circle or a rectangle. Listing only shapes without contents gives an enumeration (`信号 とは 赤 か 黄 か 青`; `赤` is a value as it is). Type definitions go at the outermost level and may come after any use. Type names, shape names and field names follow the same rules as variable names (in 『』 if they contain hiragana), and a shape name can belong to only one type in the whole program. A field name equal to a type or shape name is an error.
+2. **Building records.** Positionally `3 と 4 の 点`, with names `横 は 3 で 縦 は 4 の 点` (any order; all fields are required). **「… の SHAPE」 applies to the whole of the values listed with 「と」 on its left** (`3 と 4 の 点` is `（3 と 4） の 点`). So to list records with 「と」, wrap them in parentheses: `（1 と 2 の 点） と （3 と 4 の 点）` (without them you get an error with a hint). Passing one list, as in `（3 と 4） の 点`, also works. The 「で」 after `名前 は 値` is read as continuing the record only when another `名前 は` follows.
+3. **Records are immutable values.** Read a field with `p の 横`, and make a new record with only 横 changed with `横 は 10 の p` (p stays as it was). Records with the same contents are equal under `が`. They print as `（横 は 3 で 縦 は 4 の 点）`, which can be written back as is.
+4. **Pattern matching is 「もし 値 が パターン ならば …」.** After `もし 形 が`, list `パターン ならば 式` on deeper lines (separated by 「、」 in the punctuation style); the first case that matches, from the top, is used. A final `そうでなければ …` matches everything else. A single case can be written on one line: `もし 形 が 半径 の 円 ならば 半径 そうでなければ 0`. Wrap a case body in parentheses to continue the expression past a separator, or to put another case analysis inside it.
+   - Only the names in a pattern's `… の SHAPE` and `名前 は …` become new variables, usable in that case's expression. `空`, numbers, strings, `真`/`偽`, shapes without contents (`赤`), existing variables and values like `a と b` test for equality (so the old `もし xs が 空 ならば …` keeps its meaning).
+   - Nesting uses parentheses: `（x と y の 点） と r の 円`. Using the same name twice is an error.
+   - `先頭 は x で 残り は 他` splits a non-empty list into its head and rest. Named patterns may leave out `の SHAPE`, and then they match "any value that has those fields".
+   - If a case analysis over a type with alternatives misses a shape and has no `そうでなければ`, loading gives the error 「「長方形」の場合がありません」 ("there is no case for 「長方形」"). A value that matches nothing is a runtime error.
+5. **Traits (type classes) are defined with 「… という 性質 とは」.** On deeper lines, list function declarations (without bodies: `a と b を 比較する`) and default implementations (`… とは …`). In the punctuation style, add them with 「ただし」, as in `比較可能という性質とは、aとbを比較する。ただし、…とは、…。` (declarations without bodies may follow 「ただし」 too).
+6. **A trait is implemented with 「型 は 性質」.** On deeper lines under `点 は 比較可能` (「ただし」 in the punctuation style), define the functions for that type. The particles must match the declaration. Leaving a declared-only function undefined is an error. The built-in type names are `数` (number), `文字列` (string), `真偽` (boolean), `リスト` (list) and `関数` (function).
+7. **Which implementation is used depends on the type of the 「を」 value.** For a function that destructures 「を」 as `a と b`, it is the type of the first element (for a function without 「を」, the first argument). Calling with a type that has no implementation gives 「「文字列」は性質「比較可能」を持っていません」 ("「文字列」 does not have the trait 「比較可能」"). Like ordinary functions, a trait's function can be made a value with `比較すること`. Trait functions and shape names without contents can't be overridden by other definitions.
+8. **The built-in trait 「表示可能」 (showable).** Its single function is `x を 文字列化する`, and every type has it without implementing it (it returns the usual printed string). If you implement it, `表示する`, printing top-level results and printing inside lists use it.
 
-### 動作(副作用)と手順
+### Actions (side effects) and procedures
 
-1. **副作用は「動作」という値。** `x を 表示する` や `入力する` は、その場では何もせず、表示や入力をする**動作**を返します。トップレベルの文の値が動作なら、その場で行います(その結果は表示しません)。動作でない値は今まで通り表示します。動作の型名は `動作` です。`（「a」 を 表示する） と 1` のように、作っただけで使わない動作は行われません。
-2. **「…してから」はバインド。** `入力してから 数値にして 表示する` は、入力を行い、その結果を「数値にして 表示する」の「を」に渡します。「してから」の後ろは全部、前の結果を受け取る続きです。前の結果が動作でなければエラーです(純粋な値には「して」を使います)。続きが動作でない値を返したときは、それが全体の結果になります。
-3. **「手順（文。文。…）」は do 記法。** 文を上から順に行い、最後の文が全体の動作(値)になります。空白の書き方では `挨拶する とは 手順` の後の深い行に文を並べます。手順の途中の文は動作でなければなりません(値を計算するだけの文はエラー)。「手順（」だけの行の後に句読点の書き方の行が続くときは、その行も句読点の書き方として読みます。手順の最後の文で自分を呼べば繰り返しになります(`n を 数え上げする とは 手順` の最後に `n + 1 を 数え上げする`)。1回ごとに表示や入力などの動作を行う繰り返しは、インタプリタでもコンパイルしたものでも、何回でも続けられます(サーバーの待ち受けの形)。
-4. **「…した 結果」は、手順の中で動作を行った結果。** `名前 とは 入力した 結果` で結果に名前を付けます(普通の定義と同じ「とは」)。名詞なので、`入力した結果を数値にして、表示する。` のように手順の文の中のどこにでも書け、文の中で先に書いたものから行います。手順の外、関数の本体や「もし」の枝の中に書くとエラーです(そこを「手順（…）」で囲みます)。算術に使うときは `（入力した結果）+1` と括弧で囲みます。
-5. **「の 結果」は写像。** `（入力する） の 結果 を 数値にする` は、入力の結果を数値にする動作です(「の それぞれ」がリストの要素ごとに呼ぶのと同じ形)。呼び出しの引数にだけ書けます。2つ以上の引数に書くと、前から順に行います。`結果` というフィールドを持つ組なら、今まで通りフィールドの取り出しです。
-6. **「。それから、」は続けて行う。** `「やあ」を表示する。それから、「またね」を表示する。` は2つを順に行う1つの文になります。定義の後に書くと本体の続きになります(`ただし` と同じく直前の文に付け足す)。空白の書き方では `それから …` の行として書きます。
-7. **性質「写像可能」と「連鎖可能」。** 組み込みの性質で、`写像可能` は `m を f で 写像する`、`連鎖可能` は `m を f で 連鎖する` と `x を 結果にする` を持ちます。リストと動作が実装しています(リストの連鎖は f の結果をつなげたリスト)。自分の型でも `『たぶん』 は 連鎖可能` として `連鎖する` を定義すれば、手順・「してから」・「の 結果」が使えます。`結果にする` は「を」の型で選べないので、いつも「何もしない動作」を作り、連鎖したときに相手の型に合わせます(その型で `x を 結果にする` を定義していればそれを使います)。
+1. **Side effects are values called 「動作」 (actions).** `x を 表示する` and `入力する` do nothing on the spot; they return an **action** that prints or reads. If the value of a top-level sentence is an action, it is carried out there (its result is not printed). Values that are not actions are printed as before. The type name of actions is `動作`. An action that is made but not used, as in `（「a」 を 表示する） と 1`, is not carried out.
+2. **「…してから」 is bind.** `入力してから 数値にして 表示する` reads input and passes the result to the 「を」 of 「数値にして 表示する」. Everything after 「してから」 is a continuation receiving the previous result. If the previous result is not an action, it is an error (use 「して」 for pure values). If the continuation returns a value that is not an action, that becomes the result of the whole.
+3. **「手順（文。文。…）」 is do notation.** It carries out the sentences from the top, and the last sentence is the action (value) of the whole. In the spaced style, list the sentences on deeper lines after `挨拶する とは 手順`. Sentences in the middle of a procedure must be actions (a sentence that only computes a value is an error). When a line with only 「手順（」 is followed by punctuation-style lines, those lines are read in the punctuation style too. Calling yourself in a procedure's last sentence gives a loop (`n + 1 を 数え上げする` at the end of `n を 数え上げする とは 手順`). A loop that carries out an action such as printing or input on each round can go on any number of times, both in the interpreter and when compiled (the shape of a server's accept loop).
+4. **「…した 結果」 is the result of carrying out an action inside a procedure.** `名前 とは 入力した 結果` names the result (with 「とは」, as in ordinary definitions). It is a noun, so it can go anywhere in a procedure's sentence, as in `入力した結果を数値にして、表示する。`, and the ones written earlier in the sentence are carried out first. Writing it outside a procedure, in a function body or a branch of 「もし」, is an error (wrap that part in 「手順（…）」). To use it in arithmetic, wrap it in parentheses: `（入力した結果）+1`.
+5. **「の 結果」 is map.** `（入力する） の 結果 を 数値にする` is an action that turns the input's result into a number (the same shape as 「の それぞれ」, which calls for each element of a list). It can only be written as a call argument. Written on two or more arguments, they are carried out from the front. For a record with a field named `結果`, it is still a field access.
+6. **「。それから、」 carries on.** `「やあ」を表示する。それから、「またね」を表示する。` is one sentence that does the two in order. Written after a definition, it continues the body (it attaches to the sentence just before, like `ただし`). In the spaced style, write it as a line `それから …`.
+7. **The traits 「写像可能」 (mappable) and 「連鎖可能」 (chainable).** These are built-in traits: `写像可能` has `m を f で 写像する`, and `連鎖可能` has `m を f で 連鎖する` and `x を 結果にする`. Lists and actions implement them (chaining a list joins the results of f). For your own type, declaring `『たぶん』 は 連鎖可能` and defining `連鎖する` lets you use procedures, 「してから」 and 「の 結果」 with it. `結果にする` can't choose by the type of 「を」, so it always makes a "do nothing" action and adapts to the other side's type when chained (if `x を 結果にする` is defined for that type, that one is used).
 
-### 場合ごとの関数定義とパターンの条件
+### Case-by-case function definitions and pattern conditions
 
-1. **パターンの条件は「かつ」。** 場合分けの `パターン かつ 条件 ならば 式` は、パターンに当てはまり、しかも条件が 真 のときだけその場合を使います。条件の中ではパターンで付けた名前が使えます(`半径 の 円 かつ 半径 > 10 ならば …`)。条件が 偽 なら次の場合に進みます。条件つきの場合は、形がそろっているかの確かめ(31番)の数に入れません。
-2. **「かつ」「または」は真偽の計算。** 比較より弱く、「と」より強く結びつき、「かつ」のほうが「または」より強く結びつきます(`a または b かつ c` は `a または （b かつ c）`)。左で結果が決まれば右は計算しません。両側は 真 か 偽 でなければエラーです。パターンの直後の「かつ」は条件の始まりと読むので、`もし n が 0 かつ m > 1 ならば …` は「n が 0 で、しかも m > 1 なら」の意味になります(どちらに読んでも結果は同じです)。
-3. **引数に値や形を書くと、場合ごとの関数定義になる。** `0 を 階乗する とは 1` のように、引数名の代わりにパターン(数、文字列、`空`、`真`/`偽`、中身のない形、`… の 形の名前`、`名前 は …`)を書けます。括弧の要る形は `（r の 円） を 面積にする` のように囲みます。パターンの中の名前だけが新しい変数で、名前だけの引数はどんな値にも当てはまります。`a と b を` は今までどおり2要素のリストを分けますが、場合ごとの定義の中では長さが違えば次の定義に進みます。
-4. **同じ関数の定義は続けて書き、上から順に使う。** 続けて書いた同じ名前の関数定義は1つの関数にまとまり、呼び出すと、引数がすべて当てはまる最初の定義を使います。どの定義も同じ助詞を使います(違うとエラー)。すべての引数が名前だけの定義の後ろに、さらに定義を書くとエラーです(使われないため)。引数が1つで形の場合分けになっているなら、足りない形は読み込み時に「「面積にする」に「長方形」の場合の定義がありません」のエラーになり、どれにも当てはまらない値が来ると実行時エラーです。同じ関数を離れた場所でもう一度定義するとエラーです。局所定義(ただし)や性質の実装の中でも使えます。
+1. **A pattern condition uses 「かつ」.** In a case analysis, `パターン かつ 条件 ならば 式` uses that case only when the pattern matches and the condition is 真. The condition can use the names bound by the pattern (`半径 の 円 かつ 半径 > 10 ならば …`). If the condition is 偽, matching moves on to the next case. Cases with conditions don't count when checking whether all shapes are covered (item 31).
+2. **「かつ」 and 「または」 compute booleans.** They bind weaker than comparison and tighter than 「と」, and 「かつ」 binds tighter than 「または」 (`a または b かつ c` is `a または （b かつ c）`). If the left side decides the result, the right side is not computed. Both sides must be 真 or 偽, otherwise it is an error. A 「かつ」 right after a pattern is read as the start of a condition, so `もし n が 0 かつ m > 1 ならば …` means "if n is 0 and also m > 1" (either reading gives the same result).
+3. **Writing values or shapes as parameters defines a function case by case.** As in `0 を 階乗する とは 1`, a pattern (a number, a string, `空`, `真`/`偽`, a shape without contents, `… の SHAPE`, `名前 は …`) can stand in place of a parameter name. Shapes that need parentheses are wrapped, as in `（r の 円） を 面積にする`. Only the names in a pattern are new variables, and a parameter that is just a name matches any value. `a と b を` still splits a two-element list, but inside case-by-case definitions a different length moves on to the next definition.
+4. **Definitions of the same function are written in a row and tried from the top.** Consecutive definitions of the same name form one function; a call uses the first definition all of whose parameters match. All definitions use the same particles (otherwise it is an error). Another definition after one whose parameters are all plain names is an error (it would never be used). If there is one parameter and it is a case analysis over shapes, a missing shape gives the error 「「面積にする」に「長方形」の場合の定義がありません」 ("「面積にする」 has no definition for the 「長方形」 case") at load time, and a value matching nothing is a runtime error. Defining the same function again somewhere else is an error. This works in local definitions (ただし) and trait implementations too.
 
-### 述語
+### Predicates
 
-1. **「…である」で終わる名前は述語。** `n が 偶数である とは n % 2 が 0` のように、主語を「が」で受け、真か偽を返す関数です(ほかの助詞の引数も使えます: `a が b で 割切である`)。真偽以外を返すと実行時エラーです。名前の決まりは「する」の関数と同じで、「である」の前に漢字かカタカナが必要です。
-2. **呼び出しは「…である」「…でない」、値は「…であること」。** `4 が 偶数である` は 真、`3 が 偶数でない` は否定です(「でない」は定義しなくても使えます。「…でない とは」と定義するとエラー)。`偶数であること` は「すること」と同じく述語そのもので、`リスト から 偶数であること で 選別する` のように渡せます。部分適用もできます。
-3. **述語の前の「が」は主語。** 「が」の後ろを読んでいって、呼び出しの終わりが述語なら、その「が」は主語の助詞です。そうでなければ今までどおり「等しいか」です(`リスト が 空` は変わりません)。`もし n が 偶数である ならば …` もそのまま書けます。「…して」の結果は、述語では「を」でなく「が」に入ります(`5 を 三倍して 偶数である`)。
-4. **述語どうしは「かつ」「または」でつなげる。** `n が 正である かつ n が 偶数でない` のように、呼び出しを含む条件も「かつ」「または」でつなげます(44番と同じ結びつきの強さ)。パターンの条件(43番)にも書けます。
+1. **A name ending in 「…である」 is a predicate.** As in `n が 偶数である とは n % 2 が 0`, it is a function that takes its subject with 「が」 and returns true or false (it may take arguments with other particles too: `a が b で 割切である`). Returning anything other than a boolean is a runtime error. The naming rules are the same as for 「する」 functions: there must be a kanji or katakana before 「である」.
+2. **Calls are 「…である」 and 「…でない」, the value is 「…であること」.** `4 が 偶数である` is 真, and `3 が 偶数でない` is the negation (「でない」 works without being defined; defining 「…でない とは」 is an error). `偶数であること` is the predicate itself, like 「すること」, and can be passed as in `リスト から 偶数であること で 選別する`. Partial application works too.
+3. **The 「が」 before a predicate is the subject.** Reading on after 「が」, if the call ends in a predicate, that 「が」 is the subject particle. Otherwise it is equality as before (`リスト が 空` is unchanged). `もし n が 偶数である ならば …` can be written as it is. The result of 「…して」 goes into 「が」 rather than 「を」 for a predicate (`5 を 三倍して 偶数である`).
+4. **Predicates are joined with 「かつ」 and 「または」.** Conditions containing calls are joined the same way, as in `n が 正である かつ n が 偶数でない` (the same binding strength as item 44). They can be written in pattern conditions (item 43) too.
 
-### 型の検査
+### Type checking
 
-1. **実行の前に必ず型を調べる。** `python3 suru.py ファイル` は、まず型の間違いを探し、見つかれば何も実行せずにエラーを表示します。型は書かなくても推論します(Hindley–Milner)。`--検査` は調べるだけで実行せず、`--検査なし` は調べずに実行します(違う型を混ぜたリストなど、型の検査では通らないが動く書き方を試すとき)。対話モードも入力ごとに型を調べます(「対話モード」)。
-2. **型の名前。** `数` `文字列` `真偽`、`数 の リスト`、`文字列 の 動作`、組や選択肢のある型はその型名、関数は `（数 を 受け取って 数 を 返すこと）` と表示します。まだ決まっていない型は 甲・乙・丙 … です。
-3. **リストの要素の型はそろえる。** `1 と 「a」` はエラーです。違う型の値をまとめるときは組か選択肢のある型を使います。
-4. **「+」は同じ型どうし。** 数・文字列・リストを、同じ型どうしでだけ足せます。数を文字列につなぐときは `（x を 文字列化する）` を使います(実行のときは今までどおりつなげます)。`<` などの大小の比較は数どうし、`が`・`==` は同じ型どうしです。
-5. **呼び出しは助詞ごとに調べる。** 受け取らない助詞、足りない引数、型の違う引数は、実行する前にエラーになります。関数の値(`三倍すること`)を渡すときは、助詞ではなく引数の順番で合わせます。`加算する` は「を」がリストなら全部を足し、「に」があれば2つを足すように、特別に調べます。
-6. **定義は多相。** `x を 恒等にする とは x` は数にも文字列にも使えます。一番外と「ただし」の定義は、互いに呼び合うものをまとめて推論します。自分自身や互いを呼ぶところでも、引数の型を調べます。
-7. **性質の関数は、実装の型で調べる(第2段階)。** `a と b を 比較する` のような性質の関数の呼び出しは、「を」の値の型(34番と同じ決め方)が分かったところで、その型の実装(なければ既定の実装)の型と合わせます。実装していない型で呼ぶと「文字列は性質「比較可能」を持っていません」のエラーになります。性質の関数を使う多相な関数(`a と b を 大きい方にする`)は「この性質を持つ型なら何でもよい」という条件つきの型になり、呼んだところで確かめます。`表示可能` の `文字列化する` の実装は文字列を返す必要があります。
-8. **型の条件も呼んだところで確かめる。** `x の 長さ`(文字列かリスト)や `a + b`(数・文字列・リスト)のように型の種類にしばりのある多相な関数は、そのしばりを型に持たせて、呼んだところで確かめます(`「測る数にする」に渡した値: …`)。
-9. **自分の型は型の引数をとる(第3段階)。** 書き方は今までのままで、フィールドごとに型を推論します。`（1 の 在）` は `数 の たぶん`、`（「a」 の 在）` は `文字列 の たぶん`(『』の型 `『たぶん』` の値) で、どちらも同じプログラムで使えます(フィールドが2つ以上なら `（数 と 文字列） の 点`)。ただし同じリストに入れるなら、中身の型もそろえます。
-10. **自分自身を中に持つ型。** `木 とは 値 と 左 と 右 の 節 か 葉` の「左」「右」のように、その型自身(やそのリスト)を入れるフィールドは、型の引数にせず「その型」とします(`数 の 木`)。定義から決めるのではなく、推論の途中で型が無限に続くと分かったところで、そのフィールドをその型にして推論し直します。
-11. **いつも同じ型で使うフィールドは、型名だけで表示する。** プログラムの中でいつも数として使う「半径」のように、使い方が1通りのフィールドしかない型は、エラーでは `（数 と 数 と 数） の 図形` ではなく `図形` と表示します。どんな型でもよい引数も省きます。
-12. **動作の型(第3段階)。** `「?」 を 入力する` は `文字列 の 動作`、`x を 表示する` は動作、`動作のリスト を 実行する` は結果のリストの動作です。`… してから …`・手順の `… した 結果`・手順の途中の文は、前の値が動作(や連鎖可能な型)であることと、その結果の型を続きに渡して調べます(`入力してから 三倍する` は「「三倍する」の「を」には数が必要ですが、文字列が渡されています」)。手順の最後の値が動作でなければ、何もしない動作になります。
-13. **`結果にする` は、連鎖する相手の型になる。** `x を 結果にする` は「x を結果にしたもの」という型で、動作・リスト・自分の連鎖可能な型のどれとも、結果の型が x の型と同じならそろいます(自分の型で `結果にする` を定義していれば、その型で調べます)。
-14. **`の 結果`・`写像する`・`連鎖する` も型を調べる。** リストと動作のほか、`写像可能`・`連鎖可能` を実装した自分の型では、その実装(`連鎖する`・`写像する`)の型で調べます。どちらも持たない型に使うと「数は性質「写像可能」を持っていません」のようなエラーになります。動作を `+` などで直接計算すると、「…してから」か「の 結果」を使うようにエラーで知らせます。
+1. **Types are always checked before running.** `python3 suru.py FILE` first looks for type errors and, if it finds any, prints them without running anything. Types are inferred without being written (Hindley–Milner). `--検査` only checks and does not run, and `--検査なし` runs without checking (for trying code that runs but doesn't pass the type check, such as a list mixing types). Interactive mode checks types for every input too ("Interactive mode").
+2. **Type names.** `数`, `文字列`, `真偽`, `数 の リスト` (list of numbers), `文字列 の 動作` (action of a string), records and types with alternatives by their type names, and functions are shown as `（数 を 受け取って 数 を 返すこと）`. Types not yet determined are 甲・乙・丙 … (like a, b, c).
+3. **List elements must have the same type.** `1 と 「a」` is an error. Use a record or a type with alternatives to group values of different types.
+4. **「+」 works between values of the same type.** Numbers, strings and lists can be added only to the same type. To join a number to a string, use `（x を 文字列化する）` (at runtime, joining still works as before). Ordering comparisons such as `<` are between numbers, and `が`/`==` between the same type.
+5. **Calls are checked particle by particle.** Particles the function does not take, missing arguments and arguments of the wrong type are errors before running. When passing a function value (`三倍すること`), arguments are matched by order, not by particle. `加算する` is checked specially: it adds everything if 「を」 is a list, and adds two values if 「に」 is present.
+6. **Definitions are polymorphic.** `x を 恒等にする とは x` can be used for numbers and strings alike. Outermost and 「ただし」 definitions that call each other are inferred together. Calls to themselves or to each other have their argument types checked too.
+7. **Trait functions are checked against the implementing type (stage 2).** A call of a trait function such as `a と b を 比較する` is matched against the type of that type's implementation (or the default implementation) once the type of the 「を」 value (decided as in item 34) is known. Calling with a type without an implementation gives 「文字列は性質「比較可能」を持っていません」. A polymorphic function using a trait function (`a と b を 大きい方にする`) gets a type with the condition "any type that has this trait", checked where it is called. An implementation of `表示可能`'s `文字列化する` must return a string.
+8. **Type conditions are also checked where they are called.** A polymorphic function restricted to certain kinds of types, such as `x の 長さ` (a string or a list) or `a + b` (a number, string or list), carries that restriction in its type, and it is checked at the call site (`「測る数にする」に渡した値: …`).
+9. **Your own types take type parameters (stage 3).** You write them as before, and the type of each field is inferred. `（1 の 在）` is `数 の たぶん` and `（「a」 の 在）` is `文字列 の たぶん` (values of the type `『たぶん』` in 『』), and both can be used in the same program (with two or more fields, `（数 と 文字列） の 点`). Put in the same list, though, their contents must have the same type.
+10. **Types that contain themselves.** A field holding the type itself (or a list of it), like 「左」 and 「右」 in `木 とは 値 と 左 と 右 の 節 か 葉`, is not a type parameter but "that type" (`数 の 木`). This is not decided from the definition; when inference finds the type would go on forever, that field is made that type and inference is redone.
+11. **Fields always used with the same type are shown by the type name only.** For a type whose fields are used in only one way, like 「半径」 always used as a number in the program, errors show `図形` rather than `（数 と 数 と 数） の 図形`. Parameters that can be any type are left out too.
+12. **Action types (stage 3).** `「?」 を 入力する` is `文字列 の 動作`, `x を 表示する` is an action, and `動作のリスト を 実行する` is an action of the list of results. `… してから …`, `… した 結果` in procedures and sentences in the middle of procedures are checked by making sure the previous value is an action (or a chainable type) and passing its result type on to the continuation (`入力してから 三倍する` gives 「「三倍する」の「を」には数が必要ですが、文字列が渡されています」, "「三倍する」's 「を」 needs a number, but a string is passed"). If the last value of a procedure is not an action, it becomes a do-nothing action.
+13. **`結果にする` takes the type of what it is chained with.** `x を 結果にする` has the type "x made into a result", and it unifies with actions, lists or your own chainable types as long as the result type matches the type of x (if your type defines `結果にする`, it is checked with that type).
+14. **`の 結果`, `写像する` and `連鎖する` are type-checked too.** Besides lists and actions, your own types implementing `写像可能` or `連鎖可能` are checked with the types of their implementations (`連鎖する`, `写像する`). Using them on a type with neither gives an error such as 「数は性質「写像可能」を持っていません」. Computing on an action directly with `+` and the like gives an error telling you to use 「…してから」 or 「の 結果」.
 
-### 丁寧語の文末
+### Polite sentence endings
 
-1. **「します」「しまして」は「する」「して」と同じ。** `5を三倍します。` は `5を三倍する。`、`5を三倍しまして、表示します。` は `5を三倍して、表示する。` と同じ意味です。「しましてから」は「してから」と同じです。どちらの書き方でも使えます(空白の書き方なら `5 を 三倍します`)。関数の名前は今までどおり「する」で終わる名前で、定義も `n を 三倍する とは …` のまま書けます(`n を 三倍します とは …` と書いてもかまいません)。
-2. **文末の「です」は読み捨てる。** `p とは 3 と 4 の 点 です。`、`x とは 7です。`、`もしn>0ならば「正」です、そうでなければ「負」です。` のように、「。」「、」「）」「そうでなければ」の前か、空白の書き方の行の終わりに書いた「です」は飾りとして読み飛ばします。それ以外の場所(`3 です と 4`)に書くとエラーです。「です」「ます」はひらがななので、ひらがなを含む名前を『』で囲む決まり(23番)のおかげで名前とぶつかりません。
+1. **「します」 and 「しまして」 are the same as 「する」 and 「して」.** `5を三倍します。` means the same as `5を三倍する。`, and `5を三倍しまして、表示します。` the same as `5を三倍して、表示する。`. 「しましてから」 is the same as 「してから」. Both styles accept them (in the spaced style, `5 を 三倍します`). Function names still end in 「する」, and definitions can be written as `n を 三倍する とは …` (writing `n を 三倍します とは …` is fine too).
+2. **A sentence-final 「です」 is ignored.** A 「です」 written before 「。」, 「、」, 「）」 or 「そうでなければ」, or at the end of a line in the spaced style, as in `p とは 3 と 4 の 点 です。`, `x とは 7です。` or `もしn>0ならば「正」です、そうでなければ「負」です。`, is skipped as decoration. Anywhere else (`3 です と 4`) it is an error. 「です」 and 「ます」 are hiragana, so thanks to the rule that names containing hiragana go in 『』 (item 23), they never clash with names.
 
-### 型の宣言(第4段階)
+### Type declarations (stage 4)
 
-1. **型は宣言してもよい。** 定義の前(か後ろ)に、引数名の代わりに型名を書き、「は」の後に値の型を書きます: `数 を 階乗する は 数`、`税率 は 数`、`数 が 偶数である は 真偽`、`挨拶する は 数 の 動作`。句読点の書き方では `数を階乗するは、数。` です。宣言は型の検査だけで使い、実行には影響しません。書かなくてもかまいません。
-2. **型の書き方。** `数` `文字列` `真偽`、`数 の リスト`、`文字列 の 動作`、関数は `（数 を 受け取って 数 を 返すこと）`(助詞が複数なら `（数 を 数 で 受け取って 数 を 返すこと）`)、自分の型は `点`(フィールドの型は推論に任せる)や `（数 と 数） の 点`、`数 の 『たぶん』` です(型の引数はフィールドの順。自分自身を入れるフィールドは数えません)。`点 は 比較可能` のように「は」の後が性質なら、今までどおり性質の実装です。
-3. **宣言と定義が違えばエラー。** 宣言と定義で助詞が違う、値の型が違う(「「税率」は文字列と宣言されていますが、数になっています」)、宣言だけで定義がない、同じ名前を2回宣言する、のどれもエラーです。宣言した型は、定義の中の自分自身の呼び出しにも使います。
-4. **甲・乙 は「どんな型でもよい」。** `甲 を 恒等にする は 甲` は、どの型にも使える関数の宣言です。定義が数でしか使えないなど、甲 が決まった型になったり、甲 と 乙 が同じ型になったりするとエラーです。宣言は一番外の定義にだけ書けます。
+1. **Types may be declared.** Before (or after) a definition, write type names in place of parameter names, and the value's type after 「は」: `数 を 階乗する は 数`, `税率 は 数`, `数 が 偶数である は 真偽`, `挨拶する は 数 の 動作`. In the punctuation style it is `数を階乗するは、数。`. Declarations are used only by the type checker and do not affect running. They are optional.
+2. **How types are written.** `数`, `文字列`, `真偽`, `数 の リスト`, `文字列 の 動作`, functions as `（数 を 受け取って 数 を 返すこと）` (with several particles, `（数 を 数 で 受け取って 数 を 返すこと）`), and your own types as `点` (field types left to inference), `（数 と 数） の 点` or `数 の 『たぶん』` (type parameters are in field order; fields holding the type itself are not counted). If what follows 「は」 is a trait, as in `点 は 比較可能`, it is a trait implementation as before.
+3. **A declaration that disagrees with the definition is an error.** Different particles in the declaration and definition, a different value type (「「税率」は文字列と宣言されていますが、数になっています」, "「税率」 is declared as a string, but it is a number"), a declaration without a definition, and declaring the same name twice are all errors. The declared type is also used for calls to itself inside the definition.
+4. **甲 and 乙 mean "any type".** `甲 を 恒等にする は 甲` declares a function usable with any type. If 甲 turns into a specific type, for example because the definition only works with numbers, or 甲 and 乙 turn into the same type, it is an error. Declarations can only be written for outermost definitions.
 
-### ファイルの読み込み
+### Loading files
 
-1. **`「数学」 を 読み込む` で、同じフォルダの `数学.suru` を読み込む。** 一番外に書きます(句読点の書き方なら `「数学」を読み込む。`、丁寧語なら `読み込みます`)。フォルダは、実行しているファイルのフォルダから探します(`「部品/数学」` のように下のフォルダも書けます)。ファイルの名前は、変数の名前と同じく漢字・カタカナ・英字で書きます。同じファイルは何度読み込んでも1回だけ読みます。自分自身を読み込むことになる読み込みはエラーです。
-2. **中の名前は「ファイル名内の名前」で使う。** 読み込んだファイルの一番外の定義は `数学内の円周率`、`3 を 数学内の二乗する`、`数学内の二乗すること` のように、ファイルの名前と「内の」を前に付けて使います(空白の書き方でも `数学内の円周率` か `数学内の 円周率`)。「数学」を読み込んでいなければ `数学内` はふつうの名前です。前に付けずに `円周率` と書いても読み込んだ定義にはならないので、自分のファイルで同じ名前を定義してもぶつかりません。読み込んだファイルがさらに読み込んだファイルの名前は使えません。使うなら、そのファイルも読み込みます。
-3. **型・形・性質は「内の」なしで使える。** 読み込んだファイルで定義した型(`図形`)、形(`（2 の 円）`)、性質とその関数、性質の実装は、そのまま使えます。型と形の名前は、読み込んだファイルを含めてプログラム全体で1つの型にしか使えません。
-4. **読み込むファイルには定義だけを書く。** 定義・型・性質・型の宣言・読み込み以外の文(`x を 表示する` など)があるとエラーです。読み込んだファイルの中の間違いは「「数学.suru」の2行目: …」のように、ファイルの名前と行を付けて、読み込んだ行で知らせます。型の検査も読み込んだファイルまで行います。
+1. **`「数学」 を 読み込む` loads `数学.suru` from the same folder.** Write it at the outermost level (`「数学」を読み込む。` in the punctuation style, `読み込みます` politely). The folder is searched from the folder of the file being run (subfolders can be written as `「部品/数学」`). File names are written in kanji, katakana and Latin letters, like variable names. The same file is read only once, however many times it is loaded. Loading that would end up loading the file itself is an error.
+2. **Names inside are used as 「FILE内の NAME」.** The outermost definitions of a loaded file are used with the file name and 「内の」 ("inside") in front: `数学内の円周率`, `3 を 数学内の二乗する`, `数学内の二乗すること` (in the spaced style, `数学内の円周率` or `数学内の 円周率`). If 「数学」 is not loaded, `数学内` is an ordinary name. Writing `円周率` without the prefix does not refer to the loaded definition, so defining the same name in your own file causes no clash. Names from files that the loaded file loads in turn are not available; to use them, load that file too.
+3. **Types, shapes and traits are used without 「内の」.** Types (`図形`), shapes (`（2 の 円）`), traits with their functions, and trait implementations defined in a loaded file can be used as they are. A type or shape name can belong to only one type in the whole program, loaded files included.
+4. **Loaded files contain only definitions.** Any sentence other than definitions, types, traits, type declarations and loads (such as `x を 表示する`) is an error. Errors inside a loaded file are reported at the loading line, with the file name and line, as in 「「数学.suru」の2行目: …」 ("line 2 of 「数学.suru」: …"). Type checking covers loaded files too.
 
-5. **`「数学」 を 読み込んで 使う` なら前置きなしでも使える。** 中の名前を `円周率`、`3 を 二乗する` のようにそのまま使えます(`数学内の円周率` も使えます)。句読点の書き方なら `「数学」を読み込んで使う。`、丁寧語なら `読み込んで使います`。自分で同じ名前を定義すると自分の定義が使われ、読み込んだファイルのものは `数学内の…` で使えます。「読み込んで 使う」にした2つのファイルに同じ名前があると、自分で定義していない限りエラーです(片方を「読み込む」にするか、前置きを付けて使います)。
-6. **見つからないファイルは標準のフォルダから探す。** 実行しているファイルのフォルダになければ、`suru.py` の隣の `lib` フォルダから探します。標準ライブラリ `lib/標準.suru` はこうして読み込みます。
+5. **`「数学」 を 読み込んで 使う` lets you use the names without a prefix.** Names inside can be used as they are, like `円周率` and `3 を 二乗する` (`数学内の円周率` also works). `「数学」を読み込んで使う。` in the punctuation style, `読み込んで使います` politely. If you define the same name yourself, your definition is used, and the loaded file's one is available as `数学内の…`. If two files loaded with 「読み込んで 使う」 have the same name, it is an error unless you define it yourself (load one of them with 「読み込む」 instead, or use the prefix).
+6. **Files not found are looked up in the standard folder.** If a file is not in the folder of the file being run, it is looked up in the `lib` folder next to `suru.py`. This is how the standard library `lib/標準.suru` is loaded.
 
-### 標準ライブラリ
+### Standard library
 
-1. **`「標準」 を 読み込む` で標準ライブラリを使う。** `標準内の逆順にする` のように前置きを付けて使います。`「標準」 を 読み込んで 使う` なら前置きなしです。中身は `lib/標準.suru` に する で書いてあり(型の宣言つき)、文字列の操作のように する では書けないものだけが組み込みです。組み込みも、標準を読み込んだときだけ使えます。
-2. **位置は1から数える。** `xs から 1 を 番目取得する` が先頭です。範囲の外はエラーです。
-3. **逆順にする・先頭取得する・先頭削除する・番目取得する・含有である は文字列にも使える。** 文字列の要素は1文字の文字列です。
+1. **`「標準」 を 読み込む` gives you the standard library.** Use it with the prefix, as in `標準内の逆順にする`; with `「標準」 を 読み込んで 使う` no prefix is needed. It is written in Suru in `lib/標準.suru` (with type declarations); only what can't be written in Suru, such as string operations, is built in. The built-ins too are available only when the standard library is loaded.
+2. **Positions count from 1.** `xs から 1 を 番目取得する` is the first element. Out of range is an error.
+3. **逆順にする, 先頭取得する, 先頭削除する, 番目取得する and 含有である work on strings too.** The elements of a string are one-character strings.
 
-| 書き方 | 結果 |
+| Syntax | Result |
 |---|---|
-| `3.7 を 切捨する` / `3.2 を 切上する` / `2.5 を 四捨五入する` | 3 / 4 / 3 |
-| `16 を 平方根にする`、`7 を 2 で 商にする` | 4、3(余りは `7 % 2`) |
-| `3 と 7 と 5 を 最大値にする` / `最小値にする`、`2 と 4 を 平均する` | 7 / 3、3 |
+| `3.7 を 切捨する` / `3.2 を 切上する` / `2.5 を 四捨五入する` | 3 / 4 / 3 (floor / ceiling / round) |
+| `16 を 平方根にする`, `7 を 2 で 商にする` | 4, 3 (the remainder is `7 % 2`) |
+| `3 と 7 と 5 を 最大値にする` / `最小値にする`, `2 と 4 を 平均する` | 7 / 3, 3 |
 | `1 から 5 を 範囲にする` | （1 と 2 と 3 と 4 と 5） |
-| `n が 偶数である` / `奇数である` / `正である` / `負である` | 真か偽 |
-| `xs を 逆順にする` | 逆に並べたもの |
-| `xs から 3 を 先頭取得する` / `先頭削除する` | 先頭の3個 / 先頭の3個を除いた残り |
-| `xs から 2 を 番目取得する` | 2番目の要素 |
-| `xs が x を 含有である` | x が要素にあるか(文字列なら部分の文字列を含むか) |
-| `xs から x を 除去する`、`xs を 一意にする` | x を除いたリスト、重複を除いたリスト |
-| `xs を 整列する` | 小さい順(数のリスト) |
+| `n が 偶数である` / `奇数である` / `正である` / `負である` | True or false (even / odd / positive / negative) |
+| `xs を 逆順にする` | Reversed |
+| `xs から 3 を 先頭取得する` / `先頭削除する` | The first 3 / the rest without the first 3 |
+| `xs から 2 を 番目取得する` | The 2nd element |
+| `xs が x を 含有である` | Whether x is an element (for strings, whether it contains the substring) |
+| `xs から x を 除去する`, `xs を 一意にする` | The list without x, the list without duplicates |
+| `xs を 整列する` | In ascending order (a list of numbers) |
 | `（1 と 2） と （3 と 4） を 連結する` | （1 と 2 と 3 と 4） |
-| `xs から 偶数であること で 計数する` | 当てはまる要素の数 |
-| `xs が 偶数であること で 全部真である` / `一部真である` | 全部 / どれかが当てはまるか |
+| `xs から 偶数であること で 計数する` | The number of matching elements |
+| `xs が 偶数であること で 全部真である` / `一部真である` | Whether all / any match |
 | `0 を 3 で 複製する` | （0 と 0 と 0） |
 | `「abc」 を 文字分解する` | （「a」 と 「b」 と 「c」） |
-| `「a,b」 を 「,」 で 分割する`、`xs を 「,」 で 結合する` | （「a」 と 「b」）、「a,b」 |
-| `s を 「a」 から 「b」 へ 置換する` | 「a」を全部「b」にした文字列 |
-| `s を 大文字にする` / `小文字にする` / `空白除去する` | 大文字 / 小文字 / 前後の空白を除いた文字列 |
-| `s が 「ab」 で 先頭一致である` / `末尾一致である` | 「ab」で始まるか / 終わるか |
-| `「aあ」 を バイト数にする` | 4(UTF-8 でのバイト数) |
+| `「a,b」 を 「,」 で 分割する`, `xs を 「,」 で 結合する` | （「a」 と 「b」）, 「a,b」 (split, join) |
+| `s を 「a」 から 「b」 へ 置換する` | The string with every 「a」 replaced by 「b」 |
+| `s を 大文字にする` / `小文字にする` / `空白除去する` | Upper case / lower case / the string with leading and trailing spaces removed |
+| `s が 「ab」 で 先頭一致である` / `末尾一致である` | Whether it starts / ends with 「ab」 |
+| `「aあ」 を バイト数にする` | 4 (the number of bytes in UTF-8) |
 | `12354 を 文字にする` / `「あ」 を 文字コードにする` | 「あ」 / 12354 |
-| `m を 代わり で 試行する` | m を行い、途中で実行時エラーになったら、エラーの文を標準エラーに書いて 代わり を行う動作(どちらも動作) |
-| `改行`、`復帰改行` | 改行の1文字、復帰と改行の2文字(「」の中には書けないので名前で使う) |
+| `m を 代わり で 試行する` | An action that carries out m and, if a runtime error occurs, writes the error message to standard error and carries out 代わり instead (both are actions) |
+| `改行`, `復帰改行` | A newline character, and the two characters carriage return and newline (they can't be written inside 「」, so they are used by name) |
 
-### コンパイラ
+### Compiler
 
-1. **`python3 suru.py --翻訳 prog.suru` で実行ファイルを作る。** `suru_compile.py` が する のプログラムを LLVM IR にし、clang で実行時ライブラリ(`runtime/suru_rt.c`)と一緒に1つの実行ファイル `prog` にします。`-o 名前` で出力の名前、`--ll` で LLVM IR(`prog.ll`)だけを出します(`python3 suru_compile.py --ll prog.suru`)。clang は `CC` で別のものにもできます。
-2. **結果はインタプリタと同じ。** 型の検査をしてからコンパイルします(`--検査なし` で外せます)。読み込み・標準ライブラリ・性質・動作と手順・場合ごとの定義など、全部の書き方が使えます。実行時のエラーもインタプリタと同じ文で、終了コードは 1 です。テスト(`tests/test_compile.py`)は、例のプログラムなどをコンパイルして、インタプリタと出力が同じかを調べます。
-3. **速い・深い再帰も動く。** 関数は機械語の関数になり、整数の計算はその場で行います。再帰は 1GB のスタックで動くので、インタプリタでは止まる深さ(10万段など)でも動きます。
-4. **インタプリタとの違い。** 整数は ±4611686018427387903(2^62 − 1)までで、超えると「整数が大きすぎます」のエラーです(インタプリタはいくらでも大きくできます)。`大文字にする` / `小文字にする` が変えるのは英字(半角と全角)だけです。使い終わったメモリは GC(保守的なマーク&スイープ)が片付けます。スタックやレジスタにある「オブジェクトを指していそうな値」はすべて使っているとみなし、オブジェクトは動かしません(`runtime/suru_rt.c` の「メモリ」の節)。8MB 確保するごとか、前回残った量の2倍を確保するごとに動きます。`SURU_GC_LOG=1` で GC のたびに残った量を表示し、`SURU_GC_MIN=KB` で動く間隔の下限を変えられます(`0` なら確保のたびに動く。テスト用)。対話モードはありません。
+1. **`python3 suru.py --翻訳 prog.suru` builds an executable.** `suru_compile.py` turns the Suru program into LLVM IR, and clang makes it, together with the runtime library (`runtime/suru_rt.c`), into one executable `prog`. `-o NAME` sets the output name, and `--ll` emits only the LLVM IR (`prog.ll`) (`python3 suru_compile.py --ll prog.suru`). `CC` selects a different clang.
+2. **The results are the same as the interpreter's.** It compiles after type checking (`--検査なし` turns that off). Every construct works: loading, the standard library, traits, actions and procedures, case-by-case definitions and so on. Runtime errors have the same messages as the interpreter, with exit code 1. The tests (`tests/test_compile.py`) compile the example programs and others and check that the output matches the interpreter's.
+3. **Fast, and deep recursion works.** Functions become machine-code functions, and integer arithmetic is done inline. Recursion runs on a 1GB stack, so depths at which the interpreter stops (such as 100,000 levels) work.
+4. **Differences from the interpreter.** Integers go up to ±4611686018427387903 (2^62 − 1); beyond that you get the error 「整数が大きすぎます」 ("integer too large") (the interpreter can go arbitrarily large). `大文字にする` / `小文字にする` change only Latin letters (half-width and full-width). Memory no longer in use is cleaned up by a GC (conservative mark-and-sweep). Every value on the stack or in registers that might point to an object is treated as in use, and objects are never moved (the 「メモリ」 section of `runtime/suru_rt.c`). It runs every 8MB allocated, or every time twice the amount left last time has been allocated. `SURU_GC_LOG=1` prints the amount left after each GC, and `SURU_GC_MIN=KB` changes the lower limit of the interval (`0` runs it on every allocation, for testing). There is no interactive mode.
 
-### 配布
+### Distribution
 
-1. **pip で入れられる。** `pip install .`(または GitHub の URL)で `suru` コマンドが入ります。中身は `suru.py`・`suru_check.py`・`suru_compile.py` の3つのモジュールと、`suru_data/` に入れた `lib/` と `runtime/` です。リポジトリのまま `python3 suru.py` で動かす使い方も変わりません(`data_path` が、隣の `lib/` か `suru_data/lib/` を探します)。版は `suru.py` の `__version__` に書きます。パッケージ作りは hatchling(`python -m build` で wheel と sdist)。
+1. **It can be installed with pip.** `pip install .` (or the GitHub URL) installs the `suru` command. It contains three modules, `suru.py`, `suru_check.py` and `suru_compile.py`, plus `lib/` and `runtime/` placed in `suru_data/`. Running `python3 suru.py` straight from the repository still works (`data_path` looks for `lib/` next to it or for `suru_data/lib/`). The version is written in `__version__` in `suru.py`. Packaging uses hatchling (`python -m build` makes the wheel and sdist).
 
-2. **ライセンスは2つに分ける。** インタプリタ・型検査・コンパイラ(`suru.py`・`suru_check.py`・`suru_compile.py`)は GPL-3.0-or-later(`LICENSE`)です。実行時ライブラリ(`runtime/`)と標準ライブラリ(`lib/`)は MIT(`runtime/LICENSE`・`lib/LICENSE`)です。この2つはコンパイルしたプログラムや する のプログラムに一緒に入るので、MIT にして、作ったプログラムに GPL が及ばないようにしています。
+2. **The license is split in two.** The interpreter, type checker and compiler (`suru.py`, `suru_check.py`, `suru_compile.py`) are GPL-3.0-or-later (`LICENSE`). The runtime library (`runtime/`) and the standard library (`lib/`) are MIT (`runtime/LICENSE`, `lib/LICENSE`). These two end up inside compiled programs and Suru programs, so they are MIT to keep the GPL from reaching the programs you make.
 
-### Go 版のコンパイラ
+### The Go compiler
 
-1. **Go 版のコンパイラ `suruc`。** `compiler/`(字句解析・構文解析・型の検査・IR の生成)と `cmd/suruc/`(clang の呼び出し)を Go で書き、Python 版と同じ IR・同じエラーの文を出します。`tests/test_go_compiler.py` が、例と、テストに書いた全部のプログラム(エラーになるものも)で、Python 版と出力が同じかを調べます(go がなければ飛ばします)。Python 版を直したら、Go 版も同じに直します。
-2. **型の検査は行数に比例する時間。** Python 版では、定義を1つ推論するたびに、それまでの全部の定義の型をなめていたので、定義の数の2乗の時間がかかっていました。Go 版は、環境の中の自由な型変数を覚えておいて使い回します(多相にした型変数が後から決まったときだけ作り直します)。8,000 行のプログラムで、検査は 10.2 秒 → 0.03 秒です。
-3. **時間のほとんどは clang。** 8,000 行のプログラムで、IR を作るまでは Python 版 13.6 秒 → Go 版 0.4 秒、バイナリまでは 28 秒 → 18 秒(-O2)/ 2.4 秒(-O0)です。clang の時間を減らすには、IR を小さくするのが次の手です。
+1. **The Go compiler `suruc`.** `compiler/` (lexing, parsing, type checking, IR generation) and `cmd/suruc/` (calling clang) are written in Go and produce the same IR and the same error messages as the Python version. `tests/test_go_compiler.py` checks that the output matches the Python version for the examples and every program written in the tests (including ones that are errors) (it is skipped when go is not installed). When the Python version is fixed, fix the Go version the same way.
+2. **Type checking takes time proportional to the number of lines.** The Python version scanned the types of all earlier definitions each time it inferred one, so it took time quadratic in the number of definitions. The Go version remembers and reuses the free type variables in the environment (rebuilding only when a type variable that was generalized gets determined later). For an 8,000-line program, checking went from 10.2 seconds to 0.03 seconds.
+3. **Most of the time is clang.** For an 8,000-line program, getting to the IR takes 13.6 seconds in the Python version and 0.4 seconds in the Go version, and getting to the binary takes 28 seconds → 18 seconds (-O2) / 2.4 seconds (-O0). The next step to cut clang's time is to make the IR smaller.
 
-### 通信
+### Networking
 
-1. **`「通信」 を 読み込む` で TCP の通信をする。** 組み込みは8つで、どれも動作を返します。待受口と接続は1からの番号で表します(インタプリタとコンパイルしたもので同じ番号)。
+1. **`「通信」 を 読み込む` gives you TCP networking.** There are eight built-ins, all returning actions. Listeners and connections are represented by numbers starting from 1 (the same numbers in the interpreter and compiled programs).
 
-| 書き方 | 結果(動作の結果) |
+| Syntax | Result (of the action) |
 |---|---|
-| `8080 を 通信内の待受開始する` | 待受口の番号(0.0.0.0 のそのポートで待ち受ける) |
-| `8080 を 「127.0.0.1」 に 通信内の待受開始する` | 待受口の番号(そのアドレスだけで待ち受ける。`「127.0.0.1」` なら同じ機械の中からだけ) |
-| `口 から 通信内の接続受付する` | 接続の番号(次の接続が来るまで待つ) |
-| `接続 から 通信内の行受信する` | 1行の文字列(終わりの改行を含む。相手が閉じていれば「」) |
-| `接続 から 100 を 通信内の受信する` | 100 バイトまでの文字列(UTF-8 として読む) |
-| `文字列 を 接続 へ 通信内の送信する` | 送ったバイト数 |
-| `バイト列 を 接続 へ 通信内のバイト列送信する` | 送ったバイト数(画像などをそのまま送る) |
-| `番号 を 通信内の切断する` | 接続か待受口を閉じる(結果は番号) |
+| `8080 を 通信内の待受開始する` | The listener number (listens on that port of 0.0.0.0) |
+| `8080 を 「127.0.0.1」 に 通信内の待受開始する` | The listener number (listens only on that address; with `「127.0.0.1」`, only from the same machine) |
+| `口 から 通信内の接続受付する` | The connection number (waits until the next connection arrives) |
+| `接続 から 通信内の行受信する` | One line as a string (including the trailing newline; 「」 if the other side has closed) |
+| `接続 から 100 を 通信内の受信する` | A string of up to 100 bytes (read as UTF-8) |
+| `文字列 を 接続 へ 通信内の送信する` | The number of bytes sent |
+| `バイト列 を 接続 へ 通信内のバイト列送信する` | The number of bytes sent (sends images and the like as they are) |
+| `番号 を 通信内の切断する` | Closes a connection or listener (the result is the number) |
 
-2. **通信の失敗は実行時エラー。** 相手が切れたときなどは「「送信する」で通信に失敗しました(Broken pipe)」のエラーです。開いていない番号はエラーです。コンパイルしたものは、接続を待つ前・受信する前にそれまでの表示を出します(ログが遅れて出ないように)。
-3. **組み込みは lib/ のファイルごと。** `suru.py` の `LIB_PRIMITIVES`(Go 版は `libPrimitives`)で、どのファイルの中で見えるかを決めます。実行時ライブラリの中では、標準と通信の組み込みは同じ表です。
-4. **バイト列は `バイト列送信する` で送る。** `送信する` は文字列を UTF-8 で送り、`バイト列送信する` はバイト列をそのまま送ります(HTTP で画像を返すため)。インタプリタとコンパイルしたもので同じです。
+2. **Networking failures are runtime errors.** When the other side disconnects, for example, you get 「「送信する」で通信に失敗しました(Broken pipe)」 ("communication failed in 「送信する」 (Broken pipe)"). A number that is not open is an error. Compiled programs flush what has been printed so far before waiting for a connection and before receiving (so logs don't come out late).
+3. **Built-ins belong to files in lib/.** `LIB_PRIMITIVES` in `suru.py` (`libPrimitives` in the Go version) decides which file each one is visible in. Inside the runtime library, the built-ins of the standard library and of networking share one table.
+4. **Byte sequences are sent with `バイト列送信する`.** `送信する` sends a string as UTF-8, and `バイト列送信する` sends a byte sequence as it is (to return images over HTTP). The interpreter and compiled programs behave the same.
 
 ### HTTP
 
-1. **HTTP のサーバーは標準の外の [suru-lang/http](https://github.com/suru-lang/http) に移した。** 本体の `lib/HTTP.suru` はなくなりました。使うプロジェクトで `kumu 追加 github.com/suru-lang/http` と足し、今までどおり `「HTTP」 を 読み込む` と書きます(`待受する`・`動作待受する`・`並行待受する`・`本文応答する` などの名前も同じです)。HTTP のクライアントも、そのリポジトリに入れます。
-2. **フォルダを丸ごと配る静的ファイル配信は suru-lang/http にある。** `8080 を （「public」 を HTTP内の配信すること） で HTTP内の動作待受する` で、public の下のファイルを道に合わせて配ります(拡張子から Content-Type、%XX を戻す、フォルダの外へは 403、フォルダは index.html、GET と HEAD)。使い方はそのリポジトリの README です。
-3. **応答の本文はバイト列になった。** 画像などを返すために、`本文応答する` などは文字列を UTF-8 のバイト列にして本文に入れます。`応答文にする` は今までどおり文字列を返します。
-4. **本体のテストは HTTP.suru の写しを使う。** `tests/http/HTTP.suru` は suru-lang/http の写しで、通信・スレッド・GC・`試行する` がサーバーとして本当に動くか(1万件続けて答える、接続ごとに並行に答えるなど)を本体のテストで確かめるために置いています。HTTP.suru を変えたら、この写しも同じにします。
+1. **The HTTP server moved out of the standard library to [suru-lang/http](https://github.com/suru-lang/http).** The main repository's `lib/HTTP.suru` is gone. In a project that uses it, add it with `kumu 追加 github.com/suru-lang/http` and write `「HTTP」 を 読み込む` as before (names such as `待受する`, `動作待受する`, `並行待受する` and `本文応答する` are unchanged). The HTTP client goes in that repository too.
+2. **Static file serving of a whole folder lives in suru-lang/http.** `8080 を （「public」 を HTTP内の配信すること） で HTTP内の動作待受する` serves the files under public by path (Content-Type from the extension, %XX decoded, 403 outside the folder, index.html for folders, GET and HEAD). See that repository's README for usage.
+3. **Response bodies became byte sequences.** To return images and the like, `本文応答する` and friends put strings into the body as UTF-8 bytes. `応答文にする` still returns a string.
+4. **The main repository's tests use a copy of HTTP.suru.** `tests/http/HTTP.suru` is a copy from suru-lang/http, kept so the main tests can check that networking, threads, the GC and `試行する` really work as a server (answering 10,000 requests in a row, answering each connection in parallel, and so on). When HTTP.suru changes, update this copy to match.
 
-### 外部の関数(C・C++・Go を呼ぶ)
+### Foreign functions (calling C, C++ and Go)
 
-1. **`外部の「m」 を 読み込む` と `… とは 外部の「cos」` で C の関数を呼ぶ。** 型の宣言で C の型を決め、定義の本体を `外部の「C の名前」` にします。引数は定義に書いた順に C へ渡ります。libc の関数(`strlen` など)は読み込まなくても使えます。例は `examples/ffi.suru`。
+1. **`外部の「m」 を 読み込む` and `… とは 外部の「cos」` call C functions.** The type declaration decides the C types, and the definition's body is `外部の「C NAME」` (外部の = "external"). Arguments are passed to C in the order written in the definition. libc functions (`strlen` and so on) can be used without loading anything. See `examples/ffi.suru`.
 
 ```
 外部の「m」 を 読み込む
@@ -481,218 +491,218 @@ x を y で 累乗する とは 外部の「pow」
 2 を 10 で 累乗する                    # 1024
 ```
 
-2. **型の対応。** `数` は `int64_t`、`小数` は `double`、`整数` は `int`、`真偽` は `int`(0 か 1)、`文字列` は `const char *`(UTF-8)、`番地` は `void *`、`バイト列` は `const uint8_t *`(引数だけ)、`無` は `void`(値だけ)です。`小数` と `整数` は、する の中では `数` と同じ型です。`番地` は中を見ない値で、`番地(0x…)` と表示し、`=` で比べられます。リスト・組・関数は渡せません。戻り値の `int64_t` が ±2^62 を超えたら実行時エラーです(コンパイルしたものの整数の範囲)。C が NULL の文字列を返したら「」です。
-3. **値が動作なら、行ったときに呼ぶ。** `数 を 加算記録する は 数 の 動作` と宣言すると、呼んでも動作を作るだけで、手順やトップレベルで行ったときに C の関数を呼びます。動作でない型なら、その場で呼ぶ純粋な関数として扱います(本当に副作用がないかは、宣言した人が決めます)。
-4. **ライブラリの名前。** `「m」` のような短い名前は OS の探し方で探します(コンパイルしたものは `-lm` でリンク)。`/` を含むか `.so`・`.dylib` で終わる名前は、そのファイルからの相対パスです(コンパイルしたものはそのファイルをリンクし、実行時に同じ場所から読みます)。
-5. **自分で書いた C・C++・Go を呼ぶ。** C は `cc -shared -fPIC -o libあれ.so あれ.c`、C++ は出す関数を `extern "C"` にして同じように、Go は `//export 名前` を付けて `go build -buildmode=c-shared -o libあれ.so` で作り、`外部の「./libあれ.so」 を 読み込む` で使います。
-6. **作り。** インタプリタは Python の `ctypes`、コンパイラ(Python 版と Go 版)は IR に `declare` を書き、値の変換は実行時ライブラリの `rt_ffi_*` で行います。C に渡した文字列は呼んでいる間だけ使えます(C 側で持ち続けるものは `番地` で扱います)。C から する の関数を呼び戻すのは「C から呼び戻す」の節です。
-7. **バイト列。** 変更できないバイトの並びで、`バイト列（e3 81 82）` と表示し、`=` で中身を比べます。標準の組み込みで作ったり戻したりします: `s を バイト列にする`(UTF-8)、`（65 と 66） を バイト列組立する`(0〜255 の数のリストから)、`b を 数列にする`、`b を 文字列にする`(UTF-8 でなければ実行時エラー)、`b を バイト長にする`。外部の関数の引数の `バイト列` は `const uint8_t *` です(長さは別の引数で渡します。C 側で書き換えません)。
-8. **C のメモリとのやりとり。** `n を 番地にする`・`p を 番地数値にする` で数と番地を行き来し(`0 を 番地にする` が NULL)、`p から n を バイト列取得する` で C のメモリから n バイトを写し取り、`b を p へ 書込する` で書き込みます(どちらも動作)。メモリは `malloc`・`free` を外部の関数として宣言して確保します。値のない C の関数(`void`)は、値の型を `無` と宣言します(する では 0 になります)。
-9. **失敗の扱い。** `エラー番号取得する` は、直前に呼んだ外部の関数が残した errno を結果にする動作です(呼ぶ前に 0 にします)。`文 を 失敗する` はその文の実行時エラーになる動作で、`試行する` で受け止められます。標準の `m を 「開くの」 で 失敗確認する` は、C の関数が負の数を返したら「開くのに失敗しました(No such file or directory)」の実行時エラーにします(`e を エラー文にする` は strerror)。
+2. **Type mapping.** `数` is `int64_t`, `小数` is `double`, `整数` is `int`, `真偽` is `int` (0 or 1), `文字列` is `const char *` (UTF-8), `番地` is `void *`, `バイト列` is `const uint8_t *` (arguments only), and `無` is `void` (return values only). Inside Suru, `小数` and `整数` are the same type as `数`. `番地` ("address") is an opaque value, printed as `番地(0x…)` and comparable with `=`. Lists, records and functions can't be passed. A returned `int64_t` beyond ±2^62 is a runtime error (the integer range of compiled programs). A NULL string returned by C becomes 「」.
+3. **If the value is an action, the call happens when it is carried out.** Declaring `数 を 加算記録する は 数 の 動作` makes a call only build an action, and the C function is called when it is carried out in a procedure or at the top level. With a non-action type, it is treated as a pure function called on the spot (whether it really has no side effects is up to whoever wrote the declaration).
+4. **Library names.** A short name like `「m」` is looked up the way the OS looks it up (compiled programs link with `-lm`). A name containing `/` or ending in `.so` or `.dylib` is a path relative to the file (compiled programs link that file and load it from the same place at runtime).
+5. **Calling your own C, C++ and Go.** Build C with `cc -shared -fPIC -o libあれ.so あれ.c`, C++ the same way with the exported functions marked `extern "C"`, and Go with `//export NAME` and `go build -buildmode=c-shared -o libあれ.so`, then use it with `外部の「./libあれ.so」 を 読み込む`.
+6. **Implementation.** The interpreter uses Python's `ctypes`; the compilers (Python and Go) write `declare` into the IR, and values are converted by `rt_ffi_*` in the runtime library. A string passed to C is valid only during the call (keep anything C holds on to as a `番地`). Calling Suru functions back from C is covered in "Callbacks from C".
+7. **Byte sequences.** An immutable sequence of bytes, printed as `バイト列（e3 81 82）` and compared by contents with `=`. Standard built-ins make and unpack them: `s を バイト列にする` (UTF-8), `（65 と 66） を バイト列組立する` (from a list of numbers 0 to 255), `b を 数列にする`, `b を 文字列にする` (a runtime error if it isn't UTF-8) and `b を バイト長にする`. A `バイト列` argument of a foreign function is `const uint8_t *` (pass the length as a separate argument; C must not modify it).
+8. **Exchanging with C memory.** `n を 番地にする` and `p を 番地数値にする` convert between numbers and addresses (`0 を 番地にする` is NULL), `p から n を バイト列取得する` copies n bytes out of C memory, and `b を p へ 書込する` writes into it (both are actions). Memory is allocated by declaring `malloc` and `free` as foreign functions. For a C function without a value (`void`), declare the value type as `無` (it becomes 0 in Suru).
+9. **Handling failure.** `エラー番号取得する` is an action whose result is the errno left by the foreign function called just before (it is set to 0 before the call). `文 を 失敗する` is an action that becomes a runtime error with that message, which `試行する` can catch. The standard `m を 「開くの」 で 失敗確認する` turns a negative return from a C function into the runtime error 「開くのに失敗しました(No such file or directory)」 ("failed to open (…)") (`e を エラー文にする` is strerror).
 
-### ファイルと環境
+### Files and the environment
 
-1. **`「ファイル」 を 読み込む` でファイルを読み書きする。** 中身は `lib/ファイル.suru` に する で書いてあり、C の stdio(`fopen`・`fread`・`fwrite` など)を外部の関数として呼びます。どれも動作です。
+1. **`「ファイル」 を 読み込む` reads and writes files.** It is written in Suru in `lib/ファイル.suru` and calls C's stdio (`fopen`, `fread`, `fwrite` and so on) as foreign functions. All of these are actions.
 
-| 書き方 | 結果(動作の結果) |
+| Syntax | Result (of the action) |
 |---|---|
-| `道 を ファイル内の読込する` | ファイル全体の文字列(UTF-8) |
-| `道 を ファイル内のバイト列読込する` | ファイル全体のバイト列 |
-| `道 を ファイル内の行分割読込する` | 行の文字列のリスト(終わりの改行は含めない) |
-| `文字列 を 道 へ ファイル内の書出する` | 書いたバイト数(ファイルは作り直す) |
-| `文字列 を 道 へ ファイル内の追記する` | 書いたバイト数(終わりに足す) |
-| `バイト列 を 道 へ ファイル内のバイト列書出する` | 書いたバイト数 |
-| `道 を ファイル内の存在確認する` | ファイルかフォルダがあれば 真 |
-| `道 を ファイル内のフォルダ確認する` | フォルダ(を指すシンボリックリンク)なら 真 |
-| `道 を ファイル内の読取可能確認する` | 読めるなら 真 |
-| `道 を ファイル内の実道取得する` | シンボリックリンクと `..` を解いた絶対パスの `有`、なければ `無`(C の realpath) |
-| `道 を ファイル内の削除する`、`道 を ファイル内のフォルダ作成する` | 0 |
+| `道 を ファイル内の読込する` | The whole file as a string (UTF-8) |
+| `道 を ファイル内のバイト列読込する` | The whole file as a byte sequence |
+| `道 を ファイル内の行分割読込する` | A list of line strings (without the trailing newlines) |
+| `文字列 を 道 へ ファイル内の書出する` | The number of bytes written (the file is recreated) |
+| `文字列 を 道 へ ファイル内の追記する` | The number of bytes written (appended at the end) |
+| `バイト列 を 道 へ ファイル内のバイト列書出する` | The number of bytes written |
+| `道 を ファイル内の存在確認する` | 真 if the file or folder exists |
+| `道 を ファイル内のフォルダ確認する` | 真 if it is a folder (or a symbolic link to one) |
+| `道 を ファイル内の読取可能確認する` | 真 if it is readable |
+| `道 を ファイル内の実道取得する` | `有` of the absolute path with symbolic links and `..` resolved, or `無` if it doesn't exist (C's realpath) |
+| `道 を ファイル内の削除する`, `道 を ファイル内のフォルダ作成する` | 0 (delete, make a folder) |
 
-2. **失敗は実行時エラー。** 「ファイル『a.txt』を開くのに失敗しました(No such file or directory)」のような文で、`試行する` で受け止められます。道は今のフォルダからの相対パスです(プログラムのファイルからではありません)。
-3. **`「環境」 を 読み込む` でプログラムの環境を使う。** `環境内の引数取得する`(`suru 例.suru a b` や `./例 a b` の a と b のリスト)、`「HOME」 を 環境内の環境変数取得する`(なければ「」)、`3 を 環境内の終了する`(表示を出し切ってから終える)、`「…」 を 環境内のエラー出力する`(標準エラーに1行)、`環境内の今のフォルダ取得する`、`環境内のOS名取得する`(uname の名前。「Linux」「Darwin」など)。引数と終了だけは組み込み(標準の `引数取得する`・`終了する`)で、ほかは外部の関数です。
+2. **Failures are runtime errors.** With messages like 「ファイル『a.txt』を開くのに失敗しました(No such file or directory)」, catchable with `試行する`. Paths (道) are relative to the current folder (not to the program's file).
+3. **`「環境」 を 読み込む` gives access to the program's environment.** `環境内の引数取得する` (the list of a and b in `suru 例.suru a b` or `./例 a b`), `「HOME」 を 環境内の環境変数取得する` (「」 if unset), `3 を 環境内の終了する` (exits after flushing output), `「…」 を 環境内のエラー出力する` (one line to standard error), `環境内の今のフォルダ取得する` (current folder), and `環境内のOS名取得する` (the uname name, such as 「Linux」 or 「Darwin」). Only the arguments and exit are built-ins (the standard `引数取得する` and `終了する`); the rest are foreign functions.
 
-### 算術と乱数
+### Arithmetic and random numbers
 
-1. **`「算術」 を 読み込む` で三角関数・指数・対数を使う。** `lib/算術.suru` に する で書いてあり、計算は C の libm を外部の関数として呼びます。`円周率`・`ネイピア数`、`x を 正弦にする`・`余弦にする`・`正接にする`(ラジアン)、`逆正弦にする`・`逆余弦にする`・`逆正接にする`、`y を x で 偏角にする`(atan2)、`双曲線正弦にする` など、`指数関数にする`・`自然対数にする`・`常用対数にする`・`x を 底 で 対数にする`、`x を y で 累乗する`・`立方根にする`、`度にする`・`ラジアンにする`、`a を b で 最大公約数にする`・`最小公倍数にする`、`n を 階乗する`、`x を 符号にする`。定義域の外(`-1 を 自然対数にする`)は nan です。
-2. **`「乱数」 を 読み込む` で乱数を使う。** 乱数は「種」(1 から 2147483646)から作る純粋な関数で、同じ種からはいつも同じ値です(インタプリタとバイナリでも同じ)。`s を 種更新する`(次の種、MINSTD)、`s を 一様にする`(0 以上 1 未満)、`1 から 6 を s で 整数乱数にする`、`n を s で 乱数列作成する`、`xs を s で 混合する`、`xs から s で 選択する`。毎回ちがう値にしたいときは、`OS乱数取得する`(動作、getentropy)で最初の種を作ります。暗号には使わないでください。
+1. **`「算術」 を 読み込む` gives trigonometric, exponential and logarithmic functions.** It is written in Suru in `lib/算術.suru`, and the calculations call C's libm as foreign functions: `円周率` and `ネイピア数` (π and e), `x を 正弦にする`, `余弦にする`, `正接にする` (sin, cos, tan in radians), `逆正弦にする`, `逆余弦にする`, `逆正接にする`, `y を x で 偏角にする` (atan2), `双曲線正弦にする` and friends, `指数関数にする`, `自然対数にする`, `常用対数にする`, `x を 底 で 対数にする`, `x を y で 累乗する`, `立方根にする`, `度にする` and `ラジアンにする`, `a を b で 最大公約数にする` and `最小公倍数にする` (gcd, lcm), `n を 階乗する`, and `x を 符号にする` (sign). Outside the domain (`-1 を 自然対数にする`) the result is nan.
+2. **`「乱数」 を 読み込む` gives random numbers.** Random numbers are pure functions of a "seed" (1 to 2147483646), and the same seed always gives the same value (in the interpreter and binaries alike): `s を 種更新する` (the next seed, MINSTD), `s を 一様にする` (at least 0 and below 1), `1 から 6 を s で 整数乱数にする`, `n を s で 乱数列作成する`, `xs を s で 混合する` (shuffle) and `xs から s で 選択する` (choose). For different values every run, make the first seed with `OS乱数取得する` (an action, getentropy). Don't use them for cryptography.
 
-### 時間とカレンダー
+### Time and calendars
 
-1. **`「時間」 を 読み込む` で時刻と暦を使う。** `lib/時間.suru` に する で書いてあります。時刻は 1970-01-01 00:00:00(世界時)からの秒数(小数)、日時は `年 と 月 と 日 と 時 と 分 と 秒 と 時差 の 組` の型 `日時` です(時差は秒、日本なら 32400)。例は `examples/time.suru`。
+1. **`「時間」 を 読み込む` gives times and calendars.** It is written in Suru in `lib/時間.suru`. A time is the number of seconds (a decimal) since 1970-01-01 00:00:00 (UTC), and a date-time is the type `日時`, a record `年 と 月 と 日 と 時 と 分 と 秒 と 時差 の 組` (year, month, day, hour, minute, second and UTC offset; the offset is in seconds, 32400 for Japan). See `examples/time.suru`.
 
-| 書き方 | 結果 |
+| Syntax | Result |
 |---|---|
-| `時間内の現在時刻取得する`、`t を 時間内の経過秒取得する` | 今の時刻、t からの秒数(動作、clock_gettime) |
-| `0.5 を 時間内の待機する` | 0.5 秒待つ(動作、nanosleep) |
-| `t を 時間内の時差取得する`、`t を 時間内の現地日時取得する`、`時間内の現在日時取得する` | この計算機の地域(`TZ`)の時差、その時差での日時(動作、localtime_r) |
-| `t を 32400 で 時間内の日時にする`、`t を 時間内の世界日時にする`、`d を 時間内の時刻にする` | 時刻と日時の行き来(純粋) |
-| `（2026 と 11 と 22） を 時間内の日付作成する` | その日の 0 時(時差 0)の日時 |
-| `2024 が 時間内の閏年である`、`d を 時間内の月日数にする` | 閏年か、その月の日数 |
-| `d を 時間内の曜日にする`、`d を 時間内の曜日番号にする` | 「日」〜「土」、0(日曜)〜6 |
-| `d を n で 時間内の秒数加算する`・`日数加算する`・`月数加算する`・`年数加算する` | n だけ進めた日時(月の終わりは丸める: 1月31日の1か月後は2月29日か28日) |
-| `a から b を 時間内の日数差にする`、`a から b を 時間内の秒数差にする` | 日付の差、時刻の差 |
-| `d を 時間内の日付文字列にする`・`時刻文字列にする`・`国際書式にする` | 「2026-11-22」、「19:31:12」、「2026-11-22T19:31:12+09:00」 |
-| `d を 「%Y年%m月%d日（%a）」 で 時間内の書式にする` | %Y %m %d %H %M %S %a(曜日) %z(時差)を置き換えた文字列 |
-| `d を 時間内の和暦にする` | 「令和元年5月1日」(明治6年の改暦より前は西暦) |
+| `時間内の現在時刻取得する`, `t を 時間内の経過秒取得する` | The current time, seconds since t (actions, clock_gettime) |
+| `0.5 を 時間内の待機する` | Waits 0.5 seconds (an action, nanosleep) |
+| `t を 時間内の時差取得する`, `t を 時間内の現地日時取得する`, `時間内の現在日時取得する` | The UTC offset of this machine's region (`TZ`), the date-time at that offset (actions, localtime_r) |
+| `t を 32400 で 時間内の日時にする`, `t を 時間内の世界日時にする`, `d を 時間内の時刻にする` | Converting between times and date-times (pure) |
+| `（2026 と 11 と 22） を 時間内の日付作成する` | The date-time at 0:00 of that day (offset 0) |
+| `2024 が 時間内の閏年である`, `d を 時間内の月日数にする` | Whether it is a leap year, the number of days in that month |
+| `d を 時間内の曜日にする`, `d を 時間内の曜日番号にする` | 「日」 to 「土」 (Sunday to Saturday), 0 (Sunday) to 6 |
+| `d を n で 時間内の秒数加算する`, `日数加算する`, `月数加算する`, `年数加算する` | The date-time moved forward by n (the end of a month is clamped: one month after January 31 is February 29 or 28) |
+| `a から b を 時間内の日数差にする`, `a から b を 時間内の秒数差にする` | Difference in dates, difference in times |
+| `d を 時間内の日付文字列にする`, `時刻文字列にする`, `国際書式にする` | 「2026-11-22」, 「19:31:12」, 「2026-11-22T19:31:12+09:00」 |
+| `d を 「%Y年%m月%d日（%a）」 で 時間内の書式にする` | The string with %Y %m %d %H %M %S %a (weekday) %z (offset) replaced |
+| `d を 時間内の和暦にする` | 「令和元年5月1日」 (Japanese era; before the calendar reform of Meiji 6, the Western year) |
 
-2. **暦は先発グレゴリオ暦の純粋な計算。** 日数の加算は時差をそのままにするので、夏時間の切り替えはまたぎません(必要なら `時刻にする` してから `現地日時取得する` します)。時差の名前(「JST」)や、文字列から日時への読み取りはまだありません。
+2. **The calendar is pure arithmetic on the proleptic Gregorian calendar.** Adding days keeps the UTC offset as it is, so it doesn't cross daylight saving transitions (if needed, use `時刻にする` and then `現地日時取得する`). Time zone names (「JST」) and parsing date-times from strings are not available yet.
 
-### 文字の分類と字句解析(する で書いたもの)
+### Character classes and lexing (written in Suru)
 
-1. **`「文字」 を 読み込む` で1文字の種類を調べる。** `c が 文字内の平仮名である`・`片仮名である`・`漢字である`・`英字である`(半角と全角)・`数字である`(半角と全角)・`空白である`、`c を 文字内の半角にする`(全角の英数字・記号と全角スペースを半角に)、`s を 文字内の半角変換する`。中身は `lib/文字.suru` に文字の番号の範囲で書いてあります。
-2. **`「字句」 を 読み込む` で する のプログラムを字句解析する。** `行のリスト を 字句内の字句解析する` は、`suru.py` と同じ規則(空白の書き方・句読点の書き方・字下げ・「です」)で、論理行(`段`・`字句列`・`番号`・`閉`)のリストを返します。字句は `種類`(数・文字列・演算子・開き・閉じ・名前・予約語・助詞・呼出・句点・区切り)・`値`・`行`・`桁`・`形`・`囲`・`否定` を持つ組です。`suru.py` ならエラーになるところは種類が「誤り」の字句になり、その行(文)の残りは読みません。点検(linter)を する で書くための土台で、`tests/test_lexer.py` が例とライブラリの全ファイルで `suru.py` と同じ字句になることを確かめています。
+1. **`「文字」 を 読み込む` checks the kind of a character.** `c が 文字内の平仮名である`, `片仮名である`, `漢字である`, `英字である` (half-width and full-width), `数字である` (half-width and full-width) and `空白である` (hiragana, katakana, kanji, Latin letter, digit, space), `c を 文字内の半角にする` (full-width letters, digits, symbols and the full-width space to half-width), and `s を 文字内の半角変換する`. It is written in `lib/文字.suru` with ranges of character codes.
+2. **`「字句」 を 読み込む` lexes Suru programs.** `行のリスト を 字句内の字句解析する` returns a list of logical lines (`段`, `字句列`, `番号`, `閉`) using the same rules as `suru.py` (spaced style, punctuation style, indentation, 「です」). A token is a record with `種類` (kind: number, string, operator, open, close, name, reserved word, particle, call, period, separator), `値`, `行`, `桁`, `形`, `囲` and `否定`. Where `suru.py` would give an error, the token's kind is 「誤り」 (error) and the rest of that line (sentence) is not read. It is the base for writing the linter in Suru, and `tests/test_lexer.py` checks that it gives the same tokens as `suru.py` for the examples and every library file.
 
-### 点検(する で書いた linter)
+### Linter (「点検」, written in Suru)
 
-1. **`suru --点検 ファイル.suru …` で、エラーではないが直すと読みやすくなる書き方を知らせる。** `ファイル:行:桁: 規則: 説明` の形で表示し、1つでもあれば終了コード 1 です。中身は `lib/点検.suru`(と `lib/字句.suru`)に する で書いてあり、clang があれば初めの1回だけバイナリにしてキャッシュ(`~/.cache/suru/`)に置きます(`SURU_LINT_INTERP=1` ならいつもインタプリタで動かします)。
+1. **`suru --点検 FILE.suru …` points out code that is not an error but would read better if fixed.** It prints `FILE:LINE:COLUMN: RULE: DESCRIPTION`, and exits with code 1 if there is at least one. It is written in Suru in `lib/点検.suru` (and `lib/字句.suru`), and with clang available it is built into a binary only the first time and cached (`~/.cache/suru/`) (`SURU_LINT_INTERP=1` always runs it in the interpreter).
 
-| 規則 | 知らせること |
+| Rule | What it reports |
 |---|---|
-| 行末の空白 | 行の終わりに空白がある |
-| 字下げの混在 | ファイルで最初に字下げに使った文字(半角スペース・全角スペース・タブ)と違う文字で字下げしている |
-| 全角半角の混在 | 括弧・記号・数字のそれぞれで、ファイルの中で少ないほうの幅(全角か半角)で書いている |
-| 丁寧語の混在 | 文の終わりが「する」の文と「します」の文が両方あるとき、少ないほう |
-| 不要な二重かぎ | ひらがなを含まない名前を『』で囲んでいる |
-| 字句の誤り | 字句解析でエラーになる行(`suru --検査` でもエラーになります) |
-| 未使用の定義 | 定義したのにどこでも使っていない名前。一番外の定義はプログラム(一番外に式の文があるファイル)でだけ調べ、ライブラリでは調べません。関数の中の `x とは …` はいつも調べます。自分の中で自分を呼んでいるだけの関数も使われていないとみなします |
-| 未使用の引数 | 関数の本体で使っていない引数。`先頭 は x で …` や `空 を …` のように、いくつかの定義に分けて書いた関数と、`外部の「…」` の関数は調べません |
-| 未使用の読み込み | `「X」 を 読み込む` で、`X内の…` も X の型も使っていない。`読み込んで 使う` なら、X の中の名前も使っていない(X は調べるファイルと同じフォルダか lib/ から探し、見つからなければ調べません) |
-| 組み込みの上書き | 組み込みの関数(`加算する` など)や、`読み込んで 使う` ファイルの中の関数と同じ名前で、一番外に定義している |
-| 型の宣言なし | ライブラリ(一番外に式の文がないファイル)の一番外の関数に、`数 を 三倍する は 数` のような型の宣言がない。宣言はファイルのどこに書いてもかまいません |
-| 書き方の混在 | 1つのファイルに句読点の書き方の文と空白の書き方の文が両方ある。少ないほうの最初の文で1回だけ知らせます |
+| 行末の空白 (trailing space) | A space at the end of a line |
+| 字下げの混在 (mixed indentation) | Indentation with a character different from the first one used for indentation in the file (half-width space, full-width space, tab) |
+| 全角半角の混在 (mixed widths) | For each of parentheses, symbols and digits, the width (full or half) used less in the file |
+| 丁寧語の混在 (mixed politeness) | When there are both sentences ending in 「する」 and in 「します」, the less common ones |
+| 不要な二重かぎ (needless 『』) | A name without hiragana enclosed in 『』 |
+| 字句の誤り (lexing error) | A line that fails lexing (`suru --検査` also reports it) |
+| 未使用の定義 (unused definition) | A name defined but never used. Outermost definitions are checked only in programs (files with expression sentences at the outermost level), not in libraries. `x とは …` inside functions is always checked. A function that only calls itself counts as unused |
+| 未使用の引数 (unused parameter) | A parameter not used in the function body. Functions split into several definitions, as with `先頭 は x で …` or `空 を …`, and `外部の「…」` functions are not checked |
+| 未使用の読み込み (unused load) | `「X」 を 読み込む` with neither `X内の…` nor X's types used. With `読み込んで 使う`, none of the names in X used either (X is looked up in the same folder as the checked file or in lib/, and not checked if not found) |
+| 組み込みの上書き (built-in override) | An outermost definition with the same name as a built-in function (`加算する` and so on) or a function in a file loaded with `読み込んで 使う` |
+| 型の宣言なし (missing type declaration) | An outermost function in a library (a file without expression sentences at the outermost level) without a type declaration such as `数 を 三倍する は 数`. The declaration may be anywhere in the file |
+| 書き方の混在 (mixed styles) | One file has both punctuation-style and spaced-style sentences. Reported once, at the first sentence of the less common style |
 
-2. **知らせを黙らせる。** その行の終わりか、すぐ前の注釈だけの行に `# 点検しない` と書くとその行の知らせを全部、`# 点検しない: 規則名 規則名` と書くとその規則だけを黙らせます。
-3. **エディターにも出る。** 言語サーバー `suru-ls`(VS Code 拡張)が、開いたときと保存したときに点検して、知らせを警告として出します。クイックフィックスで `# 点検しない: 規則名` を足せます(clang が必要です)。保存していないファイルの中身は `suru --点検 --代わり 中身のファイル 本当の道` のように渡せば、本当の道のファイルとして調べます。
+2. **Silencing reports.** Writing `# 点検しない` ("don't lint") at the end of a line, or on a comment-only line just before it, silences all reports for that line; `# 点検しない: RULE RULE` silences only those rules.
+3. **It shows up in the editor too.** The language server `suru-ls` (VS Code extension) lints when a file is opened and saved, and shows the reports as warnings. A quick fix adds `# 点検しない: RULE` (clang is required). For an unsaved file, pass its contents as `suru --点検 --代わり CONTENTS_FILE REAL_PATH` to check them as the file at the real path.
 
-### 構文解析(する で書いたもの)
+### Parsing (written in Suru)
 
-1. **`「構文」 を 読み込む` で、する のプログラムを構文木にする。** `論理行群 を 形群 で 型群 に 構文内の構文解析する` は、字句解析した論理行(`lib/字句.suru`)のリストをプログラムとして読み、一番外の文のリストを `群解`(`群値` と `群読`)で返します。読めなければ `g が 構文内の群誤である` が真で、`g を 構文内の群誤文にする` が説明です。形群 は読み込むファイルの形(`形名` と `形数` の組 `形項`)、型群 はその型の名前のリストで、このファイルの型と形は自分で集めます。式を1つだけ読むときは `字句群 を 形群 で 構文内の字句式解析する` です。中身は `lib/構文.suru` に、`suru.py` と同じ規則で書いてあります。
-2. **構文木は 式 という1つの型。** 式は `数式`・`名式`・`演式`(演算と「かつ」「または」)・`呼式`・`参式`(すること)・`関式`(受け取って)・`若式`(もし)・`場式`(場合分け)・`作式`・`欄式` など、パターンは `束型`・`型型`・`名型型` など、文は `定義式`・`塊式`(ブロック)・`順式`(手順)・`型定式`・`宣式`(型の宣言)・`性質式`・`実装式`・`読込式`・`公開式` などの形です。呼び出しの引数は `引式`(助詞 と 式)です。`e を 構文内の式表示文にする` で確かめるための表示になります。
-3. **suru.py と同じまとめ方をする。** 続けて書いた場合ごとの関数定義は引数のパターンマッチ1つにまとめ、「ただし」の定義は前の定義のブロックに、「それから」の文は前の文の後ろに付けます。読み込むファイルは読みません。形のフィールドの数、場合が全部書いてあるか、同じ名前の定義が離れていないか、外部の関数の名前と型のような意味の検査はしません。
-4. **suru.py と同じ構文木になることを確かめる。** `tests/test_syntax.py` が、手で選んだ式とプログラム、例とライブラリの全ファイル(プログラム全体と、すべての論理行)で、`suru.py` の構文木と同じになること、`suru.py` で読めないものは 構文 でも読めないことを確かめています。
+1. **`「構文」 を 読み込む` turns Suru programs into syntax trees.** `論理行群 を 形群 で 型群 に 構文内の構文解析する` reads a list of logical lines lexed by `lib/字句.suru` as a program and returns the list of outermost sentences as a `群解` (`群値` and `群読`). If it can't be read, `g が 構文内の群誤である` is true and `g を 構文内の群誤文にする` is the explanation. 形群 is the shapes of loaded files (records `形項` of `形名` and `形数`), and 型群 is the list of their type names; the types and shapes of the file itself are collected automatically. To read a single expression, use `字句群 を 形群 で 構文内の字句式解析する`. It is written in `lib/構文.suru` with the same rules as `suru.py`.
+2. **The syntax tree is one type, 式.** Expressions are shapes such as `数式`, `名式`, `演式` (operations, 「かつ」 and 「または」), `呼式`, `参式` (すること), `関式` (受け取って), `若式` (もし), `場式` (case analysis), `作式` and `欄式`; patterns are `束型`, `型型`, `名型型` and so on; sentences are `定義式`, `塊式` (block), `順式` (procedure), `型定式`, `宣式` (type declaration), `性質式`, `実装式`, `読込式`, `公開式` and so on. Call arguments are `引式` (a particle and an expression). `e を 構文内の式表示文にする` gives a printed form for checking.
+3. **It groups things the same way as suru.py.** Consecutive case-by-case function definitions become one pattern match on the arguments, 「ただし」 definitions go into the block of the previous definition, and 「それから」 sentences are attached after the previous sentence. Loaded files are not read. It does not do semantic checks such as the number of a shape's fields, whether all cases are written, whether definitions of the same name are apart, or the names and types of foreign functions.
+4. **It is checked to give the same syntax tree as suru.py.** `tests/test_syntax.py` checks, for hand-picked expressions and programs and for every example and library file (both whole programs and every logical line), that the tree equals `suru.py`'s, and that what `suru.py` can't read can't be read by 構文 either.
 
-### 点検の構文木の規則
+### Linter rules on the syntax tree
 
-1. **構文木を使う規則を4つ足す。** `suru --点検` は、ファイルを `lib/構文.suru` で構文木にして、次の書き方も知らせます。読み込むファイルの型と形も読んでから調べます。構文木にできないファイル(実行するとエラーになるもの)では、この4つは調べません。
+1. **Four rules use the syntax tree.** `suru --点検` parses the file with `lib/構文.suru` and also reports the following. It reads the types and shapes of loaded files before checking. For files that can't be parsed (which would be errors when run), these four are not checked.
 
-| 規則 | 知らせること |
+| Rule | What it reports |
 |---|---|
-| 冗長な真偽 | `もし c ならば 真 そうでなければ 偽`(`c` だけでよい)、`もし c ならば 偽 そうでなければ 真`(`c = 偽` でよい)、`x = 真`・`x != 偽`(`x` だけでよい)、`もし x が 真 ならば`(`もし x ならば` でよい)。`x = 偽` は値を打ち消すただ1つの書き方なので知らせません |
-| 同じ枝 | 「もし」の「ならば」の後と「そうでなければ」の後が同じ式 |
-| 自分との比較 | `x = x`・`x < x`・`もし x が x ならば` のように、同じ式どうしを比べている(結果はいつも同じ) |
-| 不要な括弧 | `（x）` のように中が1つの字句の括弧と、`（（…））` の外側の括弧で、外しても構文木が変わらないもの。一番外の文ごとに括弧を外して読み直し、構文木(行の番号は除く)が同じかで確かめるので、`（a の b） の （r）` のように読み方を決めている括弧は知らせません |
+| 冗長な真偽 (redundant boolean) | `もし c ならば 真 そうでなければ 偽` (just `c` will do), `もし c ならば 偽 そうでなければ 真` (`c = 偽` will do), `x = 真` and `x != 偽` (just `x` will do), `もし x が 真 ならば` (`もし x ならば` will do). `x = 偽` is the only way to negate a value, so it is not reported |
+| 同じ枝 (identical branches) | The expressions after 「ならば」 and after 「そうでなければ」 of a 「もし」 are the same |
+| 自分との比較 (self comparison) | Comparing an expression with itself, as in `x = x`, `x < x`, `もし x が x ならば` (the result is always the same) |
+| 不要な括弧 (needless parentheses) | Parentheses around a single token, as in `（x）`, and the outer parentheses of `（（…））`, when removing them doesn't change the syntax tree. Each outermost sentence is reparsed with the parentheses removed and the trees are compared (ignoring line numbers), so parentheses that decide how something is read, as in `（a の b） の （r）`, are not reported |
 
-2. **桁は近くの字句で出す。** (「構文木の規則の桁と、増やした規則」で、`若式`・`演式`・`場式` が自分の桁を持つようにしました。今は、その式の「もし」や比べる記号の桁で知らせます。)
-3. **構文 に点検の助けを置く。** `e を 構文内の子式群にする`(直接の中の式)、`e を 構文内の中式行取得する`(式の行)、`e を 構文内の無行表示文にする`(行の番号を除いた表示。同じ形の式かを比べる)、`論理行群 を 形群 で 型群 に 構文内の外せる括弧群にする`(外しても構文木が変わらない括弧の、開き括弧と閉じ括弧の字句の対)、`論理行群 を 構文内の定義形群にする` / `構文内の定義型名群にする`(そのファイルで定義している形と型の名前)。
-4. **読み込みの文の後でも、そのファイルの型を使える。** これまで `lib/構文.suru` は、読み込みの文の後の文を、そのファイルの型と形を集める前の状態で読んでいたので、「『点』という型はありません」の誤りになっていました。`tests/test_syntax.py` に、型や形を外から渡さずに確かめるテストを足しました。
+2. **Columns come from a nearby token.** ("Columns for syntax-tree rules, and more rules" gave `若式`, `演式` and `場式` their own columns. Now reports use the column of the expression's 「もし」 or comparison symbol.)
+3. **構文 provides helpers for the linter.** `e を 構文内の子式群にする` (the directly contained expressions), `e を 構文内の中式行取得する` (the expression's line), `e を 構文内の無行表示文にする` (the printed form without line numbers, for comparing whether expressions have the same shape), `論理行群 を 形群 で 型群 に 構文内の外せる括弧群にする` (pairs of opening and closing tokens of parentheses whose removal doesn't change the tree), and `論理行群 を 構文内の定義形群にする` / `構文内の定義型名群にする` (the shape and type names defined in that file).
+4. **A file's own types can be used after load sentences.** Previously `lib/構文.suru` read sentences after a load sentence in the state before the file's types and shapes were collected, which gave the error 「『点』という型はありません」 ("there is no type 『点』"). `tests/test_syntax.py` gained tests that check without passing types and shapes from outside.
 
-### 構文木の規則の桁と、増やした規則
+### Columns for syntax-tree rules, and more rules
 
-1. **構文木の式が桁を持つ。** `lib/構文.suru` の `若式`(もし)は「もし」の行と桁(`若行`・`若桁`)、`演式` は演算子の桁(`演桁`。「が」で比べるときは「が」)、`場式`(場合分け)は「もし」の桁(`場桁`。場合ごとの関数定義をまとめたものは 0)を持ちます。点検はこの桁で知らせるので、同じ行に「もし」が2つあっても、それぞれの「もし」の桁で知らせます。`式表示文にする` は桁を出さないので、`tests/test_syntax.py` は今のまま `suru.py` の構文木と比べます。
-2. **同じ枝を場合分けにも広げる。** 場合分けのすべての場合の本体と「そうでなければ」の後が同じ式なら「同じ枝」を知らせます。パターンが名前を束ねる場合(`半径 の 円 ならば …`)があるときは、同じに見える式でも値が違うことがあるので知らせません。
-3. **定数の条件。** `もし 真 ならば …`・`もし 偽 ならば …` のように、条件が真か偽そのものの「もし」を知らせます。
-4. **不要な括弧を、同じ強さの演算子の左側にも広げる。** `（a + b） + c`・`（a * b） / c`・`（a かつ b） かつ c` のように、閉じ括弧のすぐ後ろが演算子で、括弧の中の一番外の演算子が全部それと同じ強さ(+ と -、* と / と %、かつ、または の4組)の括弧も、外して読み直して構文木が変わらなければ知らせます。`（x * 2） + 1` のように強さの違う演算子の括弧は、読みやすさのために書くことが多いので調べません。
+1. **Syntax-tree expressions carry columns.** In `lib/構文.suru`, `若式` (もし) carries the line and column of its 「もし」 (`若行`, `若桁`), `演式` the column of its operator (`演桁`; 「が」 when comparing with 「が」), and `場式` (case analysis) the column of its 「もし」 (`場桁`; 0 for grouped case-by-case function definitions). The linter reports at these columns, so even with two 「もし」 on the same line, each is reported at its own 「もし」. `式表示文にする` doesn't print columns, so `tests/test_syntax.py` still compares with `suru.py`'s trees as before.
+2. **Identical branches extended to case analysis.** If the bodies of all cases of a case analysis and the part after 「そうでなければ」 are the same expression, 「同じ枝」 is reported. When a case's pattern binds names (`半径 の 円 ならば …`), expressions that look the same can have different values, so it is not reported.
+3. **Constant conditions.** A 「もし」 whose condition is true or false itself, as in `もし 真 ならば …` or `もし 偽 ならば …`, is reported.
+4. **Needless parentheses extended to the left side of operators of the same strength.** Parentheses like `（a + b） + c`, `（a * b） / c` and `（a かつ b） かつ c`, where an operator comes right after the closing parenthesis and all outermost operators inside are of the same strength (the four groups + and -; *, / and %; かつ; または), are reported if reparsing without them leaves the tree unchanged. Parentheses around operators of different strength, as in `（x * 2） + 1`, are often written for readability, so they are not checked.
 
-### 点検のバイナリを早く作る
+### Building the linter binary faster
 
-1. **型の検査で、閉じた型を数え直さない。** `suru --点検` の初めの1回(バイナリを作る)は、ほとんどが Python 版の型の検査で、定義の型を一般化するたびに、環境にある全部の定義の型の自由な型変数を数え直していました。自由な型変数のない(閉じた)型は後からも変わらないので覚えておき、一般化する型変数がない定義では数えないようにしました。この環境では点検の IR を作るのが約 40 秒から約 12 秒になり、初めの1回は全部で約 17 秒です。Go 版(`suru-ls`・`kumu 点検`)は前から約 2 秒です。
-2. **点検が使うファイルだけでキャッシュの名前を決める。** キャッシュ(`~/.cache/suru/点検-<hash>`)の名前は、lib/ の全部ではなく、`点検.suru` から「「X」 を 読み込む」をたどったファイルと `基本.suru` だけで決めます(`suru.py` も Go 版も同じ)。点検が使わない lib のファイルを書きかえても、作り直しません。
+1. **Type checking no longer recounts closed types.** Most of the first run of `suru --点検` (which builds the binary) is the Python type checker, which recounted the free type variables in the types of every definition in the environment each time it generalized a definition's type. Types without free type variables (closed types) never change later, so they are remembered, and definitions with no type variables to generalize skip the count. In this environment, generating the linter's IR went from about 40 seconds to about 12 seconds, and the first run takes about 17 seconds in all. The Go version (`suru-ls`, `kumu 点検`) already took about 2 seconds.
+2. **The cache name depends only on the files the linter uses.** The name of the cache (`~/.cache/suru/点検-<hash>`) is decided not by all of lib/ but only by the files reached from `点検.suru` through 「「X」 を 読み込む」 plus `基本.suru` (both in `suru.py` and in the Go version). Editing lib files the linter doesn't use no longer triggers a rebuild.
 
-### 形の多い、自分自身を中に持つ型の検査
+### Checking self-containing types with many shapes
 
-1. **自分自身を中に持つフィールドの型は、中の同じ型を全部「その型自身」にする。** 型の検査(`suru_check.py` も Go 版も)は、自分の型のフィールドの型が無限に続くと分かったところで、そのフィールドを「自分自身を中に持つ」ことにしてやり直します。これまでは、そのフィールドの型を覚えるとき、無限に続くと分かった1つのところだけを「その型自身」にして、ほかの同じ型はそのときの型の引数のまま覚えていました。その後で別のフィールドも自分自身を中に持つと分かると型の引数の数が変わり、覚えた型とそろわなくなって、`lib/構文.suru` の 式 のような形の多い型では「式が必要ですが…の式が渡されています」の誤りになっていました。今は中の同じ型を全部「その型自身」として覚えるので、`lib/構文.suru` の、全部の形を深く写すだけの関数 `写式にする` はなくしました。
-2. **同じ値のほかのフィールドもまとめて見つける。** 無限に続くと分かった値のほかのフィールドに、そろえられる同じ型がもう入っていれば、それも自分自身を中に持つことにして、やり直す回数を減らします(`lib/構文.suru` で 54 回から 35 回)。`（1 と 葉 と 葉 の 節） と 葉 と 葉 の 節`(値に木を入れた木)のように、型の引数が違う同じ型は入れ子の別の型なので除きます。
+1. **For a field's type that contains the type itself, every inner occurrence of the same type becomes "the type itself".** The type checker (both `suru_check.py` and the Go version) redoes inference with a field marked "contains itself" once it finds the field's type of your own type would go on forever. Previously, when recording that field's type, only the one place found to go on forever became "the type itself", and other occurrences of the same type were recorded with the type parameters of that moment. When another field later turned out to contain itself too, the number of type parameters changed and no longer matched what was recorded, so types with many shapes, like 式 in `lib/構文.suru`, got errors like 「式が必要ですが…の式が渡されています」 ("式 is required, but … の 式 is passed"). Now every inner occurrence of the same type is recorded as "the type itself", so `写式にする`, a function in `lib/構文.suru` that only deep-copied every shape, was removed.
+2. **Other fields of the same value are found together.** If other fields of the value found to go on forever already hold the same type that can be unified, they are marked as containing themselves too, reducing the number of redos (from 54 to 35 in `lib/構文.suru`). The same type with different type parameters, as in `（1 と 葉 と 葉 の 節） と 葉 と 葉 の 節` (a tree with a tree as its value), is a different nested type, so it is excluded.
 
-### プロセス・パイプ・共有メモリ
+### Processes, pipes and shared memory
 
-1. **`「プロセス」 を 読み込む` でほかのプログラムを動かす。** `lib/プロセス.suru` に する で書いてあり、C の `system`・`popen`・`pipe` などを外部の関数として呼びます。どれも動作です。文字列の命令は `/bin/sh` に渡し、リストで渡すものは1つずつ `'…'` で囲んでから渡します(空白や記号がそのまま引数になります)。始める前にそれまでの表示を出しておくので、表示の順は入れ替わりません。例は `examples/process.suru`。
+1. **`「プロセス」 を 読み込む` runs other programs.** It is written in Suru in `lib/プロセス.suru` and calls C's `system`, `popen`, `pipe` and so on as foreign functions. All of these are actions. A command given as a string is passed to `/bin/sh`; items given as a list are each wrapped in `'…'` before being passed (spaces and symbols become arguments as they are). Output printed so far is flushed before starting, so the order of output doesn't get mixed up. See `examples/process.suru`.
 
-| 書き方 | 結果(動作の結果) |
+| Syntax | Result (of the action) |
 |---|---|
-| `「make test」 を プロセス内の命令実行する` | 終わるまで待って終了コード(シグナルで終わったら 128+番号) |
-| `（「ls」 と 「-l」） を プロセス内の引数実行する` | 引数のリストで |
-| `「date」 を プロセス内の命令出力取得する`、`（「git」 と 「log」） を プロセス内の出力取得する` | 標準出力と終了コードの組 `（出力 は 「…」 で 終了コード は 0 の 実行結果）` |
-| `入力 を 「sort」 で プロセス内の命令変換する` | 入力を標準入力に渡した結果の組 |
-| `「tail -f a.log」 を 「r」 で プロセス内の命令開始する`、`「cat」 を プロセス内の書込命令開始する` | 終わりを待たずに始めた命令の口(番地) |
-| `h から プロセス内の行読込する`、`s を h へ プロセス内の命令書込する`、`h を プロセス内の命令終了待機する` | 1行(改行つき、終わりなら「」)、書いたバイト数、終了コード |
-| `プロセス内のパイプ作成する` | `（読む口 と 書く口）` のファイル記述子 |
-| `b を fd へ プロセス内の口書込する`、`fd から 100 を プロセス内の口読込する`、`fd を プロセス内の口閉鎖する` | 書いたバイト数、読んだバイト列(終わりなら空)、0 |
-| `プロセス内のプロセス番号取得する`、`s を プロセス内の引用する` | getpid、sh 向けに囲んだ文字列(純粋) |
+| `「make test」 を プロセス内の命令実行する` | Waits until it finishes and gives the exit code (128+number if ended by a signal) |
+| `（「ls」 と 「-l」） を プロセス内の引数実行する` | The same, with a list of arguments |
+| `「date」 を プロセス内の命令出力取得する`, `（「git」 と 「log」） を プロセス内の出力取得する` | A record of standard output and exit code, `（出力 は 「…」 で 終了コード は 0 の 実行結果）` |
+| `入力 を 「sort」 で プロセス内の命令変換する` | The same record, with the input passed to standard input |
+| `「tail -f a.log」 を 「r」 で プロセス内の命令開始する`, `「cat」 を プロセス内の書込命令開始する` | A handle (address) of a command started without waiting for it to end |
+| `h から プロセス内の行読込する`, `s を h へ プロセス内の命令書込する`, `h を プロセス内の命令終了待機する` | One line (with its newline; 「」 at the end), the number of bytes written, the exit code |
+| `プロセス内のパイプ作成する` | The file descriptors `（読む口 と 書く口）` (read end and write end) |
+| `b を fd へ プロセス内の口書込する`, `fd から 100 を プロセス内の口読込する`, `fd を プロセス内の口閉鎖する` | The number of bytes written, the bytes read (empty at the end), 0 |
+| `プロセス内のプロセス番号取得する`, `s を プロセス内の引用する` | getpid, the string quoted for sh (pure) |
 
-2. **`「共有メモリ」 を 読み込む` で別のプロセスとメモリを分ける。** `lib/共有メモリ.suru` は POSIX の `shm_open`・`mmap` を呼びます。`「/suru-例」 を 4096 で 共有メモリ内の共有メモリ作成する` で作って接続し(`共有メモリ` の組: 名前・場所・大きさ)、別のプロセスは `… を 4096 で 共有メモリ内の共有メモリ接続する` で同じメモリにつながります。`b を 位置 で m へ 共有メモリ内の共有書込する`、`m から n を 位置 で 共有メモリ内の共有読込する`(範囲の外は実行時エラー)、`m を 共有メモリ内の共有メモリ解除する`、`名前 を 共有メモリ内の共有メモリ削除する`。同時に書くときの順番(ロック)はまだありません。
+2. **`「共有メモリ」 を 読み込む` shares memory with another process.** `lib/共有メモリ.suru` calls POSIX `shm_open` and `mmap`. `「/suru-例」 を 4096 で 共有メモリ内の共有メモリ作成する` creates and attaches it (a `共有メモリ` record: name, location, size), and another process attaches to the same memory with `… を 4096 で 共有メモリ内の共有メモリ接続する`. Then `b を 位置 で m へ 共有メモリ内の共有書込する`, `m から n を 位置 で 共有メモリ内の共有読込する` (out of range is a runtime error), `m を 共有メモリ内の共有メモリ解除する` (detach) and `名前 を 共有メモリ内の共有メモリ削除する` (delete). There is no ordering (locking) for simultaneous writes yet.
 
-### シグナル
+### Signals
 
-1. **`「シグナル」 を 読み込む` でシグナルを受け取る・送る。** `lib/シグナル.suru` は C の `sigprocmask`・`sigwait`・`sigpending`・`kill` などを呼びます。する の関数を C へ渡せないので、ハンドラーは使わず、**受付** で止めておいたシグナルを、待つか確かめて受け取ります。シグナルは `「INT」` `「TERM」` `「HUP」` `「USR1」` のように SIG を除いた名前で書き、OS で番号が違うもの(USR1 など)も名前で同じに使えます。どれも動作です。例は `examples/signal.suru`。
+1. **`「シグナル」 を 読み込む` receives and sends signals.** `lib/シグナル.suru` calls C's `sigprocmask`, `sigwait`, `sigpending`, `kill` and so on. Suru functions can't be passed to C, so instead of handlers, signals held back by **受付** ("accept") are received by waiting for them or checking for them. Signals are written by name without SIG, as in `「INT」` `「TERM」` `「HUP」` `「USR1」`, and those whose numbers differ by OS (such as USR1) can be used the same way by name. All of these are actions. See `examples/signal.suru`.
 
-| 書き方 | 結果(動作の結果) |
+| Syntax | Result (of the action) |
 |---|---|
-| `（「INT」 と 「TERM」） を シグナル内のシグナル受付する` | 届いても終わらないよう止めておく(`シグナル受付解除する` で戻す) |
-| `シグナル内のシグナル待機する` | 受付したシグナルが届くまで待ち、その名前(「TERM」) |
-| `シグナル内のシグナル確認する` | 届いて待っている受付したシグナルの名前のリスト(待たない。受け取ったものは消える) |
-| `「TERM」 を pid へ シグナル内のシグナル送信する`、`「USR1」 を シグナル内のシグナル発生する` | 別のプロセスへ送る(kill)、自分に送る(raise) |
-| `「HUP」 を シグナル内のシグナル無視する`、`「HUP」 を シグナル内のシグナル既定化する` | 届いても何もしない、元の動き(多くは終わる)に戻す |
-| `「TERM」 を シグナル内のシグナル番号取得する` | この OS での番号 |
+| `（「INT」 と 「TERM」） を シグナル内のシグナル受付する` | Holds them back so the program doesn't end when they arrive (`シグナル受付解除する` undoes it) |
+| `シグナル内のシグナル待機する` | Waits until an accepted signal arrives, and gives its name (「TERM」) |
+| `シグナル内のシグナル確認する` | The list of names of accepted signals that have arrived and are pending (doesn't wait; received ones are cleared) |
+| `「TERM」 を pid へ シグナル内のシグナル送信する`, `「USR1」 を シグナル内のシグナル発生する` | Send to another process (kill), send to itself (raise) |
+| `「HUP」 を シグナル内のシグナル無視する`, `「HUP」 を シグナル内のシグナル既定化する` | Do nothing when it arrives, restore the default behavior (usually exiting) |
+| `「TERM」 を シグナル内のシグナル番号取得する` | Its number on this OS |
 
-2. **表示は先に出す。** 待つ前と送る前に、それまでの表示を出しておきます(シグナルで終わっても表示が残ります)。コンパイルしたものはプログラムを別のスレッドで動かしているので、もとのスレッドではシグナルを受けないようにして、プロセスに送られたシグナルが受付どおりに扱われるようにしています。
+2. **Output is flushed first.** Output printed so far is flushed before waiting and before sending (so it survives even if a signal ends the program). Compiled programs run the program on a separate thread, so the original thread blocks signals, making signals sent to the process handled as accepted.
 
-### 文字列の大小と表
+### String ordering and tables
 
-1. **`<` `>` `<=` `>=` は文字列どうしにも使える。** 文字の番号(Unicode)の順、つまり辞書順で比べます(`「ab」 < 「abc」`、`「Z」 < 「a」`)。両側は同じ型でなければならず、数と文字列は比べられません。`a と b を 小さい方にする とは もし a < b ならば …` のような関数は数にも文字列にも使えます。
-2. **`「表」 を 読み込む` で表(連想配列)を使う。** 中身は `lib/表.suru` に する で書いた釣り合い木(AVL 木)で、変更しない値です。鍵は数か文字列です。
+1. **`<` `>` `<=` `>=` work between strings too.** They compare by character code (Unicode) order, that is, lexicographically (`「ab」 < 「abc」`, `「Z」 < 「a」`). Both sides must have the same type; numbers and strings can't be compared. A function like `a と b を 小さい方にする とは もし a < b ならば …` works for both numbers and strings.
+2. **`「表」 を 読み込む` gives tables (associative arrays).** It is a balanced tree (AVL tree) written in Suru in `lib/表.suru`, and tables are immutable values. Keys are numbers or strings.
 
-| 書き方 | 結果 |
+| Syntax | Result |
 |---|---|
-| `空表` | 何も入っていない表 |
-| `t を 鍵 から 値 へ 表内の登録する` | 鍵に値を入れた新しい表(同じ鍵は置きかえ。`…して` でつなげられます) |
-| `t から 鍵 を 既定 で 表内の既定取得する` | 鍵の値(なければ 既定) |
-| `t が 鍵 を 表内の鍵含有である` | 鍵が入っているか |
-| `t を 表内の件数にする`、`t を 表内の鍵一覧にする`、`t を 表内の値一覧にする` | 件数、鍵の小さい順の鍵 / 値のリスト |
-| `（鍵 と 値 の 対） のリスト を 表内の対表化する` | 表を作る(同じ鍵は後ろが優先) |
+| `空表` | An empty table |
+| `t を 鍵 から 値 へ 表内の登録する` | A new table with the value stored at the key (the same key is replaced; can be chained with `…して`) |
+| `t から 鍵 を 既定 で 表内の既定取得する` | The key's value (or 既定, the default, if absent) |
+| `t が 鍵 を 表内の鍵含有である` | Whether the key is present |
+| `t を 表内の件数にする`, `t を 表内の鍵一覧にする`, `t を 表内の値一覧にする` | The count, and the list of keys / values in ascending key order |
+| `（鍵 と 値 の 対） のリスト を 表内の対表化する` | Builds a table (for the same key, the later one wins) |
 
-### 動的リンク
+### Dynamic linking
 
-1. **`… とは 外部の（f）` で、引数 f の番地にある C の関数を呼ぶ。** 型の宣言は `外部の「…」` と同じで、f は `番地` にします。f は C には渡さず、ほかの引数を定義の順に渡します。番地が NULL なら実行時エラーです。値が動作なら、行ったときに呼びます。
+1. **`… とは 外部の（f）` calls the C function at the address in parameter f.** The type declaration is the same as for `外部の「…」`, with f as a `番地`. f is not passed to C; the other arguments are passed in definition order. A NULL address is a runtime error. If the value is an action, the call happens when it is carried out.
 
 ```
 小数 を 番地 で 番地余弦にする は 小数
 x を f で 番地余弦にする とは 外部の（f）
 ```
 
-2. **`「動的リンク」 を 読み込む` でライブラリを実行中に開く。** `lib/動的リンク.suru` は `dlopen`・`dlsym`・`dlclose` を呼びます。`「libm.so.6」 を 動的リンク内のライブラリ開封する`(`/` を含めば道)、`h から 「cos」 を 動的リンク内の記号取得する`(関数の番地)、`h を 動的リンク内のライブラリ閉鎖する`、`動的リンク内の自分取得する`(プログラム自身とリンク済みのライブラリ)。どれも動作で、失敗は dlerror の文を付けた実行時エラーです。例は `examples/dynlink.suru`。プラグインのように、プログラムを書いたときに決まっていないライブラリを使えます。
+2. **`「動的リンク」 を 読み込む` opens libraries at runtime.** `lib/動的リンク.suru` calls `dlopen`, `dlsym` and `dlclose`: `「libm.so.6」 を 動的リンク内のライブラリ開封する` (a path if it contains `/`), `h から 「cos」 を 動的リンク内の記号取得する` (the function's address), `h を 動的リンク内のライブラリ閉鎖する`, and `動的リンク内の自分取得する` (the program itself and the libraries already linked). All of these are actions, and failures are runtime errors with dlerror's message. See `examples/dynlink.suru`. Like plugins, this lets you use libraries not decided when the program was written.
 
-### fork とセマフォ
+### fork and semaphores
 
-1. **`プロセス内の分岐する` で fork する。** 子では 0、親では子のプロセス番号が結果です(先に表示を出しておくので、表示が2回出ることはありません)。`pid を プロセス内の子終了待機する` は子が終わるまで待って終了コード(waitpid)、`（「ls」 と 「-l」） を プロセス内の置換実行する` はこのプロセスを別のプログラムに置き換え(execvp。戻ってきたら失敗の実行時エラー)、`n を プロセス内の子終了する` は表示を出してからすぐ終わります(_exit。fork した子の終わりに使います)。例は `examples/fork.suru`。
+1. **`プロセス内の分岐する` forks.** The result is 0 in the child and the child's process number in the parent (output is flushed first, so nothing is printed twice). `pid を プロセス内の子終了待機する` waits until the child ends and gives its exit code (waitpid), `（「ls」 と 「-l」） を プロセス内の置換実行する` replaces this process with another program (execvp; returning is a runtime error), and `n を プロセス内の子終了する` flushes output and exits immediately (_exit; used at the end of a forked child). See `examples/fork.suru`.
 
-2. **`「セマフォ」 を 読み込む` でプロセスどうしの順番を決める。** `lib/セマフォ.suru` は System V のセマフォ(`semget`・`semop`)を呼びます(可変長引数の関数を避け、Linux と macOS で同じ値を使えるもの)。`「名前」 を 1 で セマフォ内のセマフォ作成する`(初期値。同じ名前があれば実行時エラー)、`「名前」 を セマフォ内のセマフォ接続する`、`s を セマフォ内のセマフォ待機する`(1 減らす。0 なら待つ)、`s を セマフォ内のセマフォ試行する`(待たずに減らせたら 真)、`s を セマフォ内のセマフォ解放する`(1 増やす)、`s を セマフォ内のセマフォ削除する`。初期値 1 ならロックになり、共有メモリを順番に書き換えられます。
+2. **`「セマフォ」 を 読み込む` orders processes.** `lib/セマフォ.suru` calls System V semaphores (`semget`, `semop`) (avoiding variadic functions, and using values that are the same on Linux and macOS): `「名前」 を 1 で セマフォ内のセマフォ作成する` (initial value; a runtime error if the name already exists), `「名前」 を セマフォ内のセマフォ接続する`, `s を セマフォ内のセマフォ待機する` (decrement by 1; waits at 0), `s を セマフォ内のセマフォ試行する` (真 if it could decrement without waiting), `s を セマフォ内のセマフォ解放する` (increment by 1) and `s を セマフォ内のセマフォ削除する`. With an initial value of 1 it works as a lock, so shared memory can be updated in turn.
 
-3. **ライブラリの補助の関数は非公開。** `lib/` の FFI のライブラリは、C の関数の宣言(`確保する` など)や補助の関数をファイルの最後で `… は 非公開とする` にしているので(「公開と非公開」)、複数のライブラリを「読み込んで 使う」にしても名前がぶつかりません(`tests/test_lib_together.py`)。
+3. **Libraries' helper functions are private.** The FFI libraries in `lib/` mark their C function declarations (`確保する` and so on) and helper functions with `… は 非公開とする` at the end of the file ("Public and private"), so names don't clash even when several libraries are loaded with 「読み込んで 使う」 (`tests/test_lib_together.py`).
 
-### 公開と非公開
+### Public and private
 
-1. **`確保する と 解放する は 非公開とする` で、読み込んだ側から見えなくする。** 一番外に書く文で、慣習としてファイルの最後にまとめます(句読点の書き方なら `確保すると解放するは非公開とする。`、丁寧語なら `非公開とします`)。非公開の名前はそのファイルの中ではふつうに使え、読み込んだ側からは `部品内の確保する` でも使えません。「読み込んで 使う」にしたファイルどうしでも、非公開の名前はぶつかりません。何も書かなければ全部公開です。
-2. **`… は 公開とする` があれば、書いた名前だけが公開。** ファイルに1つでも `二倍する と 円周率 は 公開とする` があると、そこに書いた名前だけが外から見え、残りは全部非公開になります(出す名前の一覧)。このファイルで定義していない名前、公開と非公開の両方に書いた名前はエラーです。型・形・性質はこれまでどおりどこからも見えます。
-3. **非公開の名前を使うと、動かす前に間違いになる。** 型の検査(インタプリタ・`suruc`・`kumu 作る`・`kumu 試験`)は、読み込んだファイルの非公開の名前を、呼ばれない関数の中で使っていても `「成功にする」は定義されていません(「標準」で非公開とされています)` にします。同じ名前を自分のファイルで定義すれば、そちらが使えます。ほかの分からない名前も、動かす前に間違いになります(「定義のない名前と動作のリスト」)。
+1. **`確保する と 解放する は 非公開とする` hides names from files that load this one.** It is an outermost sentence, by convention gathered at the end of the file (`確保すると解放するは非公開とする。` in the punctuation style, `非公開とします` politely). Private names can be used normally inside the file, and can't be used from a loading file even as `部品内の確保する`. Private names don't clash even between files loaded with 「読み込んで 使う」. Without any such sentence, everything is public.
+2. **With `… は 公開とする`, only the names written there are public.** If a file has even one `二倍する と 円周率 は 公開とする`, only the names written there are visible from outside and everything else is private (a list of exported names). Names not defined in the file, and names written as both public and private, are errors. Types, shapes and traits stay visible everywhere as before.
+3. **Using a private name is an error before running.** The type checker (interpreter, `suruc`, `kumu 作る`, `kumu 試験`) reports a loaded file's private name, even inside a function never called, as `「成功にする」は定義されていません(「標準」で非公開とされています)` ("「成功にする」 is not defined (it is private in 「標準」)"). Defining the same name in your own file makes yours usable. Other unknown names are also errors before running ("Undefined names and lists of actions").
 
-### JSON と数の書式
+### JSON and number formatting
 
-1. **`「JSON」 を 読み込んで 使う` で JSON を読み書きする。** `lib/JSON.suru` は する で書いたもので、名前はどれも JSON で始まります。値は選択肢のある型 `JSON` で、`JSON無`(null)、`真 の JSON真偽`、`1.5 の JSON数`、`「a」 の JSON文字列`、`xs の JSON配列`、`ps の JSON物`(オブジェクト。`「名前」 と v の JSON項目` のリストで、書いた順のまま)です。パターンマッチで取り出せます。
-2. **読む。** `s を JSON解析する` は `v の 成功` か `理由 の 失敗`(`（JSON と 文字列） の 成否`。「JSON を読めません(『]』をここには書けません)」など)です。`s を JSON読取する` は JSON を結果にする動作で、読めなければ実行時エラーになります(`試行する` で受け止められます)。`\uXXXX` とサロゲートペアも戻します。畳み込みで1字句ずつ進めるので、長い配列や文字列でも再帰は深くなりません。
-3. **書く・取り出す。** `v を JSON文字列にする` は1行の JSON、`v を JSON整形する` は空白2つで字下げした JSON です。`v から 「名前」 を JSON取得する` はオブジェクトの項目(なければ `JSON無`)、`v から n を JSON番目取得する` は配列の n 番目(1 から。なければ `JSON無`)です。例は `examples/json.suru`。
-4. **数の書式は 標準 に。** `1234567 を 桁区切りする` は「1,234,567」、`42 を 5 で 零詰する` は「00042」、`3.14159 を 2 で 小数書式にする` は「3.14」(四捨五入)、`s を 8 で 右詰する`・`左詰する` は空白で幅をそろえ、`「ab」 を 3 で 反復する` は「ababab」です。`「{}さん、{}歳」 を （「花子」 と 「12」） で 差込する` は「{}」に前から順に文字列を入れます。
+1. **`「JSON」 を 読み込んで 使う` reads and writes JSON.** `lib/JSON.suru` is written in Suru, and all its names start with JSON. Values have the type with alternatives `JSON`: `JSON無` (null), `真 の JSON真偽`, `1.5 の JSON数`, `「a」 の JSON文字列`, `xs の JSON配列`, and `ps の JSON物` (an object: a list of `「名前」 と v の JSON項目`, kept in written order). Pattern matching takes them apart.
+2. **Reading.** `s を JSON解析する` gives `v の 成功` or `理由 の 失敗` (a `（JSON と 文字列） の 成否`; for example 「JSON を読めません(『]』をここには書けません)」, "can't read the JSON (『]』 can't be written here)"). `s を JSON読取する` is an action whose result is the JSON, and a runtime error if it can't be read (catchable with `試行する`). `\uXXXX` and surrogate pairs are decoded too. It advances one token at a time with a fold, so long arrays and strings don't make recursion deep.
+3. **Writing and accessing.** `v を JSON文字列にする` gives one-line JSON, and `v を JSON整形する` JSON indented by two spaces. `v から 「名前」 を JSON取得する` gives an object's item (`JSON無` if absent), and `v から n を JSON番目取得する` the nth element of an array (from 1; `JSON無` if absent). See `examples/json.suru`.
+4. **Number formatting is in 標準.** `1234567 を 桁区切りする` gives 「1,234,567」, `42 を 5 で 零詰する` 「00042」, `3.14159 を 2 で 小数書式にする` 「3.14」 (rounded), `s を 8 で 右詰する` and `左詰する` pad with spaces to a width, and `「ab」 を 3 で 反復する` gives 「ababab」. `「{}さん、{}歳」 を （「花子」 と 「12」） で 差込する` puts strings into the 「{}」 in order from the front.
 
-### スレッド
+### Threads
 
-1. **`「スレッド」 を 読み込む` で動作を別のスレッドで行う。** `lib/スレッド.suru` の組み込みです。する の値は変更しないので、スレッドどうしで同じ値を持っても壊れません。
+1. **`「スレッド」 を 読み込む` carries out actions on separate threads.** These are built-ins of `lib/スレッド.suru`. Suru values are never modified, so threads holding the same value can't corrupt it.
 
-| 書き方 | 結果 |
+| Syntax | Result |
 |---|---|
-| `動作 を スレッド内の並行開始する` | 別のスレッドで動作を始め、待たずにスレッドを返す動作(型は `数 の スレッド` など) |
-| `t を スレッド内の合流する` | そのスレッドが終わるまで待ち、動作の結果を返す動作 |
-| `動作のリスト を スレッド内の並行実行する` | 全部を別々のスレッドで始めて全部待ち、結果のリストを返す動作 |
-| `xs を f で スレッド内の並列写像する` | `それぞれ` と同じ結果のリスト(純粋。要素を CPU の数に分けて計算する) |
-| `スレッド内のコア数取得する` | 使える CPU の数を返す動作 |
+| `動作 を スレッド内の並行開始する` | An action that starts the action on another thread and returns the thread without waiting (its type is `数 の スレッド` and so on) |
+| `t を スレッド内の合流する` | An action that waits until the thread ends and returns the action's result (join) |
+| `動作のリスト を スレッド内の並行実行する` | An action that starts each on its own thread, waits for all, and returns the list of results |
+| `xs を f で スレッド内の並列写像する` | The same list of results as `それぞれ` (pure; the elements are split across the CPUs) |
+| `スレッド内のコア数取得する` | An action returning the number of available CPUs |
 
 ```
 「スレッド」 を 読み込んで 使う
@@ -702,88 +712,88 @@ x を f で 番地余弦にする とは 外部の（f）
   t を 合流してから 表示する
 ```
 
-2. **スレッドの中のエラーは、そのスレッドだけを終える。** 文はその場で標準エラーに書きます。合流すると `並行開始した動作はエラーで終わりました` の実行時エラーになり、`試行する` で受けられます。`並列写像する` の中のエラーは、順に計算したときと同じエラーになります。
-3. **一番外の動作が終わったら、合流していないスレッドは待たずに終わる。** 最後まで動かしたいスレッドは合流します。
-4. **スレッドは本当に同時に動く。** 計算も CPU の数まで並列になります(「スレッドの並列実行」)。インタプリタは Python のスレッドで動き、`並列写像する` は順に計算します。
-5. **シグナルの受付と fork はスレッドを始める前に。** 新しいスレッドは、始めたスレッドのシグナルの受付を引き継ぎます。スレッドがあるときに `分岐する` すると、子には呼んだスレッドだけが残ります。
-6. **新しいスレッドのスタックは 256MB。** 仮想のメモリなので、使った分だけ実際に使います(深い再帰ができます)。
-7. **通路でスレッドどうし値を渡す。** 通路は `数 の 通路` のように中の値の型を持つ組で、中の値の型はそろえます。
+2. **An error inside a thread ends only that thread.** The message is written to standard error right away. Joining it gives the runtime error `並行開始した動作はエラーで終わりました` ("the started action ended with an error"), catchable with `試行する`. An error inside `並列写像する` is the same error as when computed in order.
+3. **When the outermost action ends, threads not joined end without being waited for.** Join threads you want to run to the end.
+4. **Threads really run at the same time.** Computation runs in parallel up to the number of CPUs ("Parallel execution of threads"). The interpreter runs on Python threads, and its `並列写像する` computes in order.
+5. **Accept signals and fork before starting threads.** A new thread inherits the signal acceptance of the thread that started it. Calling `分岐する` while threads exist leaves only the calling thread in the child.
+6. **New threads have a 256MB stack.** It is virtual memory, so only what is used is actually consumed (deep recursion works).
+7. **Threads pass values through channels (通路).** A channel is a record carrying the type of the values inside, like `数 の 通路`, and those values must have the same type.
 
-| 書き方 | 結果 |
+| Syntax | Result |
 |---|---|
-| `容量 で スレッド内の通路作成する` | 新しい通路を返す動作。容量 0 なら、受け取られるまで送る側が待つ |
-| `x を c へ スレッド内の通路送信する` | 送る(いっぱいなら空くまで待つ)。結果は x |
-| `c から スレッド内の通路受信する` | 受け取る(空なら届くまで待つ)。閉じていて空なら実行時エラー |
-| `c を スレッド内の通路閉鎖する` | もう送らないと知らせる。届いている値は受け取れ、閉じた通路に送ると実行時エラー |
-| `c を f で スレッド内の通路処理する` | 閉じるまで、届いた値ごとに動作 f を行う。結果は行った数 |
+| `容量 で スレッド内の通路作成する` | An action returning a new channel. With capacity 0, the sender waits until the value is received |
+| `x を c へ スレッド内の通路送信する` | Send (if full, waits until there is room). The result is x |
+| `c から スレッド内の通路受信する` | Receive (if empty, waits until something arrives). A runtime error if closed and empty |
+| `c を スレッド内の通路閉鎖する` | Announces nothing more will be sent. Values already there can be received; sending to a closed channel is a runtime error |
+| `c を f で スレッド内の通路処理する` | Carries out action f for each value that arrives, until closed. The result is how many were handled |
 
-8. **どのスレッドも進めなければエラー。** すべてのスレッドが通路や合流で待っていて、どれも先に進めないときは、ずっと止まったままにせず `すべてのスレッドが待っていて、先に進めません(通路や合流の待ち)` の実行時エラーにします。外部の関数や入力で待っているスレッドは、そのうち進むかもしれないので数えません。
-9. **名前は 通信 とぶつからないように。** `通信` の `送信する`・`受信する` と一緒に「読み込んで 使う」にできるよう、通路の関数は `通路…する` の名前です。通路の中身は種類を入れ替えられる作りで、プロセスの間のパイプも同じ関数で使えるようにする予定です。
-10. **ロックと枠は「持っている間だけ動作を行う」形。** 手放し忘れが起きないよう、取る・手放すを別々には書きません。中の動作がエラーで抜けても必ず手放します。
+8. **It is an error when no thread can make progress.** When every thread is waiting on a channel or join and none can move on, instead of hanging forever you get the runtime error `すべてのスレッドが待っていて、先に進めません(通路や合流の待ち)` ("all threads are waiting and can't proceed (waiting on channels or joins)"). Threads waiting in foreign functions or input are not counted, since they may move on eventually.
+9. **Names avoid clashing with 通信.** So they can be loaded with 「読み込んで 使う」 together with `通信`'s `送信する` and `受信する`, channel functions are named `通路…する`. The inside of a channel is built so its kind can be swapped, so that pipes between processes can use the same functions (planned).
+10. **Locks and slots take the form "carry out an action only while holding it".** So that nobody forgets to release, taking and releasing are not written separately. Even if the action inside exits with an error, it is always released.
 
-| 書き方 | 結果 |
+| Syntax | Result |
 |---|---|
-| `スレッド内のロック作成する` | 新しいロックを返す動作 |
-| `l で 動作 を スレッド内の排他実行する` | ロックを持って動作を行う(ほかのスレッドが持っていれば待つ)。同じスレッドなら重ねて持てる。結果は動作の結果 |
-| `n で スレッド内の枠作成する` | 同時に n 個まで使える枠(プロセスの中のセマフォ。プロセスの間は「セマフォ」) |
-| `w で 動作 を スレッド内の枠内実行する` | 枠を1つ使って動作を行う(空きがなければ待つ) |
+| `スレッド内のロック作成する` | An action returning a new lock |
+| `l で 動作 を スレッド内の排他実行する` | Carries out the action holding the lock (waits if another thread holds it). The same thread can hold it again (reentrant). The result is the action's result |
+| `n で スレッド内の枠作成する` | Slots usable by up to n at a time (a semaphore within the process; between processes use 「セマフォ」) |
+| `w で 動作 を スレッド内の枠内実行する` | Carries out the action using one slot (waits if none is free) |
 
-11. **箱はスレッドどうしで共有する、書き換えられる値。** `数 の 箱` のように中の値の型を持ちます。する の値は変わらないので、読むのにロックは要らず、`箱読取する` は待ちません。
+11. **Boxes are mutable values shared between threads.** They carry the type of the value inside, like `数 の 箱`. Suru values don't change, so reading needs no lock and `箱読取する` never waits.
 
-| 書き方 | 結果 |
+| Syntax | Result |
 |---|---|
-| `x で スレッド内の箱作成する` | 初めの値が x の新しい箱を返す動作 |
-| `b を スレッド内の箱読取する` | 今の値 |
-| `b を f で スレッド内の箱更新する` | 純粋な関数 f を今の値にかけて置きかえる(ほかのスレッドとぶつからない)。結果は新しい値 |
-| `x を b へ スレッド内の箱書込する` | x に置きかえる |
+| `x で スレッド内の箱作成する` | An action returning a new box with initial value x |
+| `b を スレッド内の箱読取する` | The current value |
+| `b を f で スレッド内の箱更新する` | Replaces the current value with the pure function f applied to it (without clashing with other threads). The result is the new value |
+| `x を b へ スレッド内の箱書込する` | Replaces it with x |
 
-12. **通路や箱に動作を入れると、取り出したときにその動作が行われます**(動作の結果が動作なら続けて行うため)。動作そのものを渡したいときは組で包みます。
-13. **HTTP のサーバーを接続ごとに並行に答えさせる。** [suru-lang/http](https://github.com/suru-lang/http) の `8080 を 案内すること で HTTP内の並行待受する`(動作を返す関数なら `HTTP内の動作並行待受する`)は、受け付けた接続を通路で 16 個のスレッドに渡し、それぞれが1件ずつ答えます(`HTTP内の同時接続数`)。1秒かかる要求や、つないだまま何も送らない相手がいても、ほかの要求を待たせません。バイナリで1件ずつ順に送ると 1 秒に約 1800 件、5000 件ごとに測った RSS は約 13MB で増えません。
+12. **Putting an action into a channel or box makes that action be carried out when it is taken out** (because an action whose result is an action is carried out in turn). To pass the action itself, wrap it in a record.
+13. **Making the HTTP server answer each connection in parallel.** `8080 を 案内すること で HTTP内の並行待受する` in [suru-lang/http](https://github.com/suru-lang/http) (`HTTP内の動作並行待受する` for functions returning actions) passes accepted connections through a channel to 16 threads, each answering one at a time (`HTTP内の同時接続数`). Requests that take a second, or clients that connect and send nothing, don't hold up other requests. Sending one request at a time in order to the binary handles about 1,800 per second, and the RSS measured every 5,000 requests stays at about 13MB without growing.
 
-### スレッドの並列実行
+### Parallel execution of threads
 
-1. **全体ロックをやめ、スレッドは CPU の数まで同時に する のコードを動かす。** 4 コアの機械で `並列写像する` にフィボナッチ数の計算(確保しない計算)を 8 個渡すと、順に計算するより約 3.9 倍速くなります(1.12 秒 → 0.28 秒)。たくさん確保する計算は約 2.5 倍です。測ると GC は全体の 5% ほどで、速くならない分の多くは、並列のときに新しいメモリを多く使う(ページを割り当てる時間とキャッシュの外れ)ためでした。
-2. **GC はすべてのスレッドを止めてから行う。** 確保の量が決まった量を超えたスレッドが止める合図を立て、ほかのスレッドが「安全点」(関数の入口と確保するところ)で止まるのを待ってから、すべてのスレッドのスタックとレジスタを調べます。外部の関数・入力・通信・通路の待ちの間のスレッドは止まっているものとして数えるので、待たずに GC できます。シグナルで止める方法は使いません。
-3. **関数の入口に安全点を置く。** コンパイラ(Python 版と Go 版で同じ)は、関数の入口で合図(`rt_gc_stop`)を読み、立っていれば `rt_safepoint` を呼ぶ IR を出します。確保しない再帰がずっと続いても GC を待たせません。ほかの関数を呼ばない関数(葉。`x を 加一する とは x + 1` のように、計算や確保だけをする関数)には置きません。再帰の輪には必ず ほかの関数を呼ぶ関数が入るので、そこで止まれます。スレッドを使わないプログラムでも、関数を呼ぶことが一番多い計算(フィボナッチ数の再帰)では約 15% 遅くなっていました(自分だけを呼ぶ再帰で間引くのは「速さの改善」)。
-4. **確保はスレッドごとのブロックから。** スレッドは大きさごとに自分だけのブロックを持ち、そこが尽きたときだけロックを取って共有のつながりから次のブロックをもらいます。終わったスレッドのブロックは共有に戻します。
-5. **`箱更新する` は比較交換で置きかえる。** 今の値に関数をかけて、その間にほかのスレッドが箱を変えていなければ置きかえ、変えていれば新しい値でやり直します。関数は純粋なので、何回かけても結果は同じです(関数が2回以上呼ばれることがあります)。`箱読取する`・`箱書込する` は待ちません。
-6. **通路・ロック・枠・合流の状態は1つのロックで守る。** 待つ間はそのロックを手放して眠り、状態が変わると起こされます。`表示する` は1行ずつまとめて書くので、ほかのスレッドの表示と1行の中で混ざりません。
-7. **ThreadSanitizer で確かめた。** runtime を `-fsanitize=thread` で作り、スレッドのテストのプログラムと、並行に答える HTTP サーバーを 8 本の接続から叩いて、競合の報告がないことを見ました(GC がほかのスレッドのスタックを読むところは、止まっている間だけなので対象から外しています)。
-8. **待っているスレッドは、先に進めるようになったものだけを起こす。** 通路・ロック・枠・合流の状態を変えたスレッドが、待っているスレッドの条件を調べて、進めるものだけを起こします。8 つのスレッドがほかの通路で待っているとき、容量 0 の通路の受け渡しは 1 件 約 83 µs から約 22 µs になりました。
+1. **The global lock is gone, and threads run Suru code at the same time up to the number of CPUs.** On a 4-core machine, giving `並列写像する` eight Fibonacci computations (which don't allocate) is about 3.9 times faster than computing in order (1.12 seconds → 0.28 seconds). Computations that allocate a lot are about 2.5 times faster. Measured, the GC is about 5% of the whole, and most of the missing speed-up came from using more fresh memory in parallel (time to allocate pages, and cache misses).
+2. **The GC runs after stopping every thread.** A thread whose allocation exceeds a set amount raises a stop flag and waits for the other threads to stop at a "safepoint" (function entries and allocation sites), then scans every thread's stack and registers. Threads waiting in foreign functions, input, networking or channels count as stopped, so the GC can run without waiting for them. Stopping with signals is not used.
+3. **Safepoints at function entries.** The compiler (the same in the Python and Go versions) emits IR that reads the flag (`rt_gc_stop`) at function entry and calls `rt_safepoint` if it is raised. Even endless recursion that never allocates doesn't hold up the GC. Functions that call no other functions (leaves: functions that only compute or allocate, like `x を 加一する とは x + 1`) don't get one. Every recursion cycle must include a function that calls other functions, so it can stop there. Even in programs without threads, the computation with the most calls (recursive Fibonacci) was about 15% slower (thinning it out for self-recursion is in "Speed improvements").
+4. **Allocation comes from per-thread blocks.** Each thread has blocks of its own for each size, and only when one runs out does it take the lock to get the next block from the shared chain. The blocks of finished threads go back to the shared pool.
+5. **`箱更新する` replaces with compare-and-swap.** It applies the function to the current value and replaces it if no other thread changed the box meanwhile; otherwise it retries with the new value. The function is pure, so the result is the same however many times it is applied (the function may be called more than once). `箱読取する` and `箱書込する` never wait.
+6. **The state of channels, locks, slots and joins is protected by one lock.** While waiting, a thread releases that lock and sleeps, and is woken when the state changes. `表示する` writes one line at a time as a unit, so output of different threads doesn't mix within a line.
+7. **Checked with ThreadSanitizer.** The runtime was built with `-fsanitize=thread`, and the thread test programs and the parallel HTTP server hit from 8 connections showed no race reports (the places where the GC reads other threads' stacks happen only while they are stopped, so they are excluded).
+8. **Only waiting threads that can now make progress are woken.** A thread that changes the state of a channel, lock, slot or join checks the conditions of waiting threads and wakes only those that can proceed. With eight threads waiting on other channels, a hand-off over a capacity-0 channel went from about 83 µs to about 22 µs each.
 
-### 速さの改善(比較の分岐・再帰の安全点・確保の塊・通路のスピン)
+### Speed improvements (comparison branches, safepoints in recursion, allocation chunks, channel spinning)
 
-1. **`もし` の条件が整数の比較なら、真偽の値を作らずに分岐する。** `もし n < 2 ならば …` は、両方が整数なら比べた結果でそのまま分岐し、整数でないときだけ今までどおり実行時ライブラリで比べます。`かつ`・`または`・`でない` と、場合分けの条件(`かつ` の後)も同じです。fib(35) を 8 回計算するバイナリは 約 1.0 秒から 約 0.46 秒になりました(#80)。
-2. **自分だけを呼ぶ再帰の関数は、64 回に1回だけ安全点を見る。** ほかの する の関数を呼ばず自分だけを呼ぶ関数(フィボナッチ数の再帰など)は、スレッドごとの数を減らして、0 になったときだけ GC の合図を見ます。GC を待たせるのは、確保しない呼び出しの 64 回分だけです。合図の読み方も1命令減らしました。fib の命令数は約 8% 減ります(#81)。
-3. **小さいオブジェクトのブロックは、2MB の塊を mmap で取って切り分ける。** ブロック(256KB)ごとに取るのをやめ、Linux では大きなページ(2MB)を使うよう頼みます(`MADV_HUGEPAGE`、THP が `madvise` か `always` のとき効きます)。mmap した領域は 0 なので、初めて使うオブジェクトは 0 で埋めません。8 個の仕事でそれぞれ 30 万個の文字列を作る `並列写像する` は 約 0.25 秒から 約 0.18 秒になりました(4 コア、#82)。
-4. **通路・ロック・枠・合流で待つときは、眠る前に少しだけ回って待つ。** 相手がすぐに来る受け渡しでは、眠って起こされる(スレッドの切り替え2回)より速いからです。回る時間は 1〜16 µs で、間に合えば長く、間に合わなければ短くします(pause 命令の長さは CPU で違うので、回数ではなく時間で区切ります)。回っている間も GC の合図を見て、立っていればすぐ眠ります。CPU が1つなら回りません。容量 0 の通路で 10 万件を渡すのは 約 2.7 秒から 約 0.3 秒になりました(#83)。
-5. **測るプログラムを `tests/bench` に足した。** `フィボナッチ.suru`・`並列の文字列.suru`・`通路の受け渡し.suru` です(`python3 tests/bench/run.py`)。
+1. **When the condition of `もし` is an integer comparison, it branches without building a boolean.** `もし n < 2 ならば …` branches directly on the comparison when both sides are integers, and only otherwise compares in the runtime library as before. The same goes for `かつ`, `または`, `でない` and case conditions (after `かつ`). A binary computing fib(35) eight times went from about 1.0 seconds to about 0.46 seconds (#80).
+2. **Functions that only call themselves look at the safepoint once every 64 calls.** A function that calls no other Suru function but itself (such as recursive Fibonacci) decrements a per-thread counter and looks at the GC flag only when it reaches 0. The GC is held up for at most 64 non-allocating calls. Reading the flag also takes one instruction less. fib's instruction count drops by about 8% (#81).
+3. **Blocks for small objects are cut from 2MB chunks taken with mmap.** Instead of mapping each block (256KB), on Linux it asks for huge pages (2MB) (`MADV_HUGEPAGE`, effective when THP is `madvise` or `always`). mmapped memory is zero, so objects used for the first time are not zero-filled. `並列写像する` with eight jobs each making 300,000 strings went from about 0.25 seconds to about 0.18 seconds (4 cores, #82).
+4. **When waiting on channels, locks, slots and joins, a thread spins briefly before sleeping.** For hand-offs where the other side arrives soon, this is faster than sleeping and being woken (two thread switches). The spin lasts 1 to 16 µs, longer when it pays off and shorter when it doesn't (the length of the pause instruction differs by CPU, so it is bounded by time, not count). While spinning it still checks the GC flag and sleeps at once if it is raised. With a single CPU it doesn't spin. Passing 100,000 values over a capacity-0 channel went from about 2.7 seconds to about 0.3 seconds (#83).
+5. **Benchmark programs were added in `tests/bench`.** `フィボナッチ.suru`, `並列の文字列.suru` and `通路の受け渡し.suru` (`python3 tests/bench/run.py`).
 
-### 値の直列化とセマフォ内実行する
+### Value serialization and セマフォ内実行する
 
-1. **`x を 標準内の直列化する` で値をバイト列にし、`b を 標準内の復元する` で戻す。** 数・小数・真偽・文字列・バイト列・リスト・組(入れ子も)を、共有メモリやパイプでほかのプロセスへ渡せる形にします。関数・動作・番地は渡せないので実行時エラーです。インタプリタとコンパイルしたプログラムで同じバイト列になります(先頭は `SURU` と版の 1、数は小さい順の 8 バイト、長さは 4 バイト、組は形とフィールドの名前つき)。
-2. **復元した値の型は書いて決める。** `復元する` の結果はどの型にもなれるので、`ps は 点 の リスト` のように宣言するか、型の決まった関数の中で使います。組は形の名前で戻し、このプログラムにその形がないとき・フィールドの名前や数が違うときは実行時エラーです(「形『点』のフィールドが違うので復元できません」)。違う型として読んでも、値を使ったところで実行時エラーになるだけで、壊れた値にはなりません。
-3. **`s で 動作 を セマフォ内のセマフォ内実行する` でロックの中だけで行う。** 待機してから動作を行い、終わったら解放します。動作がエラーになっても解放してから「セマフォ『名前』の中の動作はエラーで終わりました」の実行時エラーにします。待機と解放に SEM_UNDO を付けるので、中でプロセスが落ちたり終わったりしても OS がロックを戻します。`セマフォ待機する`・`セマフォ解放する` には付けません(解放だけするプロセスが終わると数が減ってしまうため)。
+1. **`x を 標準内の直列化する` turns a value into bytes, and `b を 標準内の復元する` turns it back.** Numbers, decimals, booleans, strings, byte sequences, lists and records (nested too) are put in a form that can be passed to other processes through shared memory or pipes. Functions, actions and addresses can't be passed, so they are runtime errors. The interpreter and compiled programs produce the same bytes (it starts with `SURU` and version 1; numbers are 8 bytes little-endian, lengths are 4 bytes, and records carry their shape and field names).
+2. **The type of a restored value is decided by writing it.** The result of `復元する` can be any type, so declare it, as in `ps は 点 の リスト`, or use it inside a function with a fixed type. Records are restored by shape name, and it is a runtime error if this program has no such shape or the field names or count differ (「形『点』のフィールドが違うので復元できません」, "can't restore because the fields of shape 『点』 differ"). Reading it as a different type only gives a runtime error where the value is used; it never produces a corrupted value.
+3. **`s で 動作 を セマフォ内のセマフォ内実行する` carries out an action only inside the lock.** It waits, carries out the action, and releases when done. Even if the action fails, it releases first and then raises the runtime error 「セマフォ『名前』の中の動作はエラーで終わりました」. Waiting and releasing use SEM_UNDO, so if the process crashes or exits inside, the OS restores the lock. `セマフォ待機する` and `セマフォ解放する` don't use it (otherwise the count would drop when a process that only releases exits).
 
 
-### 共有箱
+### Shared boxes
 
-1. **`「共有箱」 を 読み込む` で、プロセスどうしで1つの値を共有する。** `lib/共有箱.suru` は、値を直列化して共有メモリに置き、読み書きロックで守る箱です(「値の直列化とセマフォ内実行する」)。型は `点 の 共有箱` のように中身の型で書きます。`「/名前」 を 初期値 で 容量 に 共有箱内の共有箱作成する`(容量は直列化の上限のバイト数。同じ名前があれば作り直す)、`「/名前」 を 共有箱内の共有箱接続する`(中身の型は宣言で決める)、`b を 共有箱内の共有箱読取する`、`x を b へ 共有箱内の共有箱書込する`、`b を 関数 で 共有箱内の共有箱更新する`(読んで関数を通して書くまで、ほかに割り込まれない)、`b を 共有箱内の共有箱解除する`、`b を 共有箱内の共有箱削除する`。どれも動作です。
-2. **使う範囲を囲むなら `共有箱使用する`。** `「/名前」 を 初期値 で （b を 受け取って … を 返すこと） に 共有箱内の共有箱使用する` は、箱を作って動作を行い、終わったら(エラーでも)箱を消します。容量は初期値の直列化の4倍(少なくとも 4096 バイト)です。
-3. **読むのは同時に、書くのはひとりずつ。** 中の読み書きロックは System V のセマフォ2つ(書く人の印・読んでいる人の数)で、どれも SEM_UNDO つきなので、ロックの中でプロセスが落ちても OS が戻します。書く人が待っている間は新しく読む人を入れません。ロックの中の関数がエラーになったら、ロックを手放してから「共有箱『名前』を書く途中でエラーになりました」の実行時エラーにします。
-4. **書くときは使っていない側へ。** 中身の場所を2つ持ち、使っていない側に書いてから切り替えるので、書いている途中で落ちても前の中身が読めます。共有メモリの大きさは 128 + 容量 × 2 バイトです。
+1. **`「共有箱」 を 読み込む` shares one value between processes.** `lib/共有箱.suru` is a box that serializes the value into shared memory, protected by a reader-writer lock ("Value serialization and セマフォ内実行する"). Its type is written with the type of its contents, like `点 の 共有箱`. `「/名前」 を 初期値 で 容量 に 共有箱内の共有箱作成する` (capacity is the upper limit in bytes of the serialization; an existing one with the same name is recreated), `「/名前」 を 共有箱内の共有箱接続する` (the contents' type is decided by declaration), `b を 共有箱内の共有箱読取する`, `x を b へ 共有箱内の共有箱書込する`, `b を 関数 で 共有箱内の共有箱更新する` (nothing else can cut in between reading, applying the function and writing), `b を 共有箱内の共有箱解除する` and `b を 共有箱内の共有箱削除する`. All of these are actions.
+2. **To enclose the range of use, use `共有箱使用する`.** `「/名前」 を 初期値 で （b を 受け取って … を 返すこと） に 共有箱内の共有箱使用する` creates the box, carries out the action, and deletes the box when done (even on error). The capacity is four times the initial value's serialization (at least 4096 bytes).
+3. **Reads happen together, writes one at a time.** The reader-writer lock inside is two System V semaphores (a writer's mark and the number of readers), all with SEM_UNDO, so the OS restores them if a process crashes inside the lock. While a writer is waiting, new readers are not let in. If the function inside the lock fails, the lock is released first, then the runtime error 「共有箱『名前』を書く途中でエラーになりました」 is raised.
+4. **Writes go to the unused side.** There are two places for the contents; it writes to the unused one and then switches, so if the writer crashes midway, the previous contents can still be read. The shared memory size is 128 + capacity × 2 bytes.
 
-### 読み書きロック
+### Reader-writer locks
 
-1. **`「読書ロック」 を 読み込む` で、読む人は同時に、書く人はひとりだけにする。** `lib/読書ロック.suru` は、共有箱の外のもの(ファイル、バイト列の共有メモリ、C のメモリなど)をプロセスどうしで守るためのロックです(共有箱は中に同じロックを持っています)。`「/名前」 を 読書ロック内の読書ロック作成する`(同じ名前があれば作り直す)、`「/名前」 を 読書ロック内の読書ロック接続する`、`l で 動作 を 読書ロック内の読取実行する`(ほかの読む人と同時に。書く人がいれば待つ)、`l で 動作 を 読書ロック内の書込実行する`(ほかの人がいなくなるまで待つ)、`l を 読書ロック内の読書ロック解除する`、`l を 読書ロック内の読書ロック削除する`。どれも動作です。
-2. **ロックは動作を渡す形だけ。** 取ると手放すを別々には書けません。動作がエラーになったらロックを手放してから「読み書きロック『名前』で書く途中でエラーになりました」の実行時エラーにし、中でプロセスが落ちても SEM_UNDO で OS が戻します。書く人が待っている間は新しく読む人を入れません。
-3. **名前にひらがなを使わない。** ファイルの名前と関数の名前は漢字・カタカナで書くので、「読み書き」ではなく「読書」です。
+1. **`「読書ロック」 を 読み込む` lets readers share and gives writers sole access.** `lib/読書ロック.suru` is a lock for protecting things outside shared boxes (files, shared memory of byte sequences, C memory and so on) between processes (shared boxes hold the same lock inside). `「/名前」 を 読書ロック内の読書ロック作成する` (an existing one with the same name is recreated), `「/名前」 を 読書ロック内の読書ロック接続する`, `l で 動作 を 読書ロック内の読取実行する` (together with other readers; waits if there is a writer), `l で 動作 を 読書ロック内の書込実行する` (waits until everyone else is gone), `l を 読書ロック内の読書ロック解除する` and `l を 読書ロック内の読書ロック削除する`. All of these are actions.
+2. **Locks only take the form of passing an action.** Taking and releasing can't be written separately. If the action fails, the lock is released first and then the runtime error 「読み書きロック『名前』で書く途中でエラーになりました」 is raised, and if the process crashes inside, SEM_UNDO lets the OS restore it. While a writer is waiting, new readers are not let in.
+3. **No hiragana in the name.** File and function names are written in kanji and katakana, so it is 「読書」 rather than 「読み書き」.
 
-### パイプの通路と子実行する
+### Pipe channels and 子実行する
 
-1. **`スレッド内のプロセス間通路作成する` で、fork したプロセスどうしの通路を作る。** 中身はパイプで、スレッドの通路と同じ型(`点 の 通路`)・同じ `通路送信する`・`通路受信する`・`通路閉鎖する`・`通路処理する` で使えます。値は直列化して長さを前に付けて送ります(「値の直列化とセマフォ内実行する」)。fork する前に作ります。
-2. **1つのプロセスでは向きは1つ。** 初めて送ったプロセスは読む口を、初めて受け取ったプロセスは書く口を閉じます。送る側がみな `通路閉鎖する` するか終わると、受け取る側は閉じたと分かり(`通路処理する` が終わる)、受け取るプロセスがいなければ「受け取る相手がいないので、通路に送れません」の実行時エラーです。送ったプロセスで受け取ろうとするとエラーです。
-3. **`動作 を プロセス内の子実行する` で子のプロセスに動作を任せる。** fork して子で動作を行い、子はそのまま終わります(エラーなら文を書いて終了コード 1)。親では子のプロセス番号が結果なので、`子終了待機する` で待てます。
+1. **`スレッド内のプロセス間通路作成する` makes a channel between forked processes.** It is a pipe inside, with the same type as thread channels (`点 の 通路`) and the same `通路送信する`, `通路受信する`, `通路閉鎖する` and `通路処理する`. Values are serialized and sent with their length in front ("Value serialization and セマフォ内実行する"). Create it before forking.
+2. **One direction per process.** A process that sends first closes the read end, and a process that receives first closes the write end. When all senders have called `通路閉鎖する` or exited, the receiver sees the channel as closed (`通路処理する` ends), and with no receiving process, sending gives the runtime error 「受け取る相手がいないので、通路に送れません」 ("no one to receive, so can't send on the channel"). Trying to receive in a process that sent is an error.
+3. **`動作 を プロセス内の子実行する` hands an action to a child process.** It forks, carries out the action in the child, and the child then exits (on error, it writes the message and exits with code 1). In the parent, the result is the child's process number, so you can wait with `子終了待機する`.
 
 ```
 c とは プロセス間通路作成した 結果
@@ -792,12 +802,12 @@ pid とは （c を （p を 受け取って p の 横 を 表示する を 返�
 c を 通路閉鎖する
 ```
 
-### 名前つきの通路
+### Named channels
 
-1. **`スレッド内の名前つき通路作成する` と `名前つき通路接続する` で、関係ない(別々に起動した)プログラムどうしの通路を作る。** 中身は名前つきパイプ(FIFO)で、`「/tmp/仕事」 を 名前つき通路作成した 結果` のようにファイルの道を渡します。型・動詞はパイプの通路と同じで(「パイプの通路と子実行する」)、値は直列化して送るので、インタプリタとバイナリの間でも渡せます。
-2. **作成はなければ作り、あればそれを使う。接続はあるものだけ。** 道にふつうのファイルなどがあればエラーです。`名前つき通路削除する` で消します(作ったプログラムが消す)。
-3. **開くのは初めて送る・受け取るとき。** 相手が開くまで待ちます。1つのプロセスでの向きは1つ(初めの操作で決まる)です。送る側がみな閉じると受け取る側は閉じたと分かるので、送る人が何人もいるときは、受け取る側が開く前にみな開いている(待っている)ようにします。
-4. **送る人が何人いても、1つの値は混ざらない。** 送る間はファイルのロック(flock)を持つので、パイプに一度に入らない大きな値でも、ほかの人の値と交じりません。
+1. **`スレッド内の名前つき通路作成する` and `名前つき通路接続する` make channels between unrelated (separately started) programs.** Inside is a named pipe (FIFO); pass a file path, as in `「/tmp/仕事」 を 名前つき通路作成した 結果`. The type and verbs are the same as pipe channels ("Pipe channels and 子実行する"), and values are serialized when sent, so they can pass between the interpreter and binaries too.
+2. **Create makes it if absent and uses it if present. Connect works only on existing ones.** An ordinary file or the like at the path is an error. Delete it with `名前つき通路削除する` (the program that created it deletes it).
+3. **It is opened at the first send or receive.** It waits until the other side opens. Each process has one direction (decided by the first operation). When all senders close, the receiver sees it as closed, so with several senders, make sure they have all opened (are waiting) before the receiver opens.
+4. **However many senders there are, a single value never gets mixed.** A sender holds a file lock (flock) while sending, so even values too large for the pipe to take at once don't interleave with others'.
 
 ```
 c とは 「/tmp/仕事」 を 名前つき通路作成した 結果
@@ -805,30 +815,30 @@ c を （p を 受け取って p の 横 を 表示する を 返すこと） �
 「/tmp/仕事」 を 名前つき通路削除する
 ```
 
-### プロジェクト管理(kumu)
+### Project management (kumu)
 
-1. **プロジェクトの道具は `kumu`(組む)。** プロジェクトを組む、依存を組み合わせる、ビルドで組み立てる、の3つの役目から名付けました。`suru` とは別のコマンドで、Go で書いた1つの実行ファイル(`cmd/kumu/`)です。中で Go 版のコンパイラを使います。
-2. **命令は日本語で、英語の別名もある。** `新規`(new)・`初期化`(init)・`作る`(build)・`実行`(run)・`版`(version)・`助け`(help)。
-3. **設定は `組.suru` に する の定義で書く。** 書けるのは `名前`(必須)・`版`(既定は「0.1.0」)・`入口`(既定は「本体」)で、どれも `… とは 「…」` の文字列です。kumu は `組.suru` を実行せずに読むだけで、定義のほかの文、知らない項目、文字列でない値、2回書いた項目はエラーです(行を付けて知らせます)。句読点の書き方(`名前とは「挨拶」。`)でも書けます。`組.suru` は、今のフォルダから上へ探します。
-4. **作ったものは `出力/名前` に置く。** 入口のファイルのフォルダが読み込みの起点になるので、プロジェクトの中のファイルは今までどおり `「部品」 を 読み込む` で使えます。`新規` は `.gitignore` に `/出力/` を書きます。LLVM IR・最適化の強さ・実行時ライブラリ・kumu の版が前と同じなら clang を呼ばずに前のバイナリを使います(`出力/.名前.stamp` に覚えます)。
-5. **`実行` は作ったバイナリに引数と入出力をそのまま渡し、終了コードもそのまま返す。** `--` の後ろは全部プログラムへの引数です。kumu の知らせ(「…を組みました」)は標準エラーに出すので、プログラムの出力と混ざりません。
-6. **依存は `組.suru` の `依存` に「場所@版」で書く。** 1つなら `依存 とは 「github.com/someone/計算@1.2.0」`、いくつもなら `と` でつなぎます。場所は Git のリポジトリ(`github.com/…` は https で取り、`https://…`・`file://…` はそのまま)で、版は Git のタグ(`v1.2.0` か `1.2.0`)です。版の幅(「1.2 以上」など)は書けず、いつも1つの版を書きます。`.` か `/` で始まる場所は手元のフォルダ(版なし)で、プロジェクトの 組.suru でだけ使えます。`kumu 追加`・`更新`・`削除` は、この行を書きかえます。
-7. **依存は、そのライブラリの 組.suru の名前で読み込む。** ライブラリは自分の名前と同じファイル(`計算.suru`)を読み込まれるファイルにします。`「計算」 を 読み込む` でそのファイルを、`「計算/道具」` でライブラリの中の `道具.suru` を読み込みます(前置きは「ファイルの読み込み」と同じく、ファイルの名前の `計算内の`・`道具内の`)。依存の名前が標準のライブラリ(「標準」「通信」など)と同じか、2つの依存が同じ名前ならエラーです。
-8. **読み込むファイルを探す順は、自分のフォルダ → 依存 → 標準の lib。** インタプリタ(`suru`)・Go 版のコンパイラ(`suruc`)・言語サーバー(`suru-ls`)は、実行するファイルのフォルダから上へ 組.suru を探し、隣の `組.lock` に書いた依存を使います(kumu がなくても、取ってきてあれば動きます)。依存の中のファイルからも、プロジェクトの依存を読み込めます。`組.lock` にあってまだ取ってきていない依存を読み込むと「まだ取ってきてありません」のエラーです。
-9. **取ってきたものは `~/.kumu/依存/` に置く。** `場所@版` のフォルダに一度だけ取ってきて(`.git` は消します)、プロジェクトごとには写しません。置き場所は `KUMU_HOME` で変えられます。
-10. **同じライブラリを違う版で求められたら、一番新しい版を使う。** 依存の依存もたどって集め、同じ場所の版がいくつか出てきたら一番新しいものにします(Go の最小版選択と同じ考えで、いつも同じ結果になります)。版の比べ方は、点で区切った数を左から比べます。
-11. **`組.lock` に、使う依存の名前・場所・版・コミット・中身のハッシュを書く。** kumu が書くファイルで、リポジトリに入れておきます。次に集めたとき、同じ版のコミットか中身が `組.lock` と違えば(タグが動かされた、取ってきたものを書きかえた)エラーにします。依存がなくなれば `組.lock` を消します。集めるのに失敗したら、`追加` などで書きかえた 組.suru は元に戻します。
-12. **試験は `試験/` のファイルの「…試験する」。** `試験/` の下(下のフォルダも)の .suru のファイルの一番外の、名前が「試験する」で終わる引数のない定義が1つの試験です(名前にひらがなは使えないので「二倍を試験する」ではなく `二倍試験する`)。中身はふつう `手順` で、`「試験」 を 読み込んで 使う` の確認の関数を使います。ほかの定義(補助の関数など)は試験になりません。
-13. **確認の関数は「試験」ライブラリ。** `実際 を 期待 に 一致確認する`(等しくなければ「等しくありません: 期待は 4 / 実際は 5」)、`条件 を 確認する`(真でなければ「真ではありません」)、`理由 を 不合格にする`。どれも動作で、違えば理由を標準エラーに書いて終了コード 1 で終えます。中身は `lib/試験.suru` に する で書いてあり、kumu がなくても使えます。
-14. **試験は1つずつ別のプロセスで動かす。** kumu は試験のファイルごとに、そのファイルを読み込んで番号で試験を選ぶプログラムを `出力/試験/` に作り(`-O0` でコンパイル)、試験の数だけ動かします。終了コードが 0 なら合格で、確認が違っても、実行時エラーでも、そこで止まるのはその試験だけです。不合格の試験だけ、出したもの(標準出力と標準エラー)を字下げして見せます。最後に「合格 3・不合格 1」を出し、不合格があれば終了コード 1 です。読めない・型が合わない試験のファイルは、そのファイルを不合格にします。`kumu 試験 二倍` のように書くと、名前かファイルの道にその文字を含む試験だけを動かします。
-15. **プロジェクト自身も組.suru の名前で読み込める。** `「計算」 を 読み込む` は、自分のフォルダに `計算.suru` がなければ、組.suru の名前が「計算」のプロジェクトのフォルダの `計算.suru` を読みます(`「計算/道具」` なら `道具.suru`)。`試験/` のファイルからプロジェクトのファイルを、使う人と同じ書き方で読み込むためです。インタプリタ・Go 版のコンパイラ・言語サーバーで同じです。
-16. **`kumu 点検` はプロジェクトの全部のファイル。** 組.suru・`出力/`・`.` で始まるフォルダを除いた .suru のファイルを全部、`suru --点検` と同じ点検にかけます(点検は初めの1回だけバイナリにしてキャッシュに置きます。clang が要ります)。知らせがあれば終了コード 1 です。
-17. **`kumu 公開` はタグを付けるだけで、push はしない。** 版が数と点だけか、`名前.suru` があるか、依存に手元のフォルダがないか、組.suru がリポジトリの一番上にあるか、コミットしていない変更がないか、同じ版のタグがないか、試験が全部合格するかを確かめて、注釈つきのタグ `v版` を付けます。外に出すのは使う人が自分で `git push origin v版` します。最後に、使う人が書く `kumu 追加 場所@版` を出します(場所は `origin` の URL から作ります)。
-18. **VS Code からも kumu を使う。** コマンドパレットの「プロジェクトを実行する(kumu 実行)」「プロジェクトを組む」「プロジェクトを試験する」「プロジェクトを点検する」「依存を取ってくる」は、開いているファイルから上へ探した 組.suru のフォルダで kumu を動かします。`試験/` のファイルでは、「…試験する とは」の行の上に「▷ 試験する」が出て、その試験だけを動かせます(`kumu 試験 名前`)。kumu の場所は設定 `suru.kumu`(空なら PATH と `~/go/bin`)。
+1. **The project tool is `kumu` (組む).** Named after its three roles: assembling (組む) projects, combining (組み合わせる) dependencies, and putting things together (組み立てる) in builds. It is a separate command from `suru`, a single executable written in Go (`cmd/kumu/`), and uses the Go compiler inside.
+2. **Commands are in Japanese, with English aliases.** `新規` (new), `初期化` (init), `作る` (build), `実行` (run), `版` (version), `助け` (help).
+3. **Settings are written in `組.suru` as Suru definitions.** You can write `名前` (required), `版` (default 「0.1.0」) and `入口` (default 「本体」), all as strings `… とは 「…」`. kumu only reads `組.suru` without running it; sentences other than definitions, unknown items, non-string values and items written twice are errors (reported with the line). The punctuation style (`名前とは「挨拶」。`) works too. `組.suru` is searched for from the current folder upward.
+4. **Build output goes in `出力/名前`.** The entry file's folder is the starting point for loading, so files inside the project are used with `「部品」 を 読み込む` as before. `新規` writes `/出力/` into `.gitignore`. If the LLVM IR, optimization level, runtime library and kumu version are the same as before, the previous binary is reused without calling clang (recorded in `出力/.名前.stamp`).
+5. **`実行` passes arguments and I/O straight to the built binary and returns its exit code as is.** Everything after `--` is arguments to the program. kumu's messages (「…を組みました」, "built …") go to standard error, so they don't mix with the program's output.
+6. **Dependencies are written in `依存` in `組.suru` as 「LOCATION@VERSION」.** One is `依存 とは 「github.com/someone/計算@1.2.0」`; several are joined with `と`. The location is a Git repository (`github.com/…` is fetched over https; `https://…` and `file://…` are used as is), and the version is a Git tag (`v1.2.0` or `1.2.0`). Version ranges (such as "1.2 or later") can't be written; you always write one version. A location starting with `.` or `/` is a local folder (no version), usable only in the project's 組.suru. `kumu 追加`, `更新` and `削除` rewrite this line.
+7. **Dependencies are loaded by the name in their 組.suru.** A library makes the file with its own name (`計算.suru`) the file to be loaded. `「計算」 を 読み込む` loads that file, and `「計算/道具」` loads `道具.suru` inside the library (the prefix is the file name, `計算内の` or `道具内の`, as in "Loading files"). It is an error if a dependency's name equals a standard library's (「標準」, 「通信」 and so on) or if two dependencies have the same name.
+8. **Files to load are searched in the order: own folder → dependencies → standard lib.** The interpreter (`suru`), the Go compiler (`suruc`) and the language server (`suru-ls`) search upward from the folder of the file being run for 組.suru and use the dependencies written in the `組.lock` next to it (they work without kumu as long as the dependencies have been fetched). Files inside dependencies can load the project's dependencies too. Loading a dependency listed in `組.lock` but not yet fetched gives the error 「まだ取ってきてありません」 ("not fetched yet").
+9. **Fetched dependencies are kept in `~/.kumu/依存/`.** Each is fetched once into a folder `LOCATION@VERSION` (`.git` is removed) and not copied per project. `KUMU_HOME` changes the location.
+10. **When the same library is required at different versions, the newest is used.** Dependencies of dependencies are followed and collected, and when several versions of the same location appear, the newest wins (the same idea as Go's minimal version selection, so the result is always the same). Versions are compared by the dot-separated numbers from the left.
+11. **`組.lock` records the name, location, version, commit and content hash of each dependency used.** kumu writes this file; keep it in the repository. On the next collection, if the commit or contents for the same version differ from `組.lock` (a tag was moved, a fetched copy was edited), it is an error. When there are no dependencies left, `組.lock` is deleted. If collecting fails, a 組.suru rewritten by `追加` and the like is restored.
+12. **Tests are 「…試験する」 in files in `試験/`.** Each outermost, argument-less definition whose name ends in 「試験する」 in .suru files under `試験/` (subfolders included) is one test (names can't contain hiragana, so it is `二倍試験する`, not 「二倍を試験する」). The body is usually a `手順`, using the assertion functions of `「試験」 を 読み込んで 使う`. Other definitions (helper functions and so on) are not tests.
+13. **The assertion functions are the 「試験」 library.** `実際 を 期待 に 一致確認する` (if not equal: 「等しくありません: 期待は 4 / 実際は 5」, "not equal: expected 4 / actual 5"), `条件 を 確認する` (if not true: 「真ではありません」), and `理由 を 不合格にする` (fail). All are actions; on failure they write the reason to standard error and exit with code 1. They are written in Suru in `lib/試験.suru` and work without kumu.
+14. **Each test runs in its own process.** For each test file, kumu builds a program in `出力/試験/` that loads the file and picks a test by number (compiled with `-O0`), and runs it once per test. Exit code 0 means pass; whether an assertion fails or a runtime error occurs, only that test stops. Only failing tests show their output (standard output and standard error), indented. At the end it prints 「合格 3・不合格 1」 ("3 passed, 1 failed"), and exits with code 1 if anything failed. A test file that can't be read or doesn't type-check counts as that file failing. `kumu 試験 二倍` runs only the tests whose name or file path contains that text.
+15. **A project can load itself by the name in 組.suru.** If there is no `計算.suru` in your own folder, `「計算」 を 読み込む` reads `計算.suru` in the folder of the project whose 組.suru name is 「計算」 (`「計算/道具」` reads `道具.suru`). This lets files in `試験/` load the project's files the same way users do. The interpreter, the Go compiler and the language server behave the same.
+16. **`kumu 点検` covers every file in the project.** It runs the same lint as `suru --点検` on every .suru file except 組.suru, `出力/` and folders starting with `.` (the linter is built into a binary only the first time and cached; clang is required). It exits with code 1 if there are reports.
+17. **`kumu 公開` only tags; it doesn't push.** It checks that the version is only digits and dots, that `名前.suru` exists, that no dependency is a local folder, that 組.suru is at the top of the repository, that there are no uncommitted changes, that no tag for the same version exists, and that all tests pass, then puts the annotated tag `v版`. Publishing it is up to you: `git push origin v版`. At the end it prints the `kumu 追加 LOCATION@VERSION` that users will write (the location is made from the URL of `origin`).
+18. **kumu can be used from VS Code too.** The command palette's 「プロジェクトを実行する(kumu 実行)」, 「プロジェクトを組む」, 「プロジェクトを試験する」, 「プロジェクトを点検する」 and 「依存を取ってくる」 (run, build, test, lint the project, fetch dependencies) run kumu in the folder of the 組.suru found searching upward from the open file. In files in `試験/`, 「▷ 試験する」 appears above each 「…試験する とは」 line to run just that test (`kumu 試験 名前`). kumu's location is the setting `suru.kumu` (if empty, PATH and `~/go/bin`).
 
-### 外部依存(システムの C のライブラリ)
+### External dependencies (system C libraries)
 
-1. **C のライブラリを包むライブラリは、組.suru に `外部依存` を書く。** `外部依存 とは 「libpcre2-8」` のように pkg-config の名前で書き、いくつもなら `と` でつなぎます。`「libpcre2-8@10.30」` は「10.30 以上」です(依存の `@` と違い、版の下限です)。リンクする名前は今までどおり `外部の「pcre2-8」 を 読み込む` で書きます。
+1. **A library wrapping a C library writes `外部依存` in 組.suru.** Write pkg-config names, as in `外部依存 とは 「libpcre2-8」`, joining several with `と`. `「libpcre2-8@10.30」` means "10.30 or later" (unlike the `@` of dependencies, this is a lower bound). The name to link is written as before with `外部の「pcre2-8」 を 読み込む`.
 
 ```
 名前 とは 「正規表現」
@@ -837,48 +847,48 @@ c を （p を 受け取って p の 横 を 表示する を 返すこと） �
 導入案内 とは 「macOS: brew install pcre2」 と 「Debian・Ubuntu: sudo apt install libpcre2-dev」
 ```
 
-2. **kumu は作る前に外部依存を確かめる。** `作る`・`実行`・`試験`・`取得`・`追加`・`更新`・`削除` で、プロジェクトと全部の依存の外部依存を `pkg-config --exists`(版があれば `--atleast-version`)で確かめます。足りなければ「システムのライブラリが足りません」のエラーで、どれが足りないか、どの依存が使うのか、その依存の `導入案内` を出して止めます。`追加` で足した依存は、外部依存が足りなくても 組.suru に残します(入れてから `kumu 作る` でやり直せます)。
-3. **pkg-config が無ければ確かめない。** 「pkg-config が無いので、…確かめずに進みます」と知らせて進み、足りなければリンクのところでエラーになります。pkg-config の命令は `PKG_CONFIG` で変えられます。
-4. **外部の関数の短い名前は、pkg-config のフォルダからも探す。** `外部の「pcre2-8」` は、OS の普通の探し方で見つからなければ、pkg-config の `libpcre2-8` か `pcre2-8` の `libdir` から探します。Homebrew の `/opt/homebrew/lib` のように、リンカーや dlopen が普通は探さないフォルダにあるライブラリのためです。インタプリタ(ctypes)はそのファイルを開き、コンパイラ(Python 版・Go 版)は `-L` と `-Wl,-rpath` を付けます(`/usr/lib` などの普通のフォルダなら付けません)。kumu の外でも同じです。
-5. **PCRE2 の正規表現は [suru-lang/regex](https://github.com/suru-lang/regex)。** C のライブラリを包む、標準の外のライブラリの例です。`kumu 追加 github.com/suru-lang/regex` で足し、`「正規表現」 を 読み込んで 使う` で `正規検索する`・`正規全検索する`・`正規置換する`・`正規分割する` などを使います(使い方はそのリポジトリの README)。使うプロジェクトの例は `examples/正規表現/`(`kumu 実行`)。
+2. **kumu checks external dependencies before building.** In `作る`, `実行`, `試験`, `取得`, `追加`, `更新` and `削除`, it checks the external dependencies of the project and all its dependencies with `pkg-config --exists` (`--atleast-version` when a version is given). If any are missing, it stops with the error 「システムのライブラリが足りません」 ("system libraries are missing"), showing which are missing, which dependency uses them, and that dependency's `導入案内` (installation hints). A dependency added with `追加` stays in 組.suru even if its external dependencies are missing (install them and retry with `kumu 作る`).
+3. **Without pkg-config, nothing is checked.** It says 「pkg-config が無いので、…確かめずに進みます」 ("pkg-config not found, so … proceeding without checking") and goes on; anything missing fails at link time. `PKG_CONFIG` changes the pkg-config command.
+4. **Short names of foreign libraries are also looked up in pkg-config's folders.** If `外部の「pcre2-8」` isn't found the usual OS way, it is looked up in the `libdir` of pkg-config's `libpcre2-8` or `pcre2-8`. This is for libraries in folders that the linker and dlopen don't usually search, like Homebrew's `/opt/homebrew/lib`. The interpreter (ctypes) opens that file, and the compilers (Python and Go) add `-L` and `-Wl,-rpath` (not for ordinary folders like `/usr/lib`). The same holds outside kumu.
+5. **PCRE2 regular expressions are in [suru-lang/regex](https://github.com/suru-lang/regex).** An example of a non-standard library wrapping a C library. Add it with `kumu 追加 github.com/suru-lang/regex`, and use `正規検索する`, `正規全検索する`, `正規置換する`, `正規分割する` and others via `「正規表現」 を 読み込んで 使う` (see that repository's README for usage). An example project using it is `examples/正規表現/` (`kumu 実行`).
 
-### 外部の関数の引数の並び
+### Argument lists for foreign functions
 
-1. **`外部の「名前」（a と 0 と b）` で、C に渡す引数を並べて書く。** 助詞は6つなので、定義の引数は6つまでですが、C の関数には括弧の中に書いた順に、いくつでも渡せます。括弧の中には定義の引数の名前か整数を `と` でつなぎ、整数は `int64_t` として渡します(使わない文脈の番地の NULL は `0`、`PCRE2_ZERO_TERMINATED` のような `(size_t)-1` は `-1`)。定義の引数は全部、少なくとも1回は書きます。インタプリタ・Python 版と Go 版のコンパイラで同じです。
+1. **`外部の「NAME」（a と 0 と b）` lists the arguments passed to C.** There are six particles, so a definition has at most six parameters, but the C function receives any number, in the order written inside the parentheses. Inside them, join the definition's parameter names or integers with `と`; integers are passed as `int64_t` (`0` for a NULL address of an unused context, `-1` for `(size_t)-1` such as `PCRE2_ZERO_TERMINATED`). Every parameter of the definition must be written at least once. The interpreter and both the Python and Go compilers behave the same.
 
 ```
 番地 を 番地 で 数 に 数 から 整数 へ 番地 より 照合呼出する は 整数 の 動作
 符号 を 対象 で 長さ に 開始 から 選択 へ 一致 より 照合呼出する とは 外部の「pcre2_match_8」（符号 と 対象 と 長さ と 開始 と 選択 と 一致 と 0）
 ```
 
-### リリースと配布の方法
+### Releases and distribution
 
-1. **4つの方法で配る。** PyPI(`suru-lang`)、GitHub Releases(OS ごとの `suruc`・`suru-ls`・`kumu`)、Homebrew の tap(`suru-lang/homebrew-suru`)、VS Code Marketplace(拡張)です。どれも GitHub Actions がタグから作って公開します。手順と、初めに用意するもの(PyPI の Trusted Publishing、Marketplace の publisher の Trusted Publishing など)は [docs/リリース.md](docs/リリース.md) にあります。
+1. **Distributed four ways.** PyPI (`suru-lang`), GitHub Releases (`suruc`, `suru-ls` and `kumu` per OS), a Homebrew tap (`suru-lang/homebrew-suru`) and the VS Code Marketplace (the extension). In each case GitHub Actions builds and publishes from a tag. The steps, and what to prepare first (PyPI Trusted Publishing, Trusted Publishing for the Marketplace publisher and so on), are in [docs/リリース.md](docs/リリース.md) (in Japanese).
 
-2. **PyPI の名前は `suru-lang`。** `suru` はほかの人が使っていたので、パッケージの名前だけを変えました。入るコマンドとモジュールの名前は `suru` のままです。
+2. **The PyPI name is `suru-lang`.** `suru` was taken by someone else, so only the package name differs. The installed command and module are still named `suru`.
 
-3. **タグは2種類。** `v0.1.0` の形のタグで本体(PyPI・GitHub Releases・Homebrew)を、`vscode-v0.4.0` の形のタグで VS Code 拡張を出します。拡張の版は本体と別に上げます。タグと `suru.py`・Go 版(`cmd/suruc`・`cmd/suru-ls`・`cmd/kumu`)の版が違えば、`packaging/check_version.py` が止めます。Go 版のバイナリの版は、ビルドのときに `-X main.version=…` でタグの版にします。
+3. **Two kinds of tags.** Tags like `v0.1.0` release the main package (PyPI, GitHub Releases, Homebrew), and tags like `vscode-v0.4.0` release the VS Code extension. The extension's version is raised separately from the main one. If the tag doesn't match the version in `suru.py` and the Go programs (`cmd/suruc`, `cmd/suru-ls`, `cmd/kumu`), `packaging/check_version.py` stops the release. The version of the Go binaries is set to the tag's at build time with `-X main.version=…`.
 
-4. **Windows 用は言語サーバーだけ。** 実行時ライブラリ(`runtime/suru_rt.c`)が POSIX(pthread・ソケット・シグナルなど)を使うので、Windows では `suruc` で作ったプログラムが動きません。Windows には VS Code 拡張のための `suru-ls` だけを配ります。
+4. **Only the language server is built for Windows.** The runtime library (`runtime/suru_rt.c`) uses POSIX (pthreads, sockets, signals and so on), so programs built with `suruc` don't run on Windows. For Windows only `suru-ls`, for the VS Code extension, is distributed.
 
-5. **Homebrew はソースからビルドする。** formula(`packaging/homebrew/make_formula.py` が作る)は、タグのソースから Go で `suruc`・`suru-ls`・`kumu` を作り、Python 版の `suru` を libexec に置いてラッパーで動かします。clang は入れず、caveats で案内します(macOS では Xcode のコマンドラインツールに入っているので)。
+5. **Homebrew builds from source.** The formula (made by `packaging/homebrew/make_formula.py`) builds `suruc`, `suru-ls` and `kumu` with Go from the tag's source, and puts the Python `suru` in libexec, run through a wrapper. It doesn't install clang; the caveats explain it (on macOS it comes with the Xcode command line tools).
 
-6. **持ち主の名前に頼らない。** ワークフローは tap やリリースの案内に使う持ち主の名前を GitHub から受け取ります。organization などに移したときは、`packaging/move_owner.py` が URL・Go のモジュールの道・tap・publisher をまとめて書きかえます(手順は [docs/リリース.md](docs/リリース.md) の「organization などに移すとき」)。
+6. **Nothing depends on the owner's name.** The workflows get the owner name used for the tap and release notes from GitHub. When moving to an organization or the like, `packaging/move_owner.py` rewrites the URLs, Go module paths, tap and publisher together (the steps are in 「organization などに移すとき」 in [docs/リリース.md](docs/リリース.md)).
 
-### 対話モード
+### Interactive mode
 
-1. **引数なしの `suru` で始める。** 入力ごとに型を調べてから実行し、`3 を 二乗する` → `9 は 数` のように値と型を「値 は 型」で並べます。型の間違いがあれば実行しません。`suru --検査なし` は型を調べずに実行し、値だけを表示します。定義を入力すると、その型を `数 を 二乗する は 数` のように型の宣言の形で表示します。
-2. **入力のまとまり。** 1行で1つの入力です。行の最後の言葉が `とは` `が` `ならば` `そうでなければ` なら、字下げした続きの行があるとみなし、空行で確定します。`と` `ただし` `それから` `かつ` `または` で終われば次の行に続きます。括弧が閉じていなければ閉じるまで、句読点の書き方の行は「。」で終わるまで読みます。
-3. **前の入力の定義・型・読み込みは続けて使える。** 型の検査も、前の入力の定義を含めて行います。同じ名前を定義し直すと、前の定義と置き換わります(ファイルの中のように場合ごとの定義にはなりません)。型の間違いがあった入力の定義は残りません。型と形は定義し直せません。
-4. **コマンドは「:」で始める。** `:助け`(使い方)、`:型 式`(実行せずに型だけ)、`:読む ファイル`(ファイルの定義を読む。`.suru` は省ける。中の読み込みはそのファイルのフォルダから探す)、`:一覧`(この対話で定義した名前と型)、`:終わる`(Ctrl-D でも終わる)。日本語入力のままでも打てるよう、全角の「：」と全角スペースも使えます。英語の別名(`:help` `:type` `:load` `:names` `:quit`)もあります。`suru --対話 ファイル …` は、ファイルを読んでから始めます。
-5. **行の編集・履歴・補完。** Python に readline があれば(macOS・Linux)、矢印キーでの編集、前の入力の呼び出し、Tab での名前の補完(組み込み・定義した名前・コマンド)ができます。履歴は `~/.local/state/suru/history`(`XDG_STATE_HOME` か `SURU_HISTORY` で変えられる)に残します。Ctrl-C は入力の途中なら取り消し、実行中なら中断します。
-6. **インタプリタだけ。** コンパイラ(Python 版・Go 版)には対話モードはありません。
+1. **Start it with `suru` and no arguments.** Each input is type-checked and then run, and the value and type are shown side by side as "VALUE は TYPE", as in `3 を 二乗する` → `9 は 数`. If there is a type error, it doesn't run. `suru --検査なし` runs without checking types and shows only the value. When you enter a definition, its type is shown in the form of a type declaration, like `数 を 二乗する は 数`.
+2. **What counts as one input.** One line is one input. If a line's last word is `とは`, `が`, `ならば` or `そうでなければ`, indented continuation lines are expected, and a blank line completes it. A line ending in `と`, `ただし`, `それから`, `かつ` or `または` continues on the next line. With unclosed parentheses it reads until they close, and punctuation-style lines are read until they end with 「。」.
+3. **Definitions, types and loads from earlier inputs stay available.** Type checking includes the definitions from earlier inputs. Redefining a name replaces the earlier definition (it doesn't become a case-by-case definition as it would in a file). Definitions from an input with a type error are not kept. Types and shapes can't be redefined.
+4. **Commands start with 「:」.** `:助け` (usage), `:型 EXPR` (only the type, without running), `:読む FILE` (load a file's definitions; `.suru` can be left out; loads inside are searched from that file's folder), `:一覧` (names and types defined in this session), and `:終わる` (Ctrl-D also exits). The full-width 「：」 and full-width spaces work too, so you can type them with Japanese input on. There are English aliases (`:help` `:type` `:load` `:names` `:quit`). `suru --対話 FILE …` loads the files before starting.
+5. **Line editing, history and completion.** If Python has readline (macOS, Linux), you get arrow-key editing, recall of earlier inputs, and Tab completion of names (built-ins, defined names, commands). History is kept in `~/.local/state/suru/history` (changeable with `XDG_STATE_HOME` or `SURU_HISTORY`). Ctrl-C cancels the input in progress, or interrupts a running evaluation.
+6. **Interpreter only.** The compilers (Python and Go) have no interactive mode.
 
-### 固定の形と固定領域
+### Fixed layouts and fixed regions
 
-1. **`x を 見本 で 標準内の固定直列化する` で、組を C の構造体と同じ並びのバイト列にする。** 形は見本の組で決め、フィールドは数と真偽だけ(入れ子の組は平らに並べる)。どれも 8 バイトで、見本のフィールドが整数なら int64_t、小数なら double、真偽なら int64_t の 0 か 1 です(リトルエンディアン)。`b を 見本 で 固定復元する` で戻し、結果の型は見本と同じです。見本と形が違う値や、整数のフィールドへの小数はエラーです。整数を小数のフィールドに入れるのはかまいません。
-2. **`lib/固定領域.suru` で、固定の形の値を共有メモリに置く。** `名前 を 見本 で 固定領域作成する`(なければ作り、中身を見本にする)・`固定領域接続する`・`固定領域読取する`・`固定領域書込する`・`固定領域解除する`・`固定領域削除する`。直列化しないので、同じ並びの構造体を使う C のプログラムとも読み書きできます。
-3. **ロックと印はない。** 共有箱(「共有箱」)と違い、C と同じ並びにするため頭に何も入れません。同時に書く人がいるときは `セマフォ内実行する` などで守ります。
+1. **`x を 見本 で 標準内の固定直列化する` turns a record into bytes laid out like a C struct.** The layout is decided by the sample (見本) record, and fields may only be numbers and booleans (nested records are flattened). Each is 8 bytes: int64_t if the sample's field is an integer, double if it is a decimal, and int64_t 0 or 1 for a boolean (little-endian). `b を 見本 で 固定復元する` turns it back, and the result has the same type as the sample. A value whose layout differs from the sample, or a decimal for an integer field, is an error. Putting an integer into a decimal field is fine.
+2. **`lib/固定領域.suru` places fixed-layout values in shared memory.** `名前 を 見本 で 固定領域作成する` (creates it if absent, with the sample as its contents), `固定領域接続する`, `固定領域読取する`, `固定領域書込する`, `固定領域解除する` and `固定領域削除する`. There is no serialization, so C programs using a struct with the same layout can read and write it too.
+3. **No lock and no header.** Unlike shared boxes ("Shared boxes"), nothing is put at the start, to keep the same layout as C. When several writers exist, protect it with `セマフォ内実行する` or the like.
 
 ```
 点 とは 横 と 縦 の 組
@@ -886,26 +896,26 @@ r とは 「/suru-例」 を （0 と 0.0 の 点） で 固定領域作成し�
 （7 と 2.5 の 点） を r へ 固定領域書込する
 ```
 
-### 負の数の番地
+### Negative addresses
 
-1. **`-1 を 番地にする` は2の補数の番地。** C の `(void *)-1` のような印(SQLite の `SQLITE_TRANSIENT`、`mmap` の `MAP_FAILED` など)を作れるよう、負の整数も番地にできます。`番地数値にする` は、インタプリタでもコンパイルしたものでも符号つきの数(`-1`)を結果にします。整数でない数はエラーです。
-2. **SQLite は標準の外のライブラリ。** SQLite のデータベースを使うライブラリ「SQLite」は [suru-lang/sqlite](https://github.com/suru-lang/sqlite) にあり、`kumu 追加 github.com/suru-lang/sqlite` で使います(libsqlite3 は 組.suru の外部依存)。
+1. **`-1 を 番地にする` is a two's-complement address.** Negative integers can become addresses too, so that markers like C's `(void *)-1` (SQLite's `SQLITE_TRANSIENT`, `mmap`'s `MAP_FAILED` and so on) can be made. `番地数値にする` gives a signed number (`-1`) in both the interpreter and compiled programs. Non-integer numbers are errors.
+2. **SQLite is a non-standard library.** The library 「SQLite」 for SQLite databases is in [suru-lang/sqlite](https://github.com/suru-lang/sqlite); use it with `kumu 追加 github.com/suru-lang/sqlite` (libsqlite3 is an external dependency in its 組.suru).
 
-### 成否と有無(失敗を値で返す)
+### 成否 and 有無 (returning failure as a value)
 
-1. **`成否` は失敗するかもしれない計算の結果、`有無` はあるかないかわからない値。** `成否 とは 値 の 成功 か 理由 の 失敗`(Rust の Result)、`有無 とは 値 の 有 か 無`(Option・Maybe)で、`lib/基本.suru` に書いてあります。型は `（数 と 文字列） の 成否`、`数 の 有無` です。作るときは `（a / b） の 成功`、`「0 では割れません」 の 失敗`、`3 の 有`、`無` と書き、分けるときは `もし r が` の場合分けを使います。
-2. **書けば自動で読み込む。** プログラムに `成否` `有無` `成功` `失敗` `有` `無`(`… は 無` の外部の関数の型は除く)や `成否にする` `有無にする` `中断する` `失敗説明する` `失敗詳細にする` `数値確認する` `試算する`、「で」のない `試行する` を書くと、`「基本」 を 読み込んで 使う` と書いたのと同じになります(`基本内の有無にする` とも書けます)。書かなければ読み込まないので、今までのプログラムは変わりません。いつも同梱の `lib/基本.suru` を使います(同じフォルダの `基本.suru` は使いません)。`成功` などを自分の型の形の名前に使うとエラーです。
-3. **関数。** `r を 取出する` は成功(有)なら中の値で、失敗(無)なら実行時エラーです(unwrap)。`o を 「ない」 で 成否にする` は有を成功に、無を `「ない」 の 失敗` にします。`r を 有無にする` は成功を有に、失敗を無にします。`文 を 中断する` は、その場でその文の実行時エラーになります(動作ではないので、純粋な関数の中でも使えます)。`取出する` は性質「取出可能」の関数なので、基本を使うプログラムでは定義し直せません。
-4. **写像可能・連鎖可能。** `（10 と 2 を 安全除算する） の 結果 を 倍化する` は成功なら中身を倍にし、失敗ならそのまま返します。手順の `した 結果` は、失敗(無)が出たところで残りを飛ばして、その失敗(無)を全体の値にします。
-5. **「…した 中身」は Rust の `?`。** `（x と y を 安全除算した 中身） と z を 安全除算する` のように、成功(有)なら中の値になり、失敗(無)なら、それを書いた一番内側の関数(「とは」の関数か無名関数)がその失敗(無)をすぐに返します。「した 結果」と同じく名詞なので式のどこにでも書け、書いた順に調べます。算術に使うときは `（… した 中身） + 1` と括弧で囲みます。成否と有無は混ぜられません(`成否にする`・`有無にする` で変えます)。前の値の型が決まらないときは成否とみなします。
-6. **型の検査。** 「中身」を書いた関数の値は、その成否(有無)と失敗の型が同じ成否(有無)でなければなりません(`「計算する」の値の型が合いません(（甲 と 文字列） の 成否 と 数)`)。関数の外(一番外の値の定義など)や、「してから」の続きの中に書くとエラーです。
-7. **手順の中では、動作なら行ってから見る。** 手順の文の中の `x とは 道 を 読取した 中身` は、`読取する` が動作ならそれを行い、その結果の成否を見ます。失敗なら手順はそこで終わり、その失敗を結果にします(`（甲 と 乙） の 成否 の 動作`)。成否を返すだけの計算(動作でないもの)にも使えます。手順の文の中では、条件分岐の枝には書けません(「した 結果」と同じく、そこを「手順（…）」で囲みます)。
-8. **「ただし」の値の定義は書いた順に計算する。** 値の定義はふつう使うときに計算しますが、「中身」を使う値の定義だけは、本体より先に書いた順に計算します(`ただし、pとは、xとyを安全除算した中身。`)。
-9. **一番外の手順の失敗はエラーで終わる。** 一番外に書いた手順(`手順（…）。`)で「中身」を使い、その結果が失敗なら、理由を `エラー: 0 では割れません` と標準エラーに書いて、終了コード 1 で終わります(Rust の main が Err を返したとき)。
-10. **`m を 試行する`(「で」を省く)は、実行時エラーを失敗にする。** 標準の `試行する` の「で」を省くと、m を行い、成功すれば `結果 の 成功`、実行時エラーになれば `エラーの文 の 失敗` を結果にする動作です(`（甲 と 文字列） の 成否 の 動作`)。エラーの文は標準エラーに書きません。今あるエラーを出す関数も、`本文 とは （道 を ファイル内の読込する） を 試行した 中身` のように「中身」と一緒に使えます。`m を 代わり で 試行する` は今までどおりです。
-11. **失敗は通った場所を覚える。** 「中身」で失敗を返すたびに、その行と関数の名前(一番外は `一番外`、無名関数は `無名関数`)を、失敗の値に見えない「経路」として足します。比べたり表示したりするときは経路を見ないので、`r が （「a」 の 失敗）` はこれまでどおりです。
-12. **`r を 「設定を読む」 で 失敗説明する` は説明を重ねる。** 失敗なら「設定を読む」という説明を重ね、成功(有無)ならそのまま返します。`（（s を 設定読込する） を 「設定を読む」 で 失敗説明した 中身）` のように「中身」と一緒に使います。
-13. **`r を 失敗詳細にする` は全部を文字列にする。** 1行目は一番外側の説明に「のに失敗しました」を付けたもの(説明がなければ理由)、続けて `  原因: 理由`(説明があるとき)と、`  経路:` の下に通った場所を内側から順に並べます。失敗でない値を渡すと実行時エラーです。一番外の手順が失敗で終わるときも、この形で標準エラーに書きます。
+1. **`成否` is the result of a computation that may fail, and `有無` is a value that may or may not be there.** `成否 とは 値 の 成功 か 理由 の 失敗` (Rust's Result: success or failure) and `有無 とは 値 の 有 か 無` (Option / Maybe: some or none) are written in `lib/基本.suru`. Their types are `（数 と 文字列） の 成否` and `数 の 有無`. Build them with `（a / b） の 成功`, `「0 では割れません」 の 失敗`, `3 の 有` and `無`, and take them apart with a `もし r が` case analysis.
+2. **Writing them loads them automatically.** If a program mentions `成否` `有無` `成功` `失敗` `有` `無` (except in the `… は 無` type of foreign functions), or `成否にする` `有無にする` `中断する` `失敗説明する` `失敗詳細にする` `数値確認する` `試算する`, or `試行する` without 「で」, it is as if `「基本」 を 読み込んで 使う` had been written (`基本内の有無にする` also works). Without them nothing is loaded, so existing programs don't change. The bundled `lib/基本.suru` is always used (a `基本.suru` in the same folder is not). Using `成功` and the like as shape names of your own types is an error.
+3. **Functions.** `r を 取出する` is the inner value on success (有), and a runtime error on failure (無) (unwrap). `o を 「ない」 で 成否にする` turns 有 into success and 無 into `「ない」 の 失敗`. `r を 有無にする` turns success into 有 and failure into 無. `文 を 中断する` becomes a runtime error with that message on the spot (it is not an action, so it can be used inside pure functions). `取出する` is a function of the trait 「取出可能」, so programs using 基本 can't redefine it.
+4. **Mappable and chainable.** `（10 と 2 を 安全除算する） の 結果 を 倍化する` doubles the contents on success and returns a failure unchanged. `した 結果` in a procedure skips the rest as soon as a failure (無) appears, and makes that failure (無) the value of the whole.
+5. **「…した 中身」 is Rust's `?`.** In `（x と y を 安全除算した 中身） と z を 安全除算する`, a success (有) becomes the inner value, and on failure (無) the innermost function containing it (a 「とは」 function or an anonymous function) returns that failure (無) immediately. Like 「した 結果」 it is a noun, so it can go anywhere in an expression, and is checked in written order. To use it in arithmetic, wrap it in parentheses: `（… した 中身） + 1`. 成否 and 有無 can't be mixed (convert with `成否にする` and `有無にする`). When the type of the previous value is not determined, it is taken as 成否.
+6. **Type checking.** The value of a function containing 「中身」 must be a 成否 (有無) with the same failure type as that 成否 (有無) (`「計算する」の値の型が合いません(（甲 と 文字列） の 成否 と 数)`, "the value type of 「計算する」 doesn't match"). Writing it outside a function (such as an outermost value definition) or inside the continuation of 「してから」 is an error.
+7. **Inside a procedure, an action is carried out before looking.** `x とは 道 を 読取した 中身` in a procedure's sentence carries out `読取する` if it is an action and looks at the resulting 成否. On failure the procedure ends there, with that failure as its result (`（甲 と 乙） の 成否 の 動作`). It also works on computations (not actions) that just return a 成否. In a procedure's sentence it can't go in a branch of a conditional (as with 「した 結果」, wrap that part in 「手順（…）」).
+8. **「ただし」 value definitions are computed in written order.** Value definitions are normally computed when used, but value definitions using 「中身」 are computed before the body, in written order (`ただし、pとは、xとyを安全除算した中身。`).
+9. **A failure in the outermost procedure ends with an error.** If an outermost procedure (`手順（…）。`) uses 「中身」 and its result is a failure, the reason is written to standard error as `エラー: 0 では割れません` ("error: can't divide by 0") and the program exits with code 1 (like Rust's main returning Err).
+10. **`m を 試行する` (without 「で」) turns runtime errors into failures.** Leaving out the 「で」 of the standard `試行する` gives an action that carries out m and results in `結果 の 成功` on success, or `エラーの文 の 失敗` (the error message) on a runtime error (`（甲 と 文字列） の 成否 の 動作`). The message is not written to standard error. Existing functions that raise errors can thus be used with 「中身」, as in `本文 とは （道 を ファイル内の読込する） を 試行した 中身`. `m を 代わり で 試行する` is unchanged.
+11. **Failures remember where they passed.** Each time 「中身」 returns a failure, its line and function name (`一番外` for the outermost level, `無名関数` for anonymous functions) are added to the failure value as an invisible "path". Comparing and printing ignore the path, so `r が （「a」 の 失敗）` works as before.
+12. **`r を 「設定を読む」 で 失敗説明する` layers a description.** On failure it adds the description 「設定を読む」 ("reading the settings"); a success (or a 有無) is returned unchanged. Use it with 「中身」, as in `（（s を 設定読込する） を 「設定を読む」 で 失敗説明した 中身）`.
+13. **`r を 失敗詳細にする` turns everything into a string.** The first line is the outermost description followed by 「のに失敗しました」 ("failed to …") (or the reason if there is no description), followed by `  原因: REASON` (cause, when there is a description) and, under `  経路:` (path), the places passed through, from the inside out. Passing a value that is not a failure is a runtime error. When the outermost procedure ends in failure, it is written to standard error in this form too.
 
 ```
 エラー: 設定を読むのに失敗しました
@@ -915,15 +925,15 @@ r とは 「/suru-例」 を （0 と 0.0 の 点） で 固定領域作成し�
     6行目 起動準備する
     17行目 一番外
 ```
-14. **`s を 数値確認する` は数にできるかを調べる。** 数にできれば `数 の 成功`、できなければ `「「abc」は数値にできません」 の 失敗` です(`（数 と 文字列） の 成否`)。`（x を 数値確認した 中身） + 1` のように使えます。`数値にする` は今までどおり、できなければ実行時エラーです。
-15. **`JSON解析する` も成否を返す。** `「JSON」` の `s を JSON解析する` は `（JSON と 文字列） の 成否` です。今までの `JSON結果`(`JSON成功`・`JSON失敗`)はなくなりました。`（s を JSON解析した 中身） から 「a」 を JSON取得する` と書けます。
-16. **`f を 試算する` は純粋な計算の実行時エラーを失敗にする。** f は引数を全部渡した関数の値(`（「12」 を 番号読取すること）`)で、それを呼んで、成功すれば `値 の 成功`、実行時エラーになれば `エラーの文 の 失敗` を返します(`（甲 と 文字列） の 成否`)。動作ではないので、純粋な関数の中で `（（s を 番号読取すること） を 試算した 中身） + 1` のように使えます。成否を返さない関数を、使う側で成否に変えるためのものです。
-17. **受け止めたエラーは起きた場所を覚える。** `試算する` と「で」を省いた `試行する` で受け止めた失敗は、エラーが起きた行と文字目を経路の先頭に `2行目 19文字目(ここで実行時エラー)` のように持ちます。理由はエラーの文だけなので、`r が （「「x」は数値にできません」 の 失敗）` のように比べられます。
-18. **「xs の それぞれ を f した 中身」は、全部成功なら値のリスト。** `行 の それぞれ を 数値確認した 中身` は、全部が成功(有)なら中の値のリストに、どれかが失敗(無)なら最初の失敗(無)をすぐ返します(Rust の `collect::<Result<Vec<_>, _>>()?`)。空のリストなら空のリストです。
+14. **`s を 数値確認する` checks whether a string can be a number.** If it can, `数 の 成功`; otherwise `「「abc」は数値にできません」 の 失敗` (`（数 と 文字列） の 成否`). It can be used as `（x を 数値確認した 中身） + 1`. `数値にする` is unchanged: a runtime error if it can't.
+15. **`JSON解析する` returns a 成否 too.** `s を JSON解析する` in `「JSON」` is a `（JSON と 文字列） の 成否`. The old `JSON結果` (`JSON成功`, `JSON失敗`) is gone. You can write `（s を JSON解析した 中身） から 「a」 を JSON取得する`.
+16. **`f を 試算する` turns runtime errors of pure computations into failures.** f is a function value with all its arguments given (`（「12」 を 番号読取すること）`); it calls it and returns `値 の 成功` on success or `エラーの文 の 失敗` on a runtime error (`（甲 と 文字列） の 成否`). It is not an action, so it can be used inside pure functions, as in `（（s を 番号読取すること） を 試算した 中身） + 1`. It is for converting functions that don't return a 成否 into one on the caller's side.
+17. **Caught errors remember where they happened.** A failure caught by `試算する` or by `試行する` without 「で」 has the line and column where the error happened at the head of its path, as `2行目 19文字目(ここで実行時エラー)` ("line 2, column 19 (runtime error here)"). The reason is only the error message, so it can be compared, as in `r が （「「x」は数値にできません」 の 失敗）`.
+18. **「xs の それぞれ を f した 中身」 is the list of values if all succeed.** `行 の それぞれ を 数値確認した 中身` becomes the list of inner values if all succeed (有), and returns the first failure (無) immediately if any fail (Rust's `collect::<Result<Vec<_>, _>>()?`). An empty list gives an empty list.
 
-### 通信でこちらからつなぐ
+### Connecting out over the network
 
-1. **`ホスト に ポート で 通信内の接続する` で相手につなぐ。** 結果は接続の番号(動作)で、あとは受け付けた接続と同じく `行受信する`・`受信する`・`送信する`・`切断する` で使います。ホストは名前(`「localhost」`)でも IP アドレスでもよく、IPv4 と IPv6 の両方を順に試します。HTTP のクライアントなど、こちらから話しかけるプログラムのためのものです。
+1. **`ホスト に ポート で 通信内の接続する` connects to a peer.** The result is a connection number (an action), used afterwards like an accepted connection with `行受信する`, `受信する`, `送信する` and `切断する`. The host may be a name (`「localhost」`) or an IP address, and both IPv4 and IPv6 are tried in turn. It is for programs that start the conversation, such as HTTP clients.
 
 ```
 「通信」 を 読み込む
@@ -936,23 +946,23 @@ r とは 「/suru-例」 を （0 と 0.0 の 点） で 固定領域作成し�
   接続 を 通信内の切断する
 始めする
 ```
-2. **つないだ接続は待つ時間を区切らない。** 受け付けた接続は5秒で見切りますが、こちらからつないだ接続は、相手が答えるまで待ち続けます。ローカル LLM のように、最初の応答まで何十秒もかかる相手がいるためです。
-3. **つなげなければ実行時エラー。** 名前が引けないときは「「接続する」で通信に失敗しました(Name or service not known)」、相手が待っていないときは「…(Connection refused)」です。`試行する` で受け止められます。
+2. **Outgoing connections have no wait limit.** Accepted connections give up after 5 seconds, but outgoing connections wait until the peer answers. This is because some peers, like a local LLM, take tens of seconds to give the first response.
+3. **Failing to connect is a runtime error.** An unresolvable name gives 「「接続する」で通信に失敗しました(Name or service not known)」, and a peer not listening gives 「…(Connection refused)」. Catchable with `試行する`.
 
-### 改行を付けない表示
+### Printing without a newline
 
-1. **`x を 続表示する` は改行を付けずに表示する。** `表示する` と同じく動作で、結果は x です。書いたらすぐに出すので、`「あなた> 」 を 続表示する` のあとに入力を待ったり、少しずつ届く答えをつなげて表示したりできます。`表示する` の行と同じ流れに順に出ます(インタプリタでもコンパイルしたバイナリでも同じ)。
-2. **名前は漢字だけ。** 「続けて表示する」は「けて」がひらがなで、詰めた書き方では『』が要るので、`続表示する` にしました。
+1. **`x を 続表示する` prints without adding a newline.** Like `表示する` it is an action whose result is x. It is written out immediately, so you can wait for input after `「あなた> 」 を 続表示する`, or print an answer that arrives bit by bit as one piece. It goes into the same stream as `表示する` lines, in order (the same in the interpreter and compiled binaries).
+2. **The name is kanji only.** 「続けて表示する」 ("keep printing") has the hiragana 「けて」 and would need 『』 in the packed style, so it became `続表示する`.
 
-### 受け取った関数を名前で呼ぶ
+### Calling received functions by name
 
-1. **関数を受け取った引数は、名前+「する」で呼べる。** 引数 `処理` が関数なら、`累 を 行 で 処理する` のように、関数の型に書いた助詞のまま呼べます(`（処理 を 累 に 適用する） を 行 に 適用した 結果` と同じ)。`処理して`・`処理した 結果`・`処理すること` も使えます。無名関数の引数、局所の定義、パターンで付けた名前でも同じです。
-2. **引数の名前は外の定義より先に見る。** 関数の中で `処理する` と書くと、同じ名前の局所の関数 `処理する` があればそれ、なければ引数(や局所の名前)`処理` を使います。ファイルの一番外の定義や組み込みの関数(`表示する` など)より、引数の `処理`・`表示` が先です。
-3. **型の検査は助詞ごとに調べる。** 型を宣言した引数なら、`初め を 行 の 先頭 に 処理する` は「「処理」は「に」の引数を受け取りません」になります。
+1. **A parameter that receives a function can be called as its name + 「する」.** If parameter `処理` is a function, it can be called with the particles written in its function type, as in `累 を 行 で 処理する` (the same as `（処理 を 累 に 適用する） を 行 に 適用した 結果`). `処理して`, `処理した 結果` and `処理すること` work too. The same goes for parameters of anonymous functions, local definitions and names bound by patterns.
+2. **Parameter names are looked up before outer definitions.** Writing `処理する` inside a function uses a local function `処理する` of the same name if there is one, and otherwise the parameter (or local name) `処理`. Parameters `処理` and `表示` come before outermost definitions in the file and built-in functions (`表示する` and so on).
+3. **Type checking checks each particle.** For a parameter with a declared type, `初め を 行 の 先頭 に 処理する` gives 「「処理」は「に」の引数を受け取りません」 ("「処理」 doesn't take a 「に」 argument").
 
-### 必ず行う後始末
+### Cleanup that always runs
 
-1. **`m を 後始末 で 標準内の後始末実行する` は、m が成功しても実行時エラーでも 後始末 を行う。** 「標準」の組み込みで、m と 後始末 はどちらも動作です。結果は m の結果で、m が実行時エラーになったときは、後始末を行ってから同じエラー(同じ行と文字目)を続けます。`試行する` で受け止めれば失敗になります。接続を開いてから読む途中で失敗しても、`（接続 を 通信内の切断する）` で閉じられます(ほかの言語の finally)。
+1. **`m を 後始末 で 標準内の後始末実行する` carries out 後始末 (cleanup) whether m succeeds or hits a runtime error.** It is a built-in of 「標準」, and both m and 後始末 are actions. The result is m's result; if m hits a runtime error, the cleanup is carried out and the same error (same line and column) continues. Caught with `試行する`, it becomes a failure. Even if reading fails partway after opening a connection, it can be closed with `（接続 を 通信内の切断する）` (finally in other languages).
 
 ```
 「通信」 を 読み込む
@@ -964,69 +974,69 @@ r とは 「/suru-例」 を （0 と 0.0 の 点） で 固定領域作成し�
   （接続 を 読込する） を （接続 を 通信内の切断する） で 後始末実行する
 始めする
 ```
-2. **後始末の結果は捨てる。** 後始末の動作の結果の型は何でもかまいません。後始末そのものがエラーになったときは、そのエラーが続きます。
-3. **`終了する` では後始末を行わない。** プログラムをその場で終えるためです。
+2. **The cleanup's result is discarded.** The result type of the cleanup action can be anything. If the cleanup itself hits an error, that error continues.
+3. **`終了する` doesn't run cleanups.** It is for ending the program on the spot.
 
-### 入力の終わりとバイト列の受信
+### End of input and receiving bytes
 
-1. **`入力確認する` は入力の終わりを 有無 で返す。** `「? 」 を 入力確認する` は、1行読めれば `文字列 の 有`、入力の終わり(Ctrl-D)なら `無` の動作です(`文字列 の 有無 の 動作`)。`入力する` は今までどおり、終わりなら実行時エラーです。「基本」の名前なので、読み込まずに使えます。
-2. **`接続 から n を 通信内のバイト列受信する` はバイト列のまま受け取る。** `受信する` は受け取るたびに UTF-8 の文字列にするので、相手が文字の途中で区切ると壊れます。バイト列で受け取って `数列にする` でつなぎ、最後に `バイト列組立して 文字列にする` と、まとめてから文字列にできます。
+1. **`入力確認する` returns the end of input as a 有無.** `「? 」 を 入力確認する` is an action giving `文字列 の 有` if a line could be read, and `無` at the end of input (Ctrl-D) (`文字列 の 有無 の 動作`). `入力する` is unchanged: a runtime error at the end. It is a name from 「基本」, so it can be used without loading anything.
+2. **`接続 から n を 通信内のバイト列受信する` receives bytes as they are.** `受信する` makes a UTF-8 string each time it receives, so it breaks when the peer splits in the middle of a character. Receive bytes, join them with `数列にする`, and at the end turn the whole into a string with `バイト列組立して 文字列にする`.
 
-### もし の枝の した 結果
+### した 結果 in branches of もし
 
-1. **手順の文の「もし」の枝には「した 結果」を書ける。** `本文 とは もし 方法 が 「HEAD」 ならば 「」 そうでなければ 接続 から 長さ を 受信した 結果` のように書くと、選んだ枝の「した 結果」だけを行います。その文と手順の残りを、枝ごとの手順に分けて読みます(`もし c ならば 手順（…A…、残り） そうでなければ 手順（…B…、残り）`)。「が」で比べる「もし」(パターン)も同じです。
-2. **条件の「した 結果」は先に行う。** 枝を選ぶ前に、条件の中の「した 結果」を行います。関数の本体(手順でないところ)の「もし」の枝には、今までどおり書けません(そこを「手順（…）」で囲みます)。
-3. **「した 中身」も同じ。** 手順の文の「もし」の枝の `（a と b を 安全除算した 中身）` も選んだときだけ行い、失敗(無)なら手順はそこで終わってそれを結果にします。
+1. **「した 結果」 can be written in the branches of a 「もし」 in a procedure's sentence.** Writing `本文 とは もし 方法 が 「HEAD」 ならば 「」 そうでなければ 接続 から 長さ を 受信した 結果` carries out only the 「した 結果」 of the chosen branch. That sentence and the rest of the procedure are read as a separate procedure per branch (`もし c ならば 手順（…A…、残り） そうでなければ 手順（…B…、残り）`). The same goes for a 「もし」 comparing with 「が」 (patterns).
+2. **「した 結果」 in the condition is carried out first.** The 「した 結果」 in the condition is carried out before choosing a branch. In branches of a 「もし」 in a function body (outside a procedure), it still can't be written (wrap that part in 「手順（…）」).
+3. **The same goes for 「した 中身」.** `（a と b を 安全除算した 中身）` in a branch of a 「もし」 in a procedure's sentence is carried out only if chosen, and on failure (無) the procedure ends there with that as its result.
 
-### 読み込んだファイルの中のエラーの位置
+### Error locations inside loaded files
 
-1. **読み込んだファイルの中の実行時エラーは、ファイルの名前を付ける。** 「エラー: 「部品.suru」の2行目 7文字目: 「a」は数値にできません」のように出し、その下にそのファイルの行と位置の印を出します。標準のライブラリや「基本」の中でも同じです(「「基本.suru」の33行目…: 無を取り出しました」)。インタプリタでもコンパイルしたバイナリでも同じです。
-2. **バイナリでは、読み込んだファイルの行を本体の行の後ろに続けて数える。** 実行時ライブラリに渡す位置(行は 20 ビット)はそのままで、ファイルごとの始まりの表(`suru_file_base` など)で、そのファイルの中の行に戻します。失敗の経路(「した 中身」や `試行する` の場所)の行も、そのファイルの中の行です。
+1. **Runtime errors inside loaded files carry the file name.** They look like 「エラー: 「部品.suru」の2行目 7文字目: 「a」は数値にできません」 ("error: line 2, column 7 of 「部品.suru」: 「a」 can't be made a number"), followed by that file's line and a position marker. The same holds inside the standard libraries and 「基本」 (「「基本.suru」の33行目…: 無を取り出しました」, "took out 無"). Interpreter and compiled binaries behave the same.
+2. **In binaries, lines of loaded files are counted on after the main file's lines.** The position passed to the runtime library (20 bits for the line) is unchanged, and a table of where each file starts (`suru_file_base` and so on) maps it back to the line within that file. Lines in failure paths (places of 「した 中身」 and `試行する`) are also lines within that file.
 
-### 型の名前はファイルごと
+### Type names are per file
 
-1. **読み込んだファイルの型と形は、`部品内の応答` とも書ける。** 関数と同じく、ファイルの名前と「内の」を前に付けて書けます(`（200 と 「ok」 の HTTP内の応答）`、`HTTP内の応答 を 送る は 数`)。同じファイルの中では前置きなしです。
-2. **ほかのファイルとぶつからなければ、前置きなしでも書ける。** 今までどおり `（5 の 応答）` と書けます。2つのファイルが同じ名前の型か形を持つときだけ、「「応答」は「甲」と「乙」の両方にある型か形の名前です。「甲内の応答」のように…」のエラーになります。両方を読み込んでも、それだけではエラーになりません。
-3. **値の表示は前置きなし。** `（番号 は 5 の 応答）` のように表示します。型のエラーの文では `乙内の応答` と前置きを付けて区別します。
-4. **lib/ のファイル(標準のライブラリ)の型は、今までどおり1つの名前。** `成否`・`有無`・`ロック` などは前置きなしの名前のままで、`スレッド内のロック` とも書けます。前置きが付くのは、自分で書いたファイルやプロジェクトの依存(kumu)のファイルの型です。
+1. **Types and shapes from a loaded file can also be written as `部品内の応答`.** As with functions, the file name and 「内の」 can be put in front (`（200 と 「ok」 の HTTP内の応答）`, `HTTP内の応答 を 送る は 数`). Inside the same file, no prefix.
+2. **Without clashes with other files, no prefix is needed.** You can still write `（5 の 応答）`. Only when two files have a type or shape with the same name do you get the error 「「応答」は「甲」と「乙」の両方にある型か形の名前です。「甲内の応答」のように…」 ("「応答」 is a type or shape name in both 「甲」 and 「乙」. Like 「甲内の応答」…"). Loading both alone is not an error.
+3. **Values are printed without prefixes.** As in `（番号 は 5 の 応答）`. Type error messages distinguish them with prefixes like `乙内の応答`.
+4. **Types of files in lib/ (the standard libraries) keep a single name.** `成否`, `有無`, `ロック` and the like remain unprefixed names, and `スレッド内のロック` also works. Prefixes apply to types in files you write yourself and in project dependencies (kumu).
 
-### 型と同じ名前の変数
+### Variables named like types
 
-1. **変数や引数の名前にした語は、2つのファイルにある型の名前でも変数として読む。** `応答 とは …` や `s に 要求 を 接続 で 案内する とは …` のように、そのファイルの中で変数や引数の名前にした語は、2つの読み込んだファイルが同じ名前の型を持っていても、「型の名前はファイルごと」のエラーにしません。型として使うところは `HTTP内の応答` と前置きを付けて書きます(Go 版も同じ)。
+1. **A word used as a variable or parameter name is read as a variable even if two files have a type of that name.** Words used in that file as variable or parameter names, as in `応答 とは …` or `s に 要求 を 接続 で 案内する とは …`, don't trigger the "Type names are per file" error even when two loaded files have a type of the same name. Where it is used as a type, write it with the prefix, `HTTP内の応答` (the Go version behaves the same).
 
-### 助詞を付けて呼ぶ関数の助詞
+### Particles of functions called with particles
 
-1. **受け取った関数を助詞を付けて呼ぶなら、渡す関数の助詞も調べる。** `x を 処理 で 呼出する とは x を 10 で 処理する` のように、受け取った関数を助詞を付けて呼ぶ関数に、助詞の違う関数(`（t で 案内すること）` の残りが「を」と「に」など)を渡すと、型の検査でエラーになります(「…が渡されています(受け取る関数は、助詞を付けて呼ばれるので、残りの引数の助詞もそろえてください)」)。エラーは渡したところの行を指します。受け取った関数をほかの関数に渡すだけの関数(`中継する`)にも、この決まりは伝わります。
-2. **助詞を付けて呼ばないなら、今までどおり順番で合わせる。** `適用する` や `畳み込みする` で順に渡すだけの関数には、助詞の違う関数も渡せます。型を宣言していない引数の関数は調べません。
+1. **When a received function is called with particles, the particles of the passed function are checked.** For a function that calls a received function with particles, as in `x を 処理 で 呼出する とは x を 10 で 処理する`, passing a function with different particles (say the rest of `（t で 案内すること）` is 「を」 and 「に」) is a type error (「…が渡されています(受け取る関数は、助詞を付けて呼ばれるので、残りの引数の助詞もそろえてください)」, "… is passed (the received function is called with particles, so make the particles of the remaining arguments match)"). The error points at the line where it was passed. This rule also carries over to functions that only pass the received function on to other functions (`中継する`).
+2. **Without particles, matching is by order as before.** Functions that only pass arguments in order, through `適用する` or `畳み込みする`, can receive functions with different particles. Function parameters without declared types are not checked.
 
-### 型の宣言の終わりの「を 返す」
+### 「を 返す」 at the end of type declarations
 
-1. **関数の型の宣言は「を 返す」で終えてもよい。** `発言 を 発言JSONにする は JSON を 返す` は `発言 を 発言JSONにする は JSON` と同じ意味です。丁寧語の文末と同じく、読みやすくするための飾りで、意味はありません。丁寧語の `を 返します` も書けます。句読点の書き方では `数を階乗するは、数を返す。`、助詞をくっつけた `数 を返す` も同じです。`（数 と 数） の 点 を 返す` や `数 の 動作 を 返す` のように、どの型の後にも付けられます。
-2. **書けるのは関数の型の宣言の終わりだけ。** 値の型の宣言(`税率 は 数 を 返す`)に書くとエラー(「「を 返す」は関数の型の宣言の終わりにだけ書けます」)です。そのため「返す」「返します」は予約語になり、名前には使えません(ひらがなを含むので、もともと『』で囲まないと名前にできない語です)。無名関数と関数の型の `… を 返すこと` は今までどおりです。
-3. **Go 版・点検・VS Code 拡張も同じ。** `suruc`(Go 版)、する で書いた字句解析と構文解析(`lib/字句.suru`・`lib/構文.suru`)も同じように読み、VS Code 拡張では「返す」を「は」「です」と同じ色で表示します。
+1. **A function's type declaration may end with 「を 返す」 ("returns").** `発言 を 発言JSONにする は JSON を 返す` means the same as `発言 を 発言JSONにする は JSON`. Like polite endings, it is decoration for readability with no meaning. The polite `を 返します` works too. In the punctuation style, `数を階乗するは、数を返す。`, and with the particle attached, `数 を返す`, are the same. It can follow any type, as in `（数 と 数） の 点 を 返す` or `数 の 動作 を 返す`.
+2. **It can only be written at the end of a function's type declaration.** Writing it in a value's type declaration (`税率 は 数 を 返す`) is an error (「「を 返す」は関数の型の宣言の終わりにだけ書けます」, "「を 返す」 can only be written at the end of a function's type declaration"). So 「返す」 and 「返します」 became reserved words and can't be names (they contain hiragana, so they couldn't be names without 『』 anyway). `… を 返すこと` in anonymous functions and function types is unchanged.
+3. **The Go version, the linter and the VS Code extension do the same.** `suruc` (Go) and the lexer and parser written in Suru (`lib/字句.suru`, `lib/構文.suru`) read it the same way, and the VS Code extension colors 「返す」 like 「は」 and 「です」.
 
-### 型の「数 を 返す 動作」
+### The type 「数 を 返す 動作」
 
-1. **型の宣言では、`数 の 動作` を `数 を 返す 動作` とも書ける。** `WebSocket内の伝言 を WebSocket内の相手 で 返答する は 数 を 返す 動作` は `… は 数 の 動作` と同じ意味です。「数を返す動作」と読めるようにするための書き方です。句読点の書き方では `挨拶するは、数を返す動作。` です。
-2. **型の宣言の中ならどこでも書ける。** 引数の型(`（数 を 返す 動作） を 二回する は …`)や関数の型(`（数 を 受け取って 数 を 返す 動作 を 返すこと）`)の中にも書けます。終わりの飾りの「を 返す」と一緒に `… は 数 を 返す 動作 を 返す` とも書けます。エラーの文では今までどおり `数 の 動作` と表示します。
-3. **「入出力動作」は「動作」の別名。** 動作は Haskell の IO に当たるので、宣言で入出力をすることを強調したいときは `… は 数 を 返す 入出力動作`、`数 の 入出力動作 の リスト` のように書けます。型としては「動作」と同じもので、エラーの文では「動作」と表示します。今までの「動作」もそのまま使えます。
-4. **Go 版・点検も同じ。** `suruc`(Go 版)と、する で書いた構文解析(`lib/構文.suru`)も同じように読みます。
+1. **In type declarations, `数 の 動作` can also be written `数 を 返す 動作`.** `WebSocket内の伝言 を WebSocket内の相手 で 返答する は 数 を 返す 動作` means the same as `… は 数 の 動作`. It is a way of writing that reads as "an action returning a number". In the punctuation style, `挨拶するは、数を返す動作。`.
+2. **It can be written anywhere in a type declaration.** Also inside parameter types (`（数 を 返す 動作） を 二回する は …`) and function types (`（数 を 受け取って 数 を 返す 動作 を 返すこと）`). Together with the trailing decoration, `… は 数 を 返す 動作 を 返す` works too. Error messages still show `数 の 動作`.
+3. **「入出力動作」 is another name for 「動作」.** Actions correspond to Haskell's IO, so to stress in a declaration that something does I/O, you can write `… は 数 を 返す 入出力動作` or `数 の 入出力動作 の リスト`. As a type it is the same as 「動作」, and error messages show 「動作」. The old 「動作」 still works as is.
+4. **The Go version and the linter do the same.** `suruc` (Go) and the parser written in Suru (`lib/構文.suru`) read it the same way.
 
-### 入出力手順
+### IO procedures (入出力手順)
 
-1. **「入出力手順」は動作(IO)だけに使う手順。** `問い を 接続 で 案内する とは 入出力手順` + 深い行、`入出力手順（「a」を表示する。3を結果にする。）` のように、「手順」と同じ場所に同じ書き方で書けます。行うことは「手順」と同じです。
-2. **値が動作でなければ型の検査でエラー。** 「手順」は連鎖可能な型ならどれにも使えます(成否・有無・リスト・自分の型)が、「入出力手順」は値が動作でなければ「「入出力手順」の値は動作でなければなりませんが、（数 と 文字列） の 成否になっています」のようなエラーになります。入出力をする手順だと読めて、検査でも確かめられます。宣言の `… は 数 を 返す 入出力動作` と対にして使います。成否などの手順は今までどおり「手順」で書きます。
-3. **Go 版・点検・VS Code 拡張も同じ。** `suruc` も同じ検査をし、する で書いた構文解析(`lib/構文.suru`)は「手順」と同じに読みます。VS Code 拡張では「手順」と同じ色です。
+1. **「入出力手順」 is a procedure used only for actions (IO).** It is written in the same places and the same way as 「手順」, as in `問い を 接続 で 案内する とは 入出力手順` + deeper lines, or `入出力手順（「a」を表示する。3を結果にする。）`. What it does is the same as 「手順」.
+2. **A value that is not an action is a type error.** 「手順」 works with any chainable type (成否, 有無, lists, your own types), but 「入出力手順」 gives an error like 「「入出力手順」の値は動作でなければなりませんが、（数 と 文字列） の 成否になっています」 ("the value of 「入出力手順」 must be an action, but it is a （数 と 文字列） の 成否") if its value is not an action. It reads as a procedure that does I/O, and the checker confirms it. Use it paired with the declaration `… は 数 を 返す 入出力動作`. Procedures over 成否 and the like are still written with 「手順」.
+3. **The Go version, the linter and the VS Code extension do the same.** `suruc` does the same check, and the parser written in Suru (`lib/構文.suru`) reads it like 「手順」. The VS Code extension gives it the same color as 「手順」.
 
-### パターンの「という」
+### 「という」 in patterns
 
-1. **パターンでは「s の JSON文字列」を「s という JSON文字列」とも書ける。** `（s という JSON文字列） を 文字値取得する とは s`、`もし 形 が` + 深い行に `半径 という 円 ならば …`、`（幅 と 高 という 長方形） を 面積にする とは …`、`横 は a という 点 ならば …` のように、場合ごとの関数定義の引数と「もし … が」の場合で、形の名前の前の「の」を「という」にできます。意味は同じです。「中身に s という名前を付けて取り出す」と読めるようにするための書き方です。句読点の書き方では `（半径という円）を面積にするとは、…。` です。
-2. **値を作るほうは「の」だけ。** `「a」 の JSON文字列`、`3 と 4 の 点` のように、作るときは今までどおり「の」で書きます(「3と4という点」は「3と4という名前の点」と読めてしまうため)。「という」のもう1つの使い道の `比較可能 という 性質 とは …` とはぶつかりません。
-3. **Go 版・点検も同じ。** `suruc` と、する で書いた構文解析(`lib/構文.suru`)も同じように読みます。
+1. **In patterns, 「s の JSON文字列」 can also be written 「s という JSON文字列」.** In the parameters of case-by-case function definitions and the cases of 「もし … が」, the 「の」 before a shape name can be 「という」 ("called"), as in `（s という JSON文字列） を 文字値取得する とは s`, `もし 形 が` + a deeper line `半径 という 円 ならば …`, `（幅 と 高 という 長方形） を 面積にする とは …` and `横 は a という 点 ならば …`. The meaning is the same. It reads as "take out the contents, naming them s". In the punctuation style, `（半径という円）を面積にするとは、…。`.
+2. **Building values uses only 「の」.** As in `「a」 の JSON文字列` and `3 と 4 の 点`, building is still written with 「の」 (「3と4という点」 would read as "a point named 3 and 4"). It doesn't clash with the other use of 「という」, `比較可能 という 性質 とは …`.
+3. **The Go version and the linter do the same.** `suruc` and the parser written in Suru (`lib/構文.suru`) read it the same way.
 
-### ビット演算・Base64・SHA-1
+### Bitwise operations, Base64 and SHA-1
 
-WebSocket(suru-lang/http)の握手と覆いのために足しました。どれもインタプリタとコンパイルしたバイナリで同じ結果です。
+Added for the WebSocket (suru-lang/http) handshake and masking. All give the same results in the interpreter and compiled binaries.
 
 ```
 「標準」 を 読み込んで 使う
@@ -1037,36 +1047,36 @@ WebSocket(suru-lang/http)の握手と覆いのために足しました。どれ�
 「abc」 を バイト列にして ハッシュ内のSHA1にして ハッシュ内の十六進表記にする  # → a9993e36…
 ```
 
-1. **ビット演算は「標準」の組み込み。** `a を b で ビット積にする`(AND)・`ビット和にする`(OR)・`排他的論理和にする`(XOR)、`x を n で 左シフトする`・`右シフトする` です。整数を2の補数の並びとして扱い、負の数の右シフトは符号を保ちます。n は 0 から 63 までで、整数でない数は実行時エラーです。コンパイルしたバイナリの整数は ±2^62 までなので、それを超える左シフトは「整数が大きすぎます」になります(インタプリタは大きな整数のまま)。
-2. **`b を 鍵 で バイト列排他和にする` はバイト列どうしの XOR。** 鍵を繰り返して b の長さにそろえます(WebSocket の覆いは 4 バイトの鍵)。1バイトずつ する で計算すると遅いので組み込みにしました。鍵が空なら実行時エラーです。
-3. **Base64 は「標準」に する で書いた。** `b を Base64符号化する`(バイト列 → 文字列)と `s を Base64復号する`(`（バイト列 と 文字列） の 成否`)です。復号は前後の空白を除き、終わりの `=` はあってもなくてもよく、URL 用の `-`・`_` も読みます。使えない文字や合わない長さは失敗です。
-4. **SHA-1 は新しい「ハッシュ」に する で書いた。** `b を SHA1にする` は 20 バイトのバイト列、`b を 十六進表記にする` は小文字の16進の文字列です。WebSocket の握手のためのもので、衝突が見つかっているので署名やパスワードには使いません。
-5. **`n を 乱数内の乱数バイト列取得する` は OS の乱数の n バイト(1〜256)。** getentropy を呼ぶ動作です。WebSocket のクライアントの覆いと鍵に使います。
-6. **`接続 を 秒 で 通信内の待機時間設定する` は受信と送信を待つ秒数を変える。** 受け付けた接続は5秒で見切りますが、WebSocket のように長くつなぎっぱなしにする接続は `0`(待ち続ける)にします。小数の秒も書けます。時間切れで失敗した後も、同じ接続から続けて読めます(バイナリは読み込みの印を消し、インタプリタは読み込み用を作り直します)。
+1. **Bitwise operations are built-ins of 「標準」.** `a を b で ビット積にする` (AND), `ビット和にする` (OR), `排他的論理和にする` (XOR), and `x を n で 左シフトする` and `右シフトする` (shifts). Integers are treated as two's-complement bit patterns, and right shifts of negative numbers keep the sign. n is 0 to 63, and non-integer numbers are runtime errors. Integers in compiled binaries go up to ±2^62, so left shifts beyond that give 「整数が大きすぎます」 (the interpreter keeps big integers).
+2. **`b を 鍵 で バイト列排他和にする` XORs byte sequences.** The key is repeated to the length of b (WebSocket masking uses a 4-byte key). Computing it byte by byte in Suru is slow, so it is a built-in. An empty key is a runtime error.
+3. **Base64 is written in Suru in 「標準」.** `b を Base64符号化する` (bytes → string) and `s を Base64復号する` (`（バイト列 と 文字列） の 成否`). Decoding strips surrounding spaces, accepts trailing `=` or its absence, and reads the URL-safe `-` and `_`. Invalid characters or lengths are failures.
+4. **SHA-1 is written in Suru in the new 「ハッシュ」.** `b を SHA1にする` gives 20 bytes, and `b を 十六進表記にする` a lowercase hexadecimal string. It is for the WebSocket handshake; collisions have been found, so don't use it for signatures or passwords.
+5. **`n を 乱数内の乱数バイト列取得する` gives n bytes (1 to 256) of OS randomness.** An action calling getentropy. Used for the masks and keys of WebSocket clients.
+6. **`接続 を 秒 で 通信内の待機時間設定する` changes how many seconds receives and sends wait.** Accepted connections give up after 5 seconds, but connections kept open a long time, like WebSockets, are set to `0` (wait forever). Fractional seconds work. After a timeout failure, reading from the same connection can continue (the binary clears the read flag, and the interpreter recreates its reader).
 
-### マイコン向けの小さい する
+### Small Suru for microcontrollers
 
-1. **マイコン向けは、ヒープも GC も使わない別の生成。** `kumu 作る`(対象あり)と `suruc --対象 …` は、型の検査の結果から値の型を決め、数は 32 ビットの整数、真偽は 0 と 1、文字列の定数はフラッシュに置いた番地として LLVM IR を作ります。実行時ライブラリは `runtime/avr/suru_avr.c`(main・時計・ピン・PWM・AD 変換・シリアル)です。Uno の RAM 2KB に入るように、値をヒープに作る書き方は使えません。
-2. **使えるのは 定義・もし・場合ごとの定義(数と真偽の値)・ただし・手順・した 結果・してから・再帰と、数・真偽の算術。** 使えないもの(リスト・小数・無名関数・すること・それぞれ・組・性質・入力する・文字列の連結など)は、コンパイルのときに「マイコン向けでは、リストは使えません」のようなエラーになります。
-3. **動作は、呼んだところでその場で行う。** 手順の中や一番外で行うのと同じ結果になります。動作を引数に渡したりリストに入れたりして後で行う書き方は使えません。`挨拶 とは 「やあ」 を 表示する` のように動作に名前を付けたものは、使うたびに行います。
-4. **関数の最後で自分を呼ぶ繰り返しはループにする。** `点滅する とは 手順` の最後の `点滅する` はスタックを使いません。2つの関数で呼び合う繰り返しも、clang の最適化でループになります。
-5. **数は 32 ビット。** -2147483648 から 2147483647 までで、あふれると折り返します(エラーにはなりません)。小数が無いので `/` は切り捨ての割り算(`-7 / 2` は -4)、`%` はインタプリタと同じ向きの余りです。0 で割るとシリアルにエラーを出して止まります。
-6. **表示はシリアルへ。** `表示する` はシリアル(9600、行の終わりは CR LF)に出します。`「温度: 」 + （t を 文字列化する） を 表示する` のように、`表示する` の「を」の中だけは文字列を + でつなげ、`文字列化する` も使えます(順に送るだけで、つないだ文字列は作りません)。真偽は「真」「偽」と出ます。
-7. **型が決まらない関数は、呼んだ引数の型ごとに作る。** `x を 二回表示する` を数と文字列で呼ぶと、2つの関数になります。
-8. **ピンの番号は Arduino と同じ。** `lib/マイコン.suru` に、ピンの向き・出力・読み取り・AD 変換・PWM・待つ・経過時間・シリアルの関数と、基板の LED のピン `内蔵灯`(13)があります。C の関数は `外部の「…」` で宣言して、そのまま呼べます(文字列の引数はフラッシュの番地なので、C では pgm_read_byte で読みます)。
-9. **インタプリタでは動かない。** マイコンのライブラリの関数は基板の上にしか無いので、`suru` や `kumu 実行` では動かせません(`kumu 実行` は書き込むよう案内します)。今は Go 版の `suruc` と kumu だけが作れます。
+1. **Microcontroller targets use a separate code generator with no heap and no GC.** `kumu 作る` (with a target) and `suruc --対象 …` decide value types from the type checker's results and generate LLVM IR with numbers as 32-bit integers, booleans as 0 and 1, and string constants as addresses placed in flash. The runtime library is `runtime/avr/suru_avr.c` (main, clock, pins, PWM, A/D conversion, serial). To fit in the Uno's 2KB of RAM, constructs that build values on the heap are not available.
+2. **What you can use: definitions, もし, case-by-case definitions (on number and boolean values), ただし, 手順, した 結果, してから, recursion, and arithmetic on numbers and booleans.** Anything else (lists, decimals, anonymous functions, すること, それぞれ, records, traits, 入力する, string concatenation and so on) gives a compile error such as 「マイコン向けでは、リストは使えません」 ("lists can't be used for microcontrollers").
+3. **Actions are carried out right where they are called.** The result is the same as carrying them out in a procedure or at the top level. Passing actions as arguments or putting them in lists to carry out later is not available. An action given a name, as in `挨拶 とは 「やあ」 を 表示する`, is carried out each time it is used.
+4. **Loops that call themselves at the end of a function become loops.** The final `点滅する` in `点滅する とは 手順` uses no stack. Loops of two functions calling each other also become loops through clang's optimization.
+5. **Numbers are 32 bits.** From -2147483648 to 2147483647, wrapping on overflow (no error). There are no decimals, so `/` is truncating division (`-7 / 2` is -4), and `%` is the remainder in the same direction as the interpreter. Dividing by 0 prints an error on the serial port and stops.
+6. **Printing goes to the serial port.** `表示する` writes to serial (9600, lines end with CR LF). Only inside the 「を」 of `表示する` can strings be joined with +, and `文字列化する` can be used, as in `「温度: 」 + （t を 文字列化する） を 表示する` (they are just sent in order; no joined string is built). Booleans print as 「真」 and 「偽」.
+7. **Functions without a fixed type are generated per argument type.** Calling `x を 二回表示する` with a number and with a string makes two functions.
+8. **Pin numbers are the same as Arduino's.** `lib/マイコン.suru` has functions for pin direction, output, reading, A/D conversion, PWM, waiting, elapsed time and serial, plus `内蔵灯` (13), the pin of the board's LED. C functions can be declared with `外部の「…」` and called directly (string arguments are flash addresses, so read them in C with pgm_read_byte).
+9. **It doesn't run in the interpreter.** The microcontroller library's functions exist only on the board, so they can't run with `suru` or `kumu 実行` (`kumu 実行` tells you to flash instead). Currently only the Go `suruc` and kumu can build for it.
 
-### 通信の例(エコーサーバーとクライアント)
+### Networking examples (echo server and client)
 
-`examples/通信/` に、「通信」(TCP)を使う2つのプログラムを置きました。1つの端末で `suru examples/通信/エコーサーバー.suru` を動かし、別の端末で `suru examples/通信/エコークライアント.suru` を動かすと、打った行がそのまま返ってきます(`nc localhost 9000` でもつなげます)。
+`examples/通信/` has two programs using 「通信」 (TCP). Run `suru examples/通信/エコーサーバー.suru` in one terminal and `suru examples/通信/エコークライアント.suru` in another, and the lines you type come straight back (`nc localhost 9000` also connects).
 
-1. **サーバーは接続ごとにスレッドで相手をする。** `口 から 通信内の接続受付した 結果` を `スレッド内の並行開始する` に渡すので、何人でも同時につなげます。受け付けた接続は5秒で見切るので、`通信内の待機時間設定する` で 0(待ち続ける)にしています。途中で相手が切れても `試行する` で受け止め、`後始末実行する` で必ず閉じます。
-2. **クライアントは入力の終わりまで続ける。** `入力確認する` で1行ずつ読み、Ctrl-D(`無`)で終わります。サーバーが閉じたら「相手が閉じました」と出して終わります。
-3. **待ち続けるので examples/ の直下には置かない。** examples/*.suru はテストで出力を比べるので、サブフォルダに置きました。`tests/test_net_examples.py` が空いているポートに変えて、インタプリタとコンパイルしたものの両方で本当につないで確かめます(型の検査・点検・Go 版の IR の比べ合わせにも入れています)。
+1. **The server handles each connection on its own thread.** It passes `口 から 通信内の接続受付した 結果` to `スレッド内の並行開始する`, so any number of clients can connect at once. Accepted connections give up after 5 seconds, so it sets `通信内の待機時間設定する` to 0 (wait forever). If a client drops midway, `試行する` catches it, and `後始末実行する` always closes the connection.
+2. **The client keeps going until the end of input.** It reads line by line with `入力確認する` and ends on Ctrl-D (`無`). If the server closes, it prints 「相手が閉じました」 ("the other side closed") and ends.
+3. **They wait forever, so they aren't directly in examples/.** The tests compare the output of examples/*.suru, so these are in a subfolder. `tests/test_net_examples.py` switches them to a free port and really connects, with both the interpreter and compiled programs (they are also included in type checking, linting and comparing the Go version's IR).
 
 ### UDP
 
-`「通信」 を 読み込む` で、TCP と同じように UDP も使えます。UDP はつながりを作らず、便り(データグラム)を1つずつ送り・受け取ります。届かないことも、順が入れ替わることもあります。
+`「通信」 を 読み込む` also gives you UDP, just like TCP. UDP makes no connection; it sends and receives messages (datagrams) one at a time. They may not arrive, and may arrive out of order.
 
 ```
 「通信」 を 読み込んで 使う
@@ -1082,43 +1092,43 @@ WebSocket(suru-lang/http)の握手と覆いのために足しました。どれ�
 始めする
 ```
 
-| 書き方 | 結果(どれも動作) |
+| Syntax | Result (all are actions) |
 |---|---|
-| `ポート を 通信内のUDP開始する` | UDP の口の番号(0.0.0.0 のそのポートで受け取る。0 なら OS が選ぶ) |
-| `文字列 を 口 から ホスト に ポート で 通信内のUDP送信する` | 送ったバイト数(ホストは名前か IPv4 のアドレス) |
-| `バイト列 を 口 から ホスト に ポート で 通信内のUDPバイト列送信する` | 送ったバイト数 |
-| `口 から 通信内のUDP受信する` | 次の便りを1つ丸ごと受け取った `UDP便`(中身は UTF-8 の文字列) |
-| `口 から 通信内のUDPバイト列受信する` | 中身がバイト列の `UDP便` |
-| `文字列 を 口 から 便 へ 通信内のUDP返信する` | 便の送り主へ送る(バイト列は `UDPバイト列返信する`) |
+| `ポート を 通信内のUDP開始する` | The number of a UDP socket (receives on that port of 0.0.0.0; with 0 the OS picks one) |
+| `文字列 を 口 から ホスト に ポート で 通信内のUDP送信する` | The number of bytes sent (the host is a name or an IPv4 address) |
+| `バイト列 を 口 から ホスト に ポート で 通信内のUDPバイト列送信する` | The number of bytes sent |
+| `口 から 通信内のUDP受信する` | A `UDP便` holding the next whole message (contents as a UTF-8 string) |
+| `口 から 通信内のUDPバイト列受信する` | A `UDP便` whose contents are bytes |
+| `文字列 を 口 から 便 へ 通信内のUDP返信する` | Sends to the message's sender (bytes with `UDPバイト列返信する`) |
 
-1. **受け取った便りは `UDP便` の組。** `UDP便 とは 中身 と 送り主 と ポート の 組` で、送り主は IP アドレスの文字列(`「127.0.0.1」`)、ポートは送り主のポートです。型は中身によって `（文字列 と 文字列 と 数） の UDP便` か `（バイト列 と 文字列 と 数） の UDP便` です(宣言では `UDP便` とだけ書いても使えます)。1回の受信で、便り1つを丸ごと(65536 バイトまで)受け取ります。
-2. **口は TCP と同じ番号の表。** `口 を 秒 で 通信内の待機時間設定する` で受け取りを待つ秒数を決められ、時間切れは実行時エラーです(`試行する` で受け止めます)。閉じるのは `口 を 通信内の切断する` です。1つの口で、だれへでも送れ、だれからでも受け取れます。送るだけなら `0 を UDP開始する` で口を作ります。
-3. **失敗は実行時エラー。** 「「UDPバイト列送信する」で通信に失敗しました(Name or service not known)」のように出します。文字列の `UDP送信する`・`UDP受信する` は lib/通信.suru に する で書いてあり、中で呼ぶ組み込みの名前(`UDPバイト列送信する`・`UDPバイト列受信する`)で出ます。
-4. **組み込みは3つ。** `UDP開始する`・`UDPバイト列送信する`・`UDPバイト列受信する` が組み込み(インタプリタ・実行時ライブラリ・Go 版の型検査・点検)で、ほかは lib/通信.suru に する で書きました。IPv6 は「ブロードキャスト・マルチキャスト・IPv6」の節です。
-5. **例は `examples/通信/UDPエコーサーバー.suru` と `UDPエコークライアント.suru`。** サーバーは受け取った便りを送り主に返し、クライアントは打った行を送って返事を表示します(2秒待って返事がなければ「(返事がありません)」)。`nc -u localhost 9001` でも送れます。テストは `tests/test_udp.py` です。
+1. **Received messages are `UDP便` records.** `UDP便 とは 中身 と 送り主 と ポート の 組`: the sender is an IP address string (`「127.0.0.1」`), and the port is the sender's port. Depending on the contents, the type is `（文字列 と 文字列 と 数） の UDP便` or `（バイト列 と 文字列 と 数） の UDP便` (declarations can just say `UDP便`). One receive takes one whole message (up to 65536 bytes).
+2. **Sockets share the number table with TCP.** `口 を 秒 で 通信内の待機時間設定する` sets how many seconds a receive waits; a timeout is a runtime error (catch it with `試行する`). Close with `口 を 通信内の切断する`. One socket can send to anyone and receive from anyone. To only send, make a socket with `0 を UDP開始する`.
+3. **Failures are runtime errors.** They look like 「「UDPバイト列送信する」で通信に失敗しました(Name or service not known)」. The string versions `UDP送信する` and `UDP受信する` are written in Suru in lib/通信.suru, so errors show the names of the built-ins they call (`UDPバイト列送信する`, `UDPバイト列受信する`).
+4. **There are three built-ins.** `UDP開始する`, `UDPバイト列送信する` and `UDPバイト列受信する` are built-ins (interpreter, runtime library, the Go type checker, the linter); the rest is written in Suru in lib/通信.suru. IPv6 is in "Broadcast, multicast and IPv6".
+5. **Examples are `examples/通信/UDPエコーサーバー.suru` and `UDPエコークライアント.suru`.** The server sends each received message back to its sender, and the client sends the lines you type and prints the reply (if there is no reply within 2 seconds, 「(返事がありません)」, "(no reply)"). `nc -u localhost 9001` can send too. The tests are in `tests/test_udp.py`.
 
-### 待ち受けるアドレスとポートの取得
+### Getting listening addresses and ports
 
-TCP の待受口・接続と UDP の口のための足しです(#123 の段階2)。
+Additions for TCP listeners and connections and UDP sockets (stage 2 of #123).
 
 ```
 「通信」 を 読み込んで 使う
 
 始めする とは 入出力手順
-  口 とは 0 を 「127.0.0.1」 に 待受開始した 結果   # 自分の機械の中からだけ。ポートは OS が選ぶ
+  口 とは 0 を 「127.0.0.1」 に 待受開始した 結果   # only from this machine; the OS picks the port
   「ポート 」 + （口 を ポート取得して 文字列化する） + 「 で待っています」 を 表示する
   受 とは 口 から 接続受付した 結果
   「相手: 」 + （受 を 相手アドレス取得した 結果） を 表示する
 ```
 
-1. **`ポート を アドレス に 待受開始する` で待ち受けるアドレスを選ぶ。** `「127.0.0.1」` なら同じ機械からだけつなげます。「に」を省くと今までどおり 0.0.0.0(すべて)です。UDP も `ポート を アドレス に UDP開始する` と書けます。アドレスは IPv4 のアドレスか名前(`「localhost」`)で、引けなければ「「待受開始する」で通信に失敗しました(…)」の実行時エラーです。
-2. **`口 を ポート取得する` はこちらのポート。** 待受口・接続・UDP の口のどれにも使えます(getsockname)。ポート 0 で開いて OS に選ばせたときに、選ばれたポートを知るのに使います(テストで空いているポートを使うときなど)。
-3. **`接続 を 相手アドレス取得する`・`接続 を 相手ポート取得する` はつながっている相手。** 相手の IP アドレスの文字列とポートです(getpeername)。ログやアクセスの制限に使えます。つながっていない UDP の口では「通信に失敗しました(Transport endpoint is not connected)」です(UDP の送り主は受け取った `UDP便` にあります)。
-4. **どれも動作で、組み込み。** インタプリタ・実行時ライブラリ・Go 版の型検査・点検で同じです。テストは `tests/test_net_addr.py` です。
+1. **`ポート を アドレス に 待受開始する` chooses the address to listen on.** With `「127.0.0.1」`, only the same machine can connect. Leaving out 「に」 gives 0.0.0.0 (all) as before. UDP can be written `ポート を アドレス に UDP開始する` too. The address is an IPv4 address or a name (`「localhost」`); if it can't be resolved, you get the runtime error 「「待受開始する」で通信に失敗しました(…)」.
+2. **`口 を ポート取得する` is the local port.** It works on listeners, connections and UDP sockets (getsockname). Use it to learn the port chosen when you opened port 0 and let the OS pick (as when tests use a free port).
+3. **`接続 を 相手アドレス取得する` and `接続 を 相手ポート取得する` give the connected peer.** The peer's IP address as a string, and its port (getpeername). Useful for logs and access restrictions. On an unconnected UDP socket it is 「通信に失敗しました(Transport endpoint is not connected)」 (a UDP sender is in the received `UDP便`).
+4. **All are actions and built-ins.** The same in the interpreter, runtime library, the Go type checker and the linter. The tests are in `tests/test_net_addr.py`.
 
-### 主スレッドで呼ぶ外部の関数と単精度
+### Foreign functions called on the main thread, and single precision
 
-GUI のライブラリ(SDL3 など)を包むために足しました。macOS の窓は、プロセスの最初のスレッド(主スレッド)でしか操作できません。コンパイルしたプログラムは深い再帰のために大きなスタックの別スレッドで動いているので、そのままでは窓を作れません。
+Added to wrap GUI libraries (SDL3 and others). macOS windows can only be operated from the process's first thread (the main thread). Compiled programs run on a separate thread with a large stack for deep recursion, so as is they can't create windows.
 
 ```
 外部の「SDL3」 を 主スレッドで 読み込む
@@ -1129,51 +1139,51 @@ GUI のライブラリ(SDL3 など)を包むために足しました。macOS の
 x を y で 描き手 に 点描画する とは 外部の「SDL_RenderPoint」（描き手 と x と y）
 ```
 
-1. **`外部の「m」 を 主スレッドで 読み込む` と書いたファイルの外部の関数は、主スレッドで呼ぶ。** そのファイルのどの外部の関数も主スレッドで呼びます(ライブラリごとではなくファイルごとです。包むライブラリのファイルを分けておきます)。コンパイルしたものは、主スレッドが仕事を待ち、プログラムのスレッドは引数を渡して終わるのを待ちます。並行して動かしている処理から呼んでも主スレッドで呼びます。errno(`エラー番号取得する`)も呼んだスレッドに戻します。呼ぶたびにスレッドの行き来があるので、普通の外部の関数より少し遅くなります(数マイクロ秒)。
-2. **インタプリタは、最初のスレッドからだけ呼べる。** インタプリタはプログラムを最初のスレッドで動かすので、そのまま呼びます。並行して動かしている処理から呼ぶと実行時エラーです(コンパイルしたものでは呼べます)。
-3. **fork した子では、その場で呼ぶ。** 子のプロセスには主スレッドが残らないためです。
-4. **`単精度` は C の `float`。** `小数` と同じく、する の中では `数` と同じ型です。引数に渡すと float に丸め、値は double に戻します。SDL3 の座標のように、float を値で受け取る関数のために足しました。インタプリタ・Python 版と Go 版のコンパイラで同じです。
+1. **Foreign functions in a file that writes `外部の「m」 を 主スレッドで 読み込む` ("load on the main thread") are called on the main thread.** Every foreign function in that file is called on the main thread (it is per file, not per library, so keep the wrapping library in its own file). In compiled programs, the main thread waits for work, and the program's thread passes the arguments and waits for completion. Calls from code running concurrently also happen on the main thread. errno (`エラー番号取得する`) is carried back to the calling thread too. Each call goes back and forth between threads, so it is a little slower than an ordinary foreign function (a few microseconds).
+2. **The interpreter can call them only from the first thread.** The interpreter runs the program on the first thread, so it calls them directly. Calling from concurrently running code is a runtime error (compiled programs can).
+3. **In a forked child, they are called on the spot.** No main thread is left in a child process.
+4. **`単精度` is C's `float`.** Like `小数`, it is the same type as `数` inside Suru. Passed as an argument it is rounded to float, and return values are converted back to double. It was added for functions taking floats by value, such as SDL3's coordinates. The interpreter and both the Python and Go compilers behave the same.
 
-### ブロードキャスト・マルチキャスト・IPv6
+### Broadcast, multicast and IPv6
 
-UDP の口と待受口のための足しです(#123 の段階3)。
+Additions for UDP sockets and listeners (stage 3 of #123).
 
 ```
 「通信」 を 読み込んで 使う
 
 始めする とは 入出力手順
   受 とは 9002 を UDP開始した 結果
-  受 を 「239.1.2.3」 に マルチキャスト参加する      # このグループに送られた便りも受け取る
+  受 を 「239.1.2.3」 に マルチキャスト参加する      # also receive messages sent to this group
   送 とは 0 を UDP開始した 結果
   「みなさん」 を 送 から 「239.1.2.3」 に 9002 で UDP送信する
   送 を ブロードキャスト許可する
   「全員」 を 送 から 「255.255.255.255」 に 9002 で UDP送信する
 ```
 
-1. **`口 を ブロードキャスト許可する` でブロードキャストのアドレスへ送れる。** `255.255.255.255` や `192.168.1.255` のようなアドレスへの送信は、許可していない口では「通信に失敗しました(Permission denied)」です(SO_BROADCAST)。結果は口です。
-2. **`口 を アドレス に マルチキャスト参加する` でグループの便りを受け取る。** `口 を アドレス から マルチキャスト離脱する` でやめます。アドレスは IPv4 の `224.0.0.0`〜`239.255.255.255` か、`ff` で始まる IPv6 のアドレスです。それ以外は「「10.0.0.1」はマルチキャストのアドレスではありません(…)」の実行時エラーです。受け取る口は、送られるポートで `UDP開始する` しておきます。マルチキャストへの送信は今までの `UDP送信する` です(届く範囲は OS の既定で、同じネットワークの中だけ)。
-3. **IPv6 は「に」に IPv6 のアドレスを書く。** `0 を 「::1」 に UDP開始する`、`8080 を 「::」 に 待受開始する` で IPv6 の口になります。IPv6 の UDP の口からは IPv6 のアドレスへ送ります(`「::1」` や名前)。送り主・`相手アドレス取得する` は `::1` のように出します。「に」を省いたときと名前を書いたときは、今までどおり IPv4 です。こちらからつなぐ `接続する` は前から IPv4 と IPv6 の両方を試します。
-4. **どれも動作で、組み込み。** インタプリタ・実行時ライブラリ・Go 版の型検査・点検で同じです。テストは `tests/test_udp_multicast.py` です(自分へのマルチキャストが届かない機械と、IPv6 のない機械では飛ばします)。
+1. **`口 を ブロードキャスト許可する` allows sending to broadcast addresses.** Sending to addresses such as `255.255.255.255` or `192.168.1.255` from a socket that hasn't allowed it gives 「通信に失敗しました(Permission denied)」 (SO_BROADCAST). The result is the socket.
+2. **`口 を アドレス に マルチキャスト参加する` receives a group's messages.** `口 を アドレス から マルチキャスト離脱する` leaves it. The address is an IPv4 address from `224.0.0.0` to `239.255.255.255`, or an IPv6 address starting with `ff`. Anything else is the runtime error 「「10.0.0.1」はマルチキャストのアドレスではありません(…)」 ("「10.0.0.1」 is not a multicast address"). The receiving socket must have done `UDP開始する` on the port being sent to. Sending to multicast is the usual `UDP送信する` (its reach is the OS default, only within the same network).
+3. **For IPv6, write an IPv6 address in 「に」.** `0 を 「::1」 に UDP開始する` and `8080 を 「::」 に 待受開始する` make IPv6 sockets. IPv6 UDP sockets send to IPv6 addresses (`「::1」` or names). Senders and `相手アドレス取得する` show addresses like `::1`. Without 「に」, or with a name, it is IPv4 as before. The outgoing `接続する` already tries both IPv4 and IPv6.
+4. **All are actions and built-ins.** The same in the interpreter, runtime library, the Go type checker and the linter. The tests are in `tests/test_udp_multicast.py` (skipped on machines where multicast to oneself doesn't arrive, and on machines without IPv6).
 
-### 文字列の中の「」
+### 「」 inside strings
 
-1. **文字列の中の「」は入れ子として数える。** `「失敗: 「abc」は数にできません」` は1つの文字列です。「が出るたびに1つ深くなり、」で1つ浅くなって、最初の「に対応する」で文字列が終わります。対応のない「や」を1つだけ入れたいときは `12300 を 文字にする`(「)や `12301 を 文字にする`(」)で作ります。VS Code の色分けと「字句」ライブラリ(点検が使う)も同じに読みます。今まで書けた `「「」`(「1文字の文字列)は、閉じていない文字列のエラーになります。
+1. **「」 inside a string are counted as nesting.** `「失敗: 「abc」は数にできません」` is one string. Each 「 goes one level deeper and each 」 one level shallower, and the string ends at the 」 matching the first 「. To include a single unmatched 「 or 」, make it with `12300 を 文字にする` (「) or `12301 を 文字にする` (」). The VS Code highlighting and the 「字句」 library (used by the linter) read them the same way. `「「」` (a one-character string 「), which used to be writable, is now an unclosed-string error.
 
-### 試験の同じ名前のファイル
+### Test files with the same name
 
-1. **自分と同じ名前のファイルを読み込むときは、自分を飛ばして探す。** `試験/会話帳.suru` の `「会話帳」 を 読み込む` は、自分自身ではなく、依存、プロジェクト(組.suru のあるフォルダ)の一番上、標準の lib の順に `会話帳.suru` を探します。どこにもなければ「自分自身を読み込むことになります」のエラーです。インタプリタ・Go 版のコンパイラ・言語サーバーで同じです。
+1. **When loading a file with the same name as itself, the file skips itself in the search.** `「会話帳」 を 読み込む` in `試験/会話帳.suru` looks for `会話帳.suru` not in itself but in dependencies, then the top of the project (the folder with 組.suru), then the standard lib. If none is found, it is the error 「自分自身を読み込むことになります」 ("this would load itself"). The interpreter, the Go compiler and the language server behave the same.
 
-### 型の宣言の「と」
+### 「と」 in type declarations
 
-1. **引数の型を「と」でつなぐと、要素ごとに型の違うものを受け取れる。** `文字列 と JSON を 一項目にする は JSON` と宣言すると、定義 `名 と 値 を 一項目にする とは …` の「名」は文字列、「値」は JSON になります。呼ぶところの `「a」 と v を 一項目にする` も、要素ごとに型を調べます。宣言がなければ、引数の「と」は今までどおり型のそろったリストです。型を表示するときは `（文字列 と JSON）` と書きます。
+1. **Joining parameter types with 「と」 accepts things whose elements have different types.** Declaring `文字列 と JSON を 一項目にする は JSON` makes 「名」 in the definition `名 と 値 を 一項目にする とは …` a string and 「値」 a JSON. At the call site, `「a」 と v を 一項目にする` is checked element by element too. Without a declaration, a parameter with 「と」 is a same-typed list as before. Such types are printed as `（文字列 と JSON）`.
 
-### 「する」で終わらない関数名
+### Function names not ending in 「する」
 
-1. **関数名が「する」で終わっていなければ、その名前を出して知らせる。** `数 で 流す は 数 を 返す 入出力動作`(型の宣言)や `x で 流す とは x`(定義)は「関数名は「する」で終わる必要があります(「流す」)」になります。
+1. **If a function name doesn't end in 「する」, the error names it.** `数 で 流す は 数 を 返す 入出力動作` (a type declaration) and `x で 流す とは x` (a definition) give 「関数名は「する」で終わる必要があります(「流す」)」 ("function names must end in 「する」 (「流す」)").
 
-### C のメモリを型を決めて読み書きする
+### Typed reads and writes of C memory
 
-C の構造体のフィールドや `char **` の配列を作るために足しました(rclsuru で `rmw_qos_profile_t` などを読み書きするため)。今までは `p から n を バイト列取得する` で写してから1バイトずつ組み立てていました。
+Added to build C struct fields and `char **` arrays (for reading and writing `rmw_qos_profile_t` and the like in rclsuru). Previously you copied with `p から n を バイト列取得する` and then assembled byte by byte.
 
 ```
 「標準」 を 読み込んで 使う
@@ -1182,17 +1192,17 @@ p から 8 で 符号付き32読取する          # -5
 （p を 8 で 番地加算する） から 0 で 符号なし8読取する
 ```
 
-1. **`p から 位置 で 型読取する` と `x を p へ 位置 で 型書込する` で、番地 p から 位置 バイト先の値を1つ読み書きする。** 型は `符号付き8`・`符号付き16`・`符号付き32`・`符号付き64`、`符号なし8`・`符号なし16`・`符号なし32`・`符号なし64`、`単精度`(float)、`小数`(double)、`番地`(ポインタ)、`真偽`(1 バイトの C の bool。0 でなければ真)、`C文字列`で、`符号付き32読取する`・`符号付き32書込する` のように型の名前に続けて書きます。標準の組み込みで、どれも動作です。位置は整数のバイト数で、負の数も書けます。書く動作の結果は書いたバイト数です。
-2. **`C文字列` はその場所に並んだ NUL で終わる UTF-8。** `C文字列読取する` は位置から NUL までを読み、`C文字列書込する` は UTF-8 のバイトと NUL を書きます(結果は NUL を含めたバイト数)。構造体の `char *` のフィールドは、`番地読取する` で番地を読んでから、その番地から `C文字列読取する` で読みます。途中に文字コード 0 を含む文字列は書けません。名前を `文字列読取する` にしないのは、「字句」ライブラリの同じ名前の関数とぶつからないようにするためです。
-3. **入らない数はエラー。** `256 を p へ 0 で 符号なし8書込する` は「「256」は符号なし8に入りません(0 から 255 までの整数です)」、整数の型への `1.5` も同じエラーです(`2.0` のように整数の小数は書けます)。
-4. **64 ビットの整数は、コンパイルしたものの整数の範囲(±2^62)まで。** `符号付き64`・`符号なし64` は ±2^62 を超える数を書けず、読んだ値が超えていれば「符号なし64の値 … が大きすぎます」の実行時エラーです(外部の関数の `int64_t` の値と同じです)。
-5. **番地(0x0)は読み書きしない。** NULL から読むと「番地(0x0)からは読み取れません」、NULL へ書くと「番地(0x0)へは書き込めません」です。ほかの番地の正しさは確かめません(C と同じく、間違えると落ちます)。
-6. **`p を n で 番地加算する` は n バイト先の番地。** `（p を 番地数値にする） + n を 番地にする` と同じで、純粋な関数です。
-7. **インタプリタ・Python 版と Go 版のコンパイラで同じ。** インタプリタは `ctypes` と `struct`、コンパイルしたものは実行時ライブラリで読み書きします。リトルエンディアン(x86-64・arm64)だけを考えています。
+1. **`p から 位置 で TYPE読取する` and `x を p へ 位置 で TYPE書込する` read and write one value at 位置 bytes past address p.** The types are `符号付き8`, `符号付き16`, `符号付き32`, `符号付き64` (signed), `符号なし8`, `符号なし16`, `符号なし32`, `符号なし64` (unsigned), `単精度` (float), `小数` (double), `番地` (pointer), `真偽` (a 1-byte C bool; true if not 0) and `C文字列`, written followed by the verb, as in `符号付き32読取する` and `符号付き32書込する`. They are standard built-ins and all actions. The offset is an integer number of bytes and may be negative. The result of a write is the number of bytes written.
+2. **`C文字列` is NUL-terminated UTF-8 laid out at that place.** `C文字列読取する` reads from the offset up to the NUL, and `C文字列書込する` writes the UTF-8 bytes and a NUL (the result is the byte count including the NUL). For a struct's `char *` field, read the address with `番地読取する`, then read from that address with `C文字列読取する`. Strings containing character code 0 can't be written. It isn't named `文字列読取する` to avoid clashing with the function of that name in the 「字句」 library.
+3. **Numbers that don't fit are errors.** `256 を p へ 0 で 符号なし8書込する` gives 「「256」は符号なし8に入りません(0 から 255 までの整数です)」 ("「256」 doesn't fit in 符号なし8 (it is an integer from 0 to 255)"), and `1.5` for an integer type gives the same error (integral decimals like `2.0` are fine).
+4. **64-bit integers are limited to the integer range of compiled programs (±2^62).** `符号付き64` and `符号なし64` can't write numbers beyond ±2^62, and reading a value beyond it is the runtime error 「符号なし64の値 … が大きすぎます」 ("the 符号なし64 value … is too large") (the same as `int64_t` values of foreign functions).
+5. **Address 0x0 is never read or written.** Reading from NULL gives 「番地(0x0)からは読み取れません」 and writing to NULL gives 「番地(0x0)へは書き込めません」. Other addresses are not validated (as in C, mistakes crash).
+6. **`p を n で 番地加算する` is the address n bytes ahead.** The same as `（p を 番地数値にする） + n を 番地にする`; a pure function.
+7. **The interpreter and both the Python and Go compilers behave the same.** The interpreter reads and writes with `ctypes` and `struct`, compiled programs with the runtime library. Only little-endian (x86-64, arm64) is considered.
 
-### C の構造体の形(C形)
+### Shapes of C structs (C形)
 
-C の構造体を組と丸ごと行き来するために足しました。`int32_t`・`uint8_t`・`float`・ポインタ・固定長の配列・入れ子の構造体が混ざり、揃え(alignment)と詰め物(padding)が入る並びを、フィールドの位置を手で数えずに読み書きします。「固定の形と固定領域」の `固定直列化する` は、どのフィールドも 8 バイトの並びだけです。
+Added to move whole C structs to and from records. Layouts mixing `int32_t`, `uint8_t`, `float`, pointers, fixed-length arrays and nested structs, with alignment and padding, can be read and written without counting field offsets by hand. `固定直列化する` in "Fixed layouts and fixed regions" handles only layouts where every field is 8 bytes.
 
 ```
 「標準」 を 読み込んで 使う
@@ -1200,25 +1210,25 @@ C の構造体を組と丸ごと行き来するために足しました。`int32
 時間形 とは （0 と 0 の 時間） を （「符号付き32」 と 「符号なし32」） で C形作成する
 品質 とは 履歴 と 深さ と 期限 と 印 の 組
 品質形 とは （0 と 0 と （0 と 0 の 時間） と 空 の 品質） を （「符号付き32」 と 「符号なし64」 と 「構造体」 と 「符号なし8[3]」） で C形作成して 3 で 時間形 に 入れ子設定する
-品質形 を C大きさにする                       # 32(sizeof)
-x とは p から 0 で 品質形 を 構造体読取した 結果     # 手順の中で
+品質形 を C大きさにする                       # 32 (sizeof)
+x とは p から 0 で 品質形 を 構造体読取した 結果     # inside a procedure
 ```
 
-1. **`見本 を 欄の型の一覧 で C形作成する` で、組の型と C の並びを結んだ「C形」を作る。** 見本はフィールドのある組で、その形(上の例の `時間`)の値を読み書きします。欄の型は見本のフィールドの順に文字列で書き、使える型は「C のメモリを型を決めて読み書きする」と同じ `符号付き8`〜`符号付き64`・`符号なし8`〜`符号なし64`・`単精度`・`小数`・`番地`・`真偽`(1 バイト)と、`構造体` です。`「符号なし8[16]」` のように `[個数]` を付けると固定長の配列で、そのフィールドは個数ぶんの要素のリストです(個数は 1 から 1048576 まで)。欄の数がフィールドの数と違うとき、見本のフィールドが欄に合わないとき(`符号付き32` の欄に文字列など)はエラーです。
-2. **`構造体` の欄は `形 を 番号 で 中の形 に 入れ子設定する` で中の形を決める。** 番号は1から数える欄の番号で、結果は中の形を決めた新しい C形です(`…して 3 で 時間形 に 入れ子設定して 4 で 時間形 に 入れ子設定する` とつなげられます)。`「構造体[2]」` なら中の形の組を2つ並べた配列です。中の形を決めないまま大きさを求めたり読み書きしたりするとエラーです。C形の値は1つの型のリストに入れられないので、入れ子は欄ごとにこうして決めます。
-3. **並べ方は C と同じ規則。** 欄はその大きさ(配列は要素の、構造体は中で一番大きいものの)の倍数の位置に置き、全体の大きさは一番大きい揃えの倍数です。`形 を C大きさにする` は sizeof、`形 を C揃えにする` は揃え、`形 を 番号 で C位置にする` は offsetof にあたる数です。今の OS と CPU(x86-64 と arm64)の普通の規則だけで、`#pragma pack` や bit field は扱いません。
-4. **`p から 位置 で 形 を 構造体読取する` と `x を p へ 位置 で 形 に 構造体書込する` でメモリと行き来する。** どちらも動作です。書くときは詰め物も含めた全体を書き(詰め物は 0)、結果は書いたバイト数です。番地(0x0)は読み書きしません。
-5. **`x を 形 で C直列化する` と `b を 形 で C復元する` でバイト列と行き来する。** バイト列の長さが C形の大きさと違えばエラーです。値の範囲(`符号なし8` に 300 など)や配列の要素の数が合わなければ、どのフィールドかを付けたエラーです。
-6. **型は `時間 の C形`。** 型の宣言にも `時間 の C形 を 大きさ取得する は 数` のように書けます。`C直列化する` に別の形の組を渡すと、型の検査で見つかります。C形の値は `<C形 時間>` と表示し、直列化(「値の直列化とセマフォ内実行する」)はできません。
-7. **インタプリタ・Python 版と Go 版のコンパイラで同じ。** 試験では、C のコンパイラが決めた sizeof と offsetof と同じになることを確かめています。
+1. **`見本 を 欄の型の一覧 で C形作成する` makes a "C形" (C shape) linking a record type to a C layout.** The sample is a record with fields, and values of its shape (`時間` in the example above) are read and written. Field types are written as strings in the order of the sample's fields; the available types are the same as in "Typed reads and writes of C memory", `符号付き8` to `符号付き64`, `符号なし8` to `符号なし64`, `単精度`, `小数`, `番地`, `真偽` (1 byte), plus `構造体` (struct). Adding `[COUNT]`, as in `「符号なし8[16]」`, makes a fixed-length array, and that field is a list of that many elements (COUNT is 1 to 1048576). It is an error if the number of field types differs from the number of fields, or if a sample field doesn't suit its type (a string for a `符号付き32` field and so on).
+2. **A `構造体` field gets its inner shape from `形 を 番号 で 中の形 に 入れ子設定する`.** The number is the field's number counting from 1, and the result is a new C形 with the inner shape set (they can be chained: `…して 3 で 時間形 に 入れ子設定して 4 で 時間形 に 入れ子設定する`). `「構造体[2]」` is an array of two records of the inner shape. Asking for the size of, or reading and writing, a shape whose inner shape isn't set is an error. C形 values can't go into a list of a single type, so nesting is set field by field like this.
+3. **The layout follows C's rules.** Each field is placed at a multiple of its size (for arrays, the element's; for structs, the largest inside), and the total size is a multiple of the largest alignment. `形 を C大きさにする` is sizeof, `形 を C揃えにする` the alignment, and `形 を 番号 で C位置にする` the number corresponding to offsetof. Only the ordinary rules of today's OSes and CPUs (x86-64 and arm64) are handled, not `#pragma pack` or bit fields.
+4. **`p から 位置 で 形 を 構造体読取する` and `x を p へ 位置 で 形 に 構造体書込する` move to and from memory.** Both are actions. A write writes the whole including padding (padding is 0), and its result is the number of bytes written. Address 0x0 is never read or written.
+5. **`x を 形 で C直列化する` and `b を 形 で C復元する` move to and from byte sequences.** A byte sequence whose length differs from the C形's size is an error. Values out of range (300 for `符号なし8` and so on) or arrays with the wrong number of elements give errors naming the field.
+6. **The type is `時間 の C形`.** It can be written in type declarations too, as in `時間 の C形 を 大きさ取得する は 数`. Passing a record of another shape to `C直列化する` is caught by the type checker. C形 values print as `<C形 時間>` and can't be serialized ("Value serialization and セマフォ内実行する").
+7. **The interpreter and both the Python and Go compilers behave the same.** The tests check that results match the sizeof and offsetof decided by the C compiler.
 
-### C から呼び戻す
+### Callbacks from C
 
-関数の番地を受け取る C の関数(`qsort` の比べる関数、イベントの見張り、ROS 2 の rcl の「新しいメッセージが来たら呼ぶ」関数など)を使えるようにしました。呼ばれ方の違う2つの形があります。
+C functions that take function addresses (the comparison function of `qsort`, event watchers, ROS 2 rcl's "call this when a new message arrives" functions and so on) can now be used. There are two forms, called in different ways.
 
 ```
 「標準」 を 読み込んで 使う
-f とは 比較すること を 「番地 と 番地」 で 「整数」 に 呼び戻し番地作成した 結果   # 手順の中で
+f とは 比較すること を 「番地 と 番地」 で 「整数」 に 呼び戻し番地作成した 結果   # inside a procedure
 p を 5 で 8 に f から 並べ替えする                                          # qsort(p, 5, 8, f)
 f を 呼び戻し解放する
 
@@ -1229,16 +1239,16 @@ g とは （0 と 0 の 新着） を c へ 「番地 と 数」 で 通路送�
 （c から 通路受信した 結果） を 表示する      # （相手 は 42 で 件数 は 1 の 新着）
 ```
 
-1. **`f を 「引数の型」 で 「値の型」 に 呼び戻し番地作成する` で、する の関数 f を呼ぶ C の関数の番地を作る。** 標準の組み込みで、動作です。引数の型は `数`(int64_t)・`整数`(int)・`小数`(double)・`単精度`(float)・`真偽`(int)・`文字列`(const char *。NULL は「」)・`番地` を `と` でつなぎ(1つ以上)、値の型はそのどれか(文字列を除く)か `無`(void)です。C から呼ばれると、引数を定義の順に f に渡し(`a を b で 比較する` なら a と b)、f の値が動作ならそれを行って、その結果を値の型にして C に返します。
-2. **同じスレッドで、外部の関数を呼んでいる途中にだけ呼べる。** qsort のように、する から呼んだ C の関数が、戻る前に呼び戻す形です。する の知らないスレッドや、外部の関数から戻った後に呼ばれると、「呼び戻しの番地が、外部の関数を呼んでいる途中ではないところ(ほかのスレッドなど)から呼ばれました」と出してプログラムを止めます。「主スレッドで呼ぶ外部の関数と単精度」の主スレッドで呼ぶ関数からの呼び戻しも、これにあたります。
-3. **呼び戻しの中のエラーは、外部の関数から戻ってからのエラーになる。** f の中の実行時エラーや、値が値の型に合わないとき(「外部の関数「呼び戻し」の「を」には数が必要です」)です。コンパイルしたものでは、エラーの位置は出ません。
-4. **`見本 を 通路 へ 「引数の型」 で 通路送り番地作成する` は、呼ばれたら引数を組にして通路に送るだけの番地。** 「スレッド」の組み込みで、動作です。する の知らないスレッド(DDS の受信のスレッドなど)からも呼べます。する のコードは C のスレッドでは動かず、見本と同じ形の組(フィールドに引数を定義の順に入れたもの)を直列化してパイプに書き、すぐ戻ります(値は `無`)。する 側は今までどおり `通路受信する` や `通路処理する` で受け取るので、スレッドの決まりは変わりません。通路は `プロセス間通路作成する` で作って、まだ受け取っていないものにします(パイプの書く口を複製して持ちます)。`番地` の引数は番地数値にした数で届くので、見本のそのフィールドは数にします(`番地にする` で戻します)。受け取る相手がいなければ捨てます。
-5. **使い終わったら `p を 呼び戻し解放する` で放す。** 作った番地は放すまで GC から守ります。番地は前もって作ってある入口を使うので、値の返し方(整数の仲間・`小数`・`単精度`)ごとに同時に 32 個までです。
-6. **作り。** 入口は整数のレジスタの引数を 8 つ、浮動小数点のレジスタの引数を 8 つ受け取る C の関数として実行時ライブラリにあり、宣言した型の順に取り出します。そのため引数は、整数の仲間が 6 つ、小数・単精度が 8 つまで(レジスタで渡す範囲)で、x86-64(System V)と arm64 だけです。構造体を値で受け取る呼び戻しや、可変長の引数の呼び戻しは作れません。インタプリタは ctypes の `CFUNCTYPE` で作ります。インタプリタ・Python 版と Go 版のコンパイラで同じです。
+1. **`f を 「ARGUMENT TYPES」 で 「VALUE TYPE」 に 呼び戻し番地作成する` makes the address of a C function that calls the Suru function f.** It is a standard built-in and an action. The argument types are `数` (int64_t), `整数` (int), `小数` (double), `単精度` (float), `真偽` (int), `文字列` (const char *; NULL is 「」) and `番地`, joined with `と` (at least one), and the value type is one of them (except 文字列) or `無` (void). When called from C, it passes the arguments to f in definition order (a and b for `a を b で 比較する`), carries out f's value if it is an action, and returns the result to C converted to the value type.
+2. **It can only be called on the same thread, while a foreign function is being called.** This is the form where a C function called from Suru calls back before returning, as qsort does. If it is called from a thread Suru doesn't know or after the foreign function has returned, it prints 「呼び戻しの番地が、外部の関数を呼んでいる途中ではないところ(ほかのスレッドなど)から呼ばれました」 ("the callback address was called from outside a foreign function call (another thread or the like)") and stops the program. Callbacks from functions called on the main thread ("Foreign functions called on the main thread, and single precision") fall into this case too.
+3. **Errors inside a callback become errors after the foreign function returns.** These are runtime errors inside f, or values that don't fit the value type (「外部の関数「呼び戻し」の「を」には数が必要です」, "the 「を」 of the foreign function 「呼び戻し」 needs a number"). Compiled programs don't show the error location.
+4. **`見本 を 通路 へ 「ARGUMENT TYPES」 で 通路送り番地作成する` is an address that, when called, just sends its arguments as a record to a channel.** It is a built-in of 「スレッド」 and an action. It can be called even from threads Suru doesn't know (such as DDS's receive thread). No Suru code runs on the C thread: it serializes a record of the same shape as the sample (with the arguments put in its fields in definition order), writes it to the pipe, and returns at once (the value is `無`). The Suru side receives with `通路受信する` or `通路処理する` as usual, so the threading rules don't change. Make the channel with `プロセス間通路作成する`, and use one that has not yet received anything (it holds a duplicate of the pipe's write end). `番地` arguments arrive as numbers made with 番地数値にする, so make that field of the sample a number (convert back with `番地にする`). If nobody receives, they are discarded.
+5. **When done, release it with `p を 呼び戻し解放する`.** A created address is protected from the GC until released. Addresses use entry points prepared in advance, so there can be at most 32 at a time per kind of return value (integer kinds, `小数`, `単精度`).
+6. **Implementation.** The entry points are C functions in the runtime library that take 8 integer-register arguments and 8 floating-point-register arguments, picked out in the order of the declared types. So arguments are limited to 6 of the integer kinds and 8 of 小数/単精度 (the range passed in registers), and only x86-64 (System V) and arm64 are supported. Callbacks that take structs by value or variadic callbacks can't be made. The interpreter makes them with ctypes' `CFUNCTYPE`. The interpreter and both the Python and Go compilers behave the same.
 
-### kumu の Cソース・C引数・リンク引数
+### kumu's Cソース, C引数 and リンク引数
 
-C のライブラリを包む する のライブラリが、小さな C のファイル(構造体を値で受け渡す関数やマクロを包むもの)を一緒に持てるようにしました。使う人が先に `cc -shared` で .so を作って置かなくても、`kumu 追加` だけで使えます。ROS 2 のように pkg-config の無いライブラリも、引数を直接書いてリンクできます。
+Suru libraries that wrap C libraries can now carry small C files with them (wrapping functions that pass structs by value, or macros). Users can use them with just `kumu 追加`, without first building a .so with `cc -shared`. Libraries without pkg-config, such as ROS 2, can be linked by writing the arguments directly.
 
 ```
 名前 とは 「rcl」
@@ -1248,41 +1258,41 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 リンク引数 とは 「-L${ROS_PREFIX}/lib -lrcl -Wl,-rpath,${ROS_PREFIX}/lib」
 ```
 
-1. **組.suru の `Cソース` に書いた C のファイルを、kumu が clang でコンパイルして一緒にリンクする。** 道はプロジェクトのフォルダからで、いくつもなら `と` でつなぎます。プロジェクトと全部の依存の Cソース を使います。中の関数は `外部の「…」 を 読み込む` を書かずに、`x を 包む とは 外部の「wrap_x」` で呼べます。`作る`・`実行`・`試験`・`公開` の試験で同じです。
-2. **`C引数` はそのプロジェクトの Cソース をコンパイルするときだけ、`リンク引数` はリンクするときに使う。** リンク引数 は依存のものも全部使います。どちらも `${名前}` を環境変数にしてから、空白で分けて clang に渡します。使う環境変数が無ければ「「rcl」のC引数「…」に使う環境変数「ROS_PREFIX」がありません」のエラーです(空のまま進めると、分かりにくいリンクのエラーになるためです)。`AMENT_PREFIX_PATH` のように `:` で区切ったものを分ける書き方はありません。
-3. **作ったオブジェクトは `出力/.c/` に置き、変わらなければ作り直さない。** C のソース・同じフォルダのヘッダー(`.h`)・C引数・C コンパイラから印を作ります。ほかのフォルダのヘッダーの変更は見ないので、そのときは `出力/.c/` を消します。バイナリの作り直しの判定(stamp)にも、Cソース・ヘッダー・引数を入れました。依存の中身のハッシュ(組.lock)は前からフォルダの全部のファイルなので、C のソースも入っています。
-4. **インタプリタ(`suru`)でも使える。** プログラムのフォルダから上へ 組.suru を探し、そのプロジェクトと 組.lock の依存の Cソース を1つの共有ライブラリにして `~/.kumu/C/`(`KUMU_HOME`)に置き、外部の関数をそこからも探します(読み込んだライブラリの後、libc の前)。中身が同じなら作り直しません。
-5. **`suru --翻訳` と `suruc` は Cソース を使わない。** プロジェクトの設定を読むのは kumu とインタプリタだけです。マイコン向け(`対象`)のプロジェクトでは、まだ使えません。
-6. **外部依存(pkg-config)とは別に書ける。** pkg-config で確かめられるものは「外部依存(システムの C のライブラリ)」の `外部依存` に、確かめられないものは リンク引数 に書きます。
+1. **kumu compiles the C files listed in `Cソース` (C sources) in 組.suru with clang and links them in.** Paths are from the project folder; several are joined with `と`. The Cソース of the project and all its dependencies are used. Functions inside can be called with `x を 包む とは 外部の「wrap_x」` without writing `外部の「…」 を 読み込む`. The same goes for `作る`, `実行`, `試験` and the tests of `公開`.
+2. **`C引数` (C arguments) is used only when compiling that project's Cソース, and `リンク引数` (link arguments) when linking.** All リンク引数 of dependencies are used too. In both, `${NAME}` is replaced by the environment variable, then the result is split on spaces and passed to clang. If an environment variable used is unset, it is the error 「「rcl」のC引数「…」に使う環境変数「ROS_PREFIX」がありません」 ("the environment variable 「ROS_PREFIX」 used in 「rcl」's C引数 「…」 is not set") (going ahead with it empty would lead to confusing link errors). There is no syntax for splitting `:`-separated values like `AMENT_PREFIX_PATH`.
+3. **Built objects go in `出力/.c/` and aren't rebuilt if nothing changed.** A fingerprint is made from the C source, headers (`.h`) in the same folder, C引数 and the C compiler. Changes to headers in other folders aren't seen, so delete `出力/.c/` in that case. The binary rebuild check (stamp) now includes Cソース, headers and arguments. The content hash of dependencies (組.lock) already covered every file in the folder, so C sources are included.
+4. **It works in the interpreter (`suru`) too.** It searches upward from the program's folder for 組.suru, builds the Cソース of that project and of the dependencies in 組.lock into one shared library in `~/.kumu/C/` (`KUMU_HOME`), and also looks up foreign functions there (after loaded libraries, before libc). If the contents are the same, it isn't rebuilt.
+5. **`suru --翻訳` and `suruc` don't use Cソース.** Only kumu and the interpreter read project settings. Projects for microcontrollers (`対象`) can't use it yet.
+6. **It can be written separately from external dependencies (pkg-config).** What pkg-config can check goes in `外部依存` ("External dependencies (system C libraries)"), and what it can't goes in リンク引数.
 
-### エラーと点検の知らせの JSON
+### JSON output for errors and lint reports
 
-1. **`--json` を付けると、エラーと点検の知らせを1行に1つの JSON で出す。** `suru --検査 --json a.suru`、`suru --点検 --json a.suru`、`suru --json a.suru`(実行)、`suru --翻訳 --json`、Go 版の `suruc --json`、`kumu 点検 --json` で使えます。形は `{"file":"a.suru","line":3,"column":7,"kind":"型","rule":null,"message":"…"}` です。AI やエディター、スクリプトが、文字の表示を読み取らずにエラーを直せるようにするためです。
-2. **キーは英語、値の種類は日本語。** `kind` は `構文`・`型`・`実行`・`コンパイル`・`点検` のどれかで、`rule` は点検の規則の名前(点検のときだけ。ほかは `null`)です。`line`・`column` は今の「何行目 何文字目」と同じ数え方で、分からなければ `null` です。
-3. **読み込んだファイルの中のエラーは、そのファイルの位置を出す。** 文字の表示は今までどおり読み込んだ行で「「部品.suru」の2行目 15文字目: …」と知らせますが、JSON では `file` を 部品.suru の道に、`line`・`column` をその中の位置にします。
-4. **出す場所と終了コードは付けないときと同じ。** エラーは標準エラー、点検の知らせは標準出力で、問題があれば終了コード 1 です。問題がなければ何も出しません(`--検査` の「型の検査で問題は見つかりませんでした」も出しません)。実行するときの `--json` はプログラムのファイルより前に書きます(後ろはプログラムへの引数です)。
-5. **Python 版と Go 版で同じ。** `suruc --検査` を足し、Go 版でも構文と型だけを調べられるようにしました。どちらも同じ JSON を出します。点検は、する で書いた `lib/点検.suru` が `--json` を受け取って出します。
+1. **With `--json`, errors and lint reports are printed as one JSON per line.** It works with `suru --検査 --json a.suru`, `suru --点検 --json a.suru`, `suru --json a.suru` (run), `suru --翻訳 --json`, the Go `suruc --json`, and `kumu 点検 --json`. The form is `{"file":"a.suru","line":3,"column":7,"kind":"型","rule":null,"message":"…"}`. This lets AI, editors and scripts fix errors without parsing the text output.
+2. **Keys are English, kind values are Japanese.** `kind` is one of `構文` (syntax), `型` (type), `実行` (runtime), `コンパイル` (compile) and `点検` (lint), and `rule` is the name of the lint rule (only for lint; otherwise `null`). `line` and `column` count the same way as the usual 「何行目 何文字目」 (line N, column M), and are `null` when unknown.
+3. **Errors inside loaded files give that file's position.** The text output still reports at the loading line, as 「「部品.suru」の2行目 15文字目: …」, but in JSON `file` is the path of 部品.suru and `line` and `column` are the position inside it.
+4. **Output streams and exit codes are the same as without it.** Errors go to standard error and lint reports to standard output, with exit code 1 if there are problems. With no problems nothing is printed (not even `--検査`'s 「型の検査で問題は見つかりませんでした」, "no problems found in type checking"). When running, write `--json` before the program file (what follows are arguments to the program).
+5. **The Python and Go versions behave the same.** `suruc --検査` was added so the Go version can check only syntax and types. Both print the same JSON. For lint, `lib/点検.suru`, written in Suru, takes `--json` and prints it.
 
-### 定義のない名前と動作のリスト
+### Undefined names and lists of actions
 
-1. **定義のない名前は、型の検査で間違いにする。** 呼ばれない枝や関数の中の打ち間違いも、`suru --検査`・`suruc`・`kumu 作る` が動かす前に `「三培する」は定義されていません(「三倍する」のことですか)` と知らせます(#149)。今までは、動かしてその行に来たときにだけエラーになり、バイナリを作っても気づけませんでした。
-2. **エラーに直し方の案内を付ける。** 名前に演算子が入っていれば「演算子の前後に空白を入れてください」(空白の書き方で `x*2` と詰めると1つの名前になるため)、読み込んでいない「標準」「通信」「スレッド」の組み込みなら「「標準」 を 読み込んで 使う と書くと使えます」、近い名前があれば「「…」のことですか」です。近い名前は、見えている名前と組み込みのうち、違う文字が名前の文字数の3分の1まで(少なくとも1文字)で一番近いもの(同じなら文字の番号の順で先のもの)です。Python 版と Go 版で同じものを選びます。
-3. **lib/ のファイルそのものを調べるときは、その組み込みも見える。** `suru --検査 lib/標準.suru` のように調べると、`切捨する` などの組み込みが使えるものとして調べます(Go 版は、同梱のものと同じ中身のファイルも)。
-4. **読み込んだファイルが読み込んだ名前も、型の検査で見える。** 実行するときは、`「部品」 を 読み込んで 使う` の 部品.suru が `「標準」 を 読み込んで 使う` と書いていれば、標準の名前(組み込みも)も前置きなしで使えます。型の検査もこれに合わせ、定義のない名前とはみなしません。
-5. **手順の中の「動作のリスト」の文は間違いにする。** `xs の それぞれ を 表示する` は表示する動作のリストを作るだけなので、手順の中に書いても何も表示されませんでした(最後の文なら黙って終わり、途中なら分かりにくいエラー)。手順の文の値が動作のリストなら「この文は動作のリストを作るだけで、行いません。行うには「を 実行する」を付けてください」にします(#151)。
+1. **Undefined names are type errors.** Typos inside branches or functions that are never called are reported before running by `suru --検査`, `suruc` and `kumu 作る`, as `「三培する」は定義されていません(「三倍する」のことですか)` ("「三培する」 is not defined (did you mean 「三倍する」?)") (#149). Previously they were errors only when execution reached that line, so you couldn't notice even by building a binary.
+2. **Errors come with hints on how to fix them.** If the name contains an operator, 「演算子の前後に空白を入れてください」 ("put spaces around the operator") (because packing `x*2` in the spaced style makes it one name); if it is a built-in of 「標準」, 「通信」 or 「スレッド」 that isn't loaded, 「「標準」 を 読み込んで 使う と書くと使えます」 ("write 「標準」 を 読み込んで 使う to use it"); if there is a close name, 「「…」のことですか」 ("did you mean 「…」?"). The close name is the nearest among visible names and built-ins whose differing characters are at most a third of the name's length (at least 1 character) (on a tie, the one first in character-code order). The Python and Go versions pick the same one.
+3. **When checking a file in lib/ itself, its built-ins are visible.** Checking `suru --検査 lib/標準.suru`, for example, treats built-ins such as `切捨する` as available (the Go version does so also for files with the same contents as the bundled ones).
+4. **Names loaded by a loaded file are visible to the type checker too.** At runtime, if 部品.suru in `「部品」 を 読み込んで 使う` itself writes `「標準」 を 読み込んで 使う`, the standard names (built-ins included) can be used without a prefix. The type checker follows this and doesn't treat them as undefined.
+5. **A sentence in a procedure that is a "list of actions" is an error.** `xs の それぞれ を 表示する` only builds a list of print actions, so writing it in a procedure printed nothing (silently ending as the last sentence, or giving a confusing error in the middle). If the value of a procedure's sentence is a list of actions, it is now 「この文は動作のリストを作るだけで、行いません。行うには「を 実行する」を付けてください」 ("this sentence only builds a list of actions and doesn't carry them out; add 「を 実行する」 to do so") (#151).
 
-### AI の手引き
+### Guide for AI
 
-1. **AI が最初に読む手引きを [docs/AIの手引き.md](docs/AIの手引き.md) に置く。** 文法の要点、よくある間違いと直し方、検査・点検・試験の流し方を1ファイルにまとめました。`CLAUDE.md` と `AGENTS.md` から指しています。
-2. **手引きのコード例は試験で確かめる。** ` ```suru ` の例は型の検査が通ること、` ```suru-誤り ` の例はエラーになることを `tests/test_ai_guide.py` で確かめ、手引きが言語とずれないようにします。
+1. **A guide for AI to read first is in [docs/AIの手引き.md](docs/AIの手引き.md).** It gathers the essentials of the grammar, common mistakes and how to fix them, and how to run checks, lint and tests, in one file (in Japanese). `CLAUDE.md` and `AGENTS.md` point to it.
+2. **The guide's code examples are verified by tests.** `tests/test_ai_guide.py` checks that ` ```suru ` examples pass the type check and that ` ```suru-誤り ` examples are errors, so the guide doesn't drift from the language.
 
-## ライセンス
+## License
 
-- 本体(`suru.py`・`suru_check.py`・`suru_compile.py`、Go 版の `compiler/`・`cmd/`): [GPL-3.0-or-later](LICENSE)
-- 実行時ライブラリ(`runtime/`)と標準ライブラリ(`lib/`): [MIT](runtime/LICENSE)
+- The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)
+- The runtime library (`runtime/`) and standard library (`lib/`): [MIT](runtime/LICENSE)
 
-自分で書いた する のプログラムと、`suru --翻訳` で作った LLVM IR・実行ファイルは、あなたのものです。好きなライセンスで配れます。コンパイラが出力に書き込む部分も GPL の対象にしない、という追加の許可を `suru_compile.py` と `compiler/compile.go` の先頭に書いています(中に入る実行時ライブラリと標準ライブラリは MIT なので、その著作権表示を残すだけで足ります)。
+The Suru programs you write, and the LLVM IR and executables made with `suru --翻訳`, are yours. You may distribute them under any license you like. An additional permission at the top of `suru_compile.py` and `compiler/compile.go` states that the parts the compiler writes into its output are not covered by the GPL either (the runtime library and standard library that go inside are MIT, so keeping their copyright notice is enough).
 
-## 今後の候補
+## Future work
 
-分野ごとに [docs/今後/](docs/今後/) のファイルに書いています(1つの分野に1ファイル。同時に進む作業が同じ行を書きかえないようにするためです)。
+Candidates are written in files in [docs/今後/](docs/今後/), one file per area (so that work going on at the same time doesn't rewrite the same lines). They are in Japanese.

@@ -1,30 +1,32 @@
-# 「する」の VS Code 拡張
+English | [日本語](README_jp.md)
 
-日本語の関数型プログラミング言語「する」(`.suru`)を VS Code で書くための拡張です。
+# VS Code extension for Suru (「する」)
 
-- **色分け**: 関数名(「…する」「…して」「…すること」「…である」など)、組み込み関数、格助詞(を・に・で・から・へ・より・と・の・が)、キーワード(とは・もし・ならば・そうでなければ・ただし・手順 …)、文字列「…」、『』の名前、数、コメント、読み込んだファイルの名前(`数学内の`)。空白の書き方と句読点の書き方(「。」「、」を含む行)の両方に対応します。予約されている「・」は赤くなります。
-- **書きながらの型の検査**: 言語サーバー `suru-ls`(Go 版の字句・構文・型検査を使う)が、打っている途中から間違いに波線を引き、「問題」パネルに出します。間違いは、一番外の文(定義や式)ごとに1つずつ出します(構文の間違いも型の間違いも)。構文の間違いがある文を飛ばして残りを調べるので、ほかの文のホバーや補完も使えます。言語サーバーがないときは、開いたときと保存したときに `suru --検査` で調べます。
-- **点検の知らせ**: `lib/点検.suru`(する で書いた linter、`suru --点検` と同じもの)の知らせを、開いたときと保存したときに警告(黄色の波線)で出します。電球のクイックフィックス「この行の「…」を黙らせる」で、行の終わりに `# 点検しない: 規則名` を足せます。点検は初めの1回だけバイナリにして使うので、clang が必要です(ないときは点検の知らせだけ出ません)。
-- **型のホバー**: 名前や関数の上にマウスを置くと型が出ます(`三倍する は （数 を 受け取って 数 を 返すこと）`)。関数には、どの助詞で引数を渡すかの使い方(`n を 三倍する`、組み込みなら `… を （… に） 加算する`。括弧は省けるもの)も出ます。定義のところでは定義の型、使ったところではそこでの型です。組み込み関数や `標準内の…` にも出ます。
-- **定義へ移動**(F12、Ctrl+クリック): 関数や値の定義へ移ります。場合ごとの定義は全部を出します。読み込んだファイル(`数学内の…`、`標準内の…`)の中へも移れます。
-- **定義の一覧**: アウトラインと Ctrl+Shift+O に、ファイルの中の定義と型が並びます。
-- **補完**(Ctrl+Space): 定義した関数・値、引数、組み込み関数、型・形・フィールドの名前、読み込んだファイルの名前(`標準内の…`)、キーワードを型と一緒に出します。句読点の書き方で `5を三倍` のように前の単語とくっついていても、`三倍` の部分を補います。ひらがなを含む値の名前は『』で囲んで入れます。関数の候補には使い方(助詞)も出ます。
-- **名前の変更**(F2): このファイルで定義した関数・値の名前を、定義・型の宣言・使ったところ全部で変えます。`三倍して` `三倍しまして` のような形でも語幹だけを変えます。引数の名前は、その定義の中だけで変えます(同じ名前の引数を受け取るほかの定義はそのまま)。読み込んだファイルの名前と、型・形・フィールドの名前はまだ変えられません。
-- **型の名前の色分け**: 型・形・性質・フィールドの名前に色が付きます(`リスト とは …` のように値として定義した名前には付けません)。
-- **実行**: エディターの右上の ▷ か F5 で、ターミナルで実行します(`入力する` の受け答えもそこでできます)。
-- **バイナリを作る**: `suru --翻訳` を動かします(clang が必要)。
-- **kumu(プロジェクト管理)**: 組.suru のあるプロジェクトで、`kumu 実行`・`作る`・`試験`・`点検`・`取得` をコマンドパレットから動かします。`試験/` のファイルでは、「…試験する とは」の行の上の「▷ 試験する」で、その試験だけを動かせます。`kumu` は別に入れます(`brew install suru-lang/suru/suru`、GitHub Releases、`go install github.com/suru-lang/suru/cmd/kumu@latest`)。
-- 括弧（）・「」・『』の自動で閉じる、`#` のコメント切り替え(Ctrl+/)、「とは」や「もし … が」の後の字下げ。
+An extension for writing Suru (`.suru`), a functional programming language in Japanese, in VS Code.
 
-コマンドパレット(Ctrl+Shift+P)では「する: このファイルを実行する」「する: 型を検査する」「する: バイナリを作る」「する: 言語サーバーを再起動する」と、kumu の「する: プロジェクトを実行する(kumu 実行)」などです。
+- **Syntax highlighting**: function names (「…する」, 「…して」, 「…すること」, 「…である」 and so on), built-in functions, case particles (を・に・で・から・へ・より・と・の・が), keywords (とは・もし・ならば・そうでなければ・ただし・手順 …), strings 「…」, names in 『』, numbers, comments, and names of loaded files (`数学内の`). Both the spaced style and the punctuation style (lines containing 「。」 or 「、」) are supported. The reserved 「・」 is shown in red.
+- **Type checking as you type**: the language server `suru-ls` (using the Go version's lexer, parser and type checker) underlines mistakes with squiggles while you type and lists them in the Problems panel. One error is reported per outermost sentence (definition or expression), for both syntax and type errors. Sentences with syntax errors are skipped and the rest is still checked, so hovers and completion keep working in other sentences. Without the language server, files are checked with `suru --検査` when opened and saved.
+- **Lint reports**: reports from `lib/点検.suru` (the linter written in Suru, the same as `suru --点検`) appear as warnings (yellow squiggles) when a file is opened and saved. The light-bulb quick fix 「この行の「…」を黙らせる」 ("silence 「…」 on this line") adds `# 点検しない: RULE` at the end of the line. The linter is built into a binary the first time it is used, so clang is required (without it, only the lint reports are missing).
+- **Type hovers**: hovering over a name or function shows its type (`三倍する は （数 を 受け取って 数 を 返すこと）`). Functions also show how to pass arguments, with which particles (`n を 三倍する`, or for built-ins `… を （… に） 加算する`, where parentheses mark optional ones). At a definition you see the defined type; at a use, the type there. Built-in functions and `標準内の…` get hovers too.
+- **Go to definition** (F12, Ctrl+click): jumps to the definition of a function or value. Case-by-case definitions show all of them. It can also jump into loaded files (`数学内の…`, `標準内の…`).
+- **List of definitions**: the Outline and Ctrl+Shift+O list the definitions and types in the file.
+- **Completion** (Ctrl+Space): offers defined functions and values, parameters, built-in functions, names of types, shapes and fields, names from loaded files (`標準内の…`) and keywords, with their types. Even when the word is attached to the previous one in the punctuation style, as in `5を三倍`, it completes the `三倍` part. Value names containing hiragana are inserted enclosed in 『』. Function candidates also show how to call them (particles).
+- **Rename** (F2): renames a function or value defined in this file at its definition, its type declaration and every use. Forms like `三倍して` and `三倍しまして` have only their stem changed. Parameter names are renamed only within that definition (other definitions taking a parameter of the same name are left alone). Names from loaded files and names of types, shapes and fields can't be renamed yet.
+- **Coloring of type names**: names of types, shapes, traits and fields are colored (names defined as values, as in `リスト とは …`, are not).
+- **Run**: ▷ at the top right of the editor, or F5, runs the file in a terminal (you can answer `入力する` prompts there too).
+- **Build a binary**: runs `suru --翻訳` (clang is required).
+- **kumu (project management)**: in a project with 組.suru, runs `kumu 実行`, `作る`, `試験`, `点検` and `取得` (run, build, test, lint, fetch) from the command palette. In files in `試験/`, 「▷ 試験する」 above a 「…試験する とは」 line runs just that test. Install `kumu` separately (`brew install suru-lang/suru/suru`, GitHub Releases, or `go install github.com/suru-lang/suru/cmd/kumu@latest`).
+- Auto-closing of （）, 「」 and 『』, comment toggling with `#` (Ctrl+/), and indentation after 「とは」 and 「もし … が」.
 
-## 入れ方
+The command palette (Ctrl+Shift+P) has 「する: このファイルを実行する」 (run this file), 「する: 型を検査する」 (check types), 「する: バイナリを作る」 (build a binary), 「する: 言語サーバーを再起動する」 (restart the language server), and kumu's commands such as 「する: プロジェクトを実行する(kumu 実行)」 (run the project).
 
-1. 「する」本体を入れます: `pip install suru-lang` か `brew install suru-lang/suru/suru`(`suru` コマンドが使えるようになります。リポジトリからなら一番上で `pip install .`)。
-   入れなくても、リポジトリのフォルダーを VS Code で開けば、一番上の `suru.py` を `python3` で動かします。
-2. 拡張を入れます。拡張機能ビューで「する」を検索して入れるか、`suru-0.1.0.vsix` があれば、VS Code の拡張機能ビューの「…」→「VSIX からのインストール…」で選びます(コマンドなら `code --install-extension suru-0.1.0.vsix`)。
+## Installing
 
-`.vsix` は次のように作れます(Node.js と Go が必要です)。`build_server.sh` が Linux・macOS・Windows 用の `suru-ls` を `server/` に作り、`.vsix` に同梱します。
+1. Install Suru itself: `pip install suru-lang` or `brew install suru-lang/suru/suru` (this provides the `suru` command; from the repository, `pip install .` at the top).
+   Even without installing, if you open the repository folder in VS Code, the `suru.py` at the top is run with `python3`.
+2. Install the extension. Search for 「する」 in the Extensions view, or, if you have `suru-0.1.0.vsix`, choose it under "…" → "Install from VSIX…" in the Extensions view (or from the command line, `code --install-extension suru-0.1.0.vsix`).
+
+The `.vsix` can be built as follows (Node.js and Go are required). `build_server.sh` builds `suru-ls` for Linux, macOS and Windows into `server/`, and it is bundled in the `.vsix`.
 
 ```sh
 cd editors/vscode
@@ -33,34 +35,34 @@ npm install
 npx @vscode/vsce package
 ```
 
-言語サーバーだけを入れるなら `go install github.com/suru-lang/suru/cmd/suru-ls@latest` です(拡張は `~/go/bin/suru-ls` も探します)。
+To install only the language server: `go install github.com/suru-lang/suru/cmd/suru-ls@latest` (the extension also looks for `~/go/bin/suru-ls`).
 
-開発中は、このフォルダーを VS Code で開いて F5 を押すと、拡張を入れた VS Code が別の窓で開きます。
+During development, open this folder in VS Code and press F5 to open another window of VS Code with the extension installed.
 
-## 設定
+## Settings
 
-| 設定 | 既定 | 意味 |
+| Setting | Default | Meaning |
 |---|---|---|
-| `suru.command` | (空) | 「する」を動かすコマンド。例: `suru`、`python3 /path/to/suru.py`。空なら、開いているフォルダーの一番上の `suru.py`、なければ `suru` |
-| `suru.python` | (空) | `suru.py` を動かす Python。空なら Windows では `python`、それ以外では `python3` |
-| `suru.languageServer` | (空) | 言語サーバー `suru-ls` の場所。空なら同梱のもの、PATH、`~/go/bin` の順に探す。`off` で使わない |
-| `suru.kumu` | (空) | プロジェクト管理の `kumu` の場所。空なら PATH、`~/go/bin` の順に探す |
-| `suru.checkOnSave` | `true` | 言語サーバーがないとき、開いたときと保存したときに `suru --検査` で調べる |
+| `suru.command` | (empty) | The command that runs Suru, e.g. `suru` or `python3 /path/to/suru.py`. If empty, the `suru.py` at the top of the open folder, or else `suru` |
+| `suru.python` | (empty) | The Python that runs `suru.py`. If empty, `python` on Windows and `python3` elsewhere |
+| `suru.languageServer` | (empty) | Location of the language server `suru-ls`. If empty, the bundled one, then PATH, then `~/go/bin`. `off` disables it |
+| `suru.kumu` | (empty) | Location of `kumu`, the project manager. If empty, PATH, then `~/go/bin` |
+| `suru.checkOnSave` | `true` | Without the language server, check with `suru --検査` when a file is opened and saved |
 
-## 色分けの文法を直すとき
+## Changing the highlighting grammar
 
-`syntaxes/suru.tmLanguage.json` は `make_grammar.py` が `suru.py` のキーワードや組み込み関数の一覧から作ります。言語に言葉を足したら、リポジトリの一番上で次を実行してください(古いままだとテストが失敗します)。
+`syntaxes/suru.tmLanguage.json` is generated by `make_grammar.py` from the lists of keywords and built-in functions in `suru.py`. After adding words to the language, run the following at the top of the repository (the tests fail if it is stale).
 
 ```sh
 python3 editors/vscode/make_grammar.py
 ```
 
-## 言語サーバーについて
+## About the language server
 
-`cmd/suru-ls` が言語サーバーです。中身は Go 版コンパイラの `compiler.Analyze` で、型の検査をしながら、名前を使ったところと定義したところの型を覚えておきます。構文の解析と型の検査は最初の間違いで止まるので、構文の間違いならその一番外の文の行を空にして読み直し、型の間違いならその文を除いて調べ直して、ほかの文の間違いも探します(それぞれ20個まで)。読み込んだファイルは保存されている中身を使います(保存すると、開いているファイルを全部調べ直します)。同梱の標準ライブラリは、定義へ移動できるようにキャッシュのフォルダ(Linux なら `~/.cache/suru/`)に書き出して使います。`SURU_LIB` があればそちらを使います。
+`cmd/suru-ls` is the language server. Inside it is the Go compiler's `compiler.Analyze`, which remembers the types where names are used and defined while type checking. Parsing and type checking stop at the first error, so for a syntax error it blanks the lines of that outermost sentence and rereads, and for a type error it rechecks without that sentence, to find errors in other sentences too (up to 20 of each). Loaded files are read as saved (saving rechecks every open file). The bundled standard library is written out to the cache folder (`~/.cache/suru/` on Linux) so that go to definition can reach it. If `SURU_LIB` is set, that is used instead.
 
-点検は、`lib/点検.suru` を Go 版のコンパイラと clang で初めの1回だけバイナリにして、キャッシュのフォルダに `点検-…` として置きます(lib か実行時ライブラリが変われば作り直します)。作っている間(数秒)は型の間違いだけを出し、できたら開いているファイルを点検します。保存していない中身は一時ファイルに書いて `--代わり 一時ファイル 本当の道` で渡すので、「読み込んで 使う」ファイルは本当の道のフォルダから探します。
+For linting, `lib/点検.suru` is built into a binary with the Go compiler and clang only the first time, and placed in the cache folder as `点検-…` (rebuilt when lib or the runtime library changes). While it is being built (a few seconds) only type errors are shown; once ready, open files are linted. Unsaved contents are written to a temporary file and passed as `--代わり TEMP_FILE REAL_PATH`, so files loaded with 「読み込んで 使う」 are looked up from the real path's folder.
 
-## ライセンス
+## License
 
-GPL-3.0-or-later(リポジトリの [LICENSE](../../LICENSE))。
+GPL-3.0-or-later ([LICENSE](../../LICENSE) of the repository).
