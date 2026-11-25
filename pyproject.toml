@@ -46,4 +46,4 @@ only-include = ["suru.py", "suru_check.py", "suru_compile.py"]
 "runtime" = "suru_data/runtime"
 
 [tool.hatch.build.targets.sdist]
-include = ["suru.py", "suru_check.py", "suru_compile.py", "lib/", "runtime/", "examples/", "tests/", "README.md", "LICENSE"]
+include = ["suru.py", "suru_check.py", "suru_compile.py", "lib/", "runtime/", "examples/", "tests/", "README.md", "README_jp.md", "LICENSE"]

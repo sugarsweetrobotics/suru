@@ -37,6 +37,7 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 wi
   cp "$root/LICENSE" "$dir/LICENSE"
   cp "$root/runtime/LICENSE" "$dir/LICENSE-runtime-lib"
   cp "$root/README.md" "$dir/README.md"
+  cp "$root/README_jp.md" "$dir/README_jp.md"
   if [ "$goos" = windows ]; then
     (cd "$work" && zip -qr "$out/$name.zip" "$name")
     echo "$name.zip"
