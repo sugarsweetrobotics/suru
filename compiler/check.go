@@ -5,6 +5,7 @@ package compiler
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -550,7 +551,15 @@ func (c *Checker) expect(actual, expected Type, line Pos, what string) {
 func (c *Checker) checkProgram(program []Node) {
 	c.base = newTEnv(nil)
 	c.checked = map[string]*TEnv{}
-	env := c.checkUnit(program, nil)
+	// lib/ のファイルそのものを調べるときは、そのファイルの組み込みも見える
+	var prims map[string]any
+	if bs := mainLibPrimitives(c.ctx.Path); bs != nil {
+		prims = map[string]any{}
+		for _, b := range bs {
+			prims[b.Name] = &PrimRef{b.Name}
+		}
+	}
+	env := c.checkUnit(program, prims)
 	for _, s := range program {
 		if _, ok := s.(*Define); ok || isTopLevelOnly(s) {
 			continue
@@ -579,7 +588,7 @@ func (c *Checker) checkUnit(program []Node, prims map[string]any) *TEnv {
 					local.hidden[name] = imp.Module.Name
 				}
 			}
-			for name, v := range sc.vars {
+			for name, v := range exportedVars(sc) {
 				if !strings.HasPrefix(name, "\x00") && !strings.Contains(name, ModuleSep) && !imp.Module.Private[name] {
 					local.set(imp.Module.Name+ModuleSep+name, v)
 					if imp.Open {
@@ -666,7 +675,7 @@ func (c *Checker) checkModule(m *Module, line Pos) *TEnv {
 	var sc *TEnv
 	err := try(func() {
 		var prims map[string]any
-		if bs := libPrimitives(m.Path); bs != nil {
+		if bs := mainLibPrimitives(m.Path); bs != nil {
 			prims = map[string]any{}
 			for _, b := range bs {
 				prims[b.Name] = &PrimRef{b.Name}
@@ -1473,8 +1482,8 @@ func (c *Checker) inferVar(n *Var, env *TEnv) Type {
 	if info, ok := c.ctx.Ctors.Get(n.Name); ok && len(info.Fields) == 0 {
 		return c.ctorType(n.Name)
 	}
-	c.checkHidden(n.Name, env, n.Line)
-	return newTVar()
+	c.unknownName(n.Name, env, n.Line)
+	return nil
 }
 
 func (c *Checker) inferBinOp(n *BinOp, env *TEnv) Type {
@@ -1714,8 +1723,97 @@ func (c *Checker) callType(name string, args typedArgs, line Pos, env *TEnv) Typ
 		c.env = env
 		return typer(c, args, line)
 	}
+	c.unknownName(name, env, line)
+	return nil
+}
+
+// unknownName は、どこにも定義のない名前のエラーにする(打ち間違いを動かす前に知らせる #149)
+func (c *Checker) unknownName(name string, env *TEnv, line Pos) {
 	c.checkHidden(name, env, line)
-	return newTVar()
+	c.fail(line, "「"+displayName(name)+"」は定義されていません"+c.unknownHint(name, env))
+}
+
+// unknownHint は定義のない名前のエラーに付ける案内(演算子の詰め書き・読み込み忘れ・近い名前)
+func (c *Checker) unknownHint(name string, env *TEnv) string {
+	if strings.ContainsAny(name, "+-*/%^<>=＋－＊／×÷") {
+		return "(演算子の前後に空白を入れてください。詰めて書くと1つの名前になります)"
+	}
+	for _, lib := range []string{StdPath, NetPath, ThreadPath} {
+		for _, b := range libPrimitives(lib) {
+			if b.Name == name {
+				base := filepath.Base(strings.TrimPrefix(lib, embeddedLibPrefix))
+				return "(「" + strings.TrimSuffix(base, SourceSuffix) + "」 を 読み込んで 使う と書くと使えます)"
+			}
+		}
+	}
+	known := map[string]bool{}
+	for k := range builtinCalls {
+		known[k] = true
+	}
+	for k := range builtinFuns {
+		known[k] = true
+	}
+	for k := range c.methodTrait {
+		known[k] = true
+	}
+	for _, k := range c.ctx.Ctors.keys {
+		known[k] = true
+	}
+	for e := env; e != nil; e = e.parent {
+		for k := range e.vars {
+			if !strings.HasPrefix(k, "\x00") {
+				known[k] = true
+			}
+		}
+	}
+	if close := closestName(name, known); close != "" {
+		return "(「" + close + "」のことですか)"
+	}
+	return ""
+}
+
+// editDistance は文字ごとの編集距離(足す・消す・置きかえる)
+func editDistance(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	prev := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i, ca := range ra {
+		cur := make([]int, len(rb)+1)
+		cur[0] = i + 1
+		for j, cb := range rb {
+			d := prev[j]
+			if ca != cb {
+				d++
+			}
+			cur[j+1] = min(prev[j+1]+1, cur[j]+1, d)
+		}
+		prev = cur
+	}
+	return prev[len(rb)]
+}
+
+// closestName は打ち間違いと思われる名前に一番近い名前(suru_check.py の closest_name と同じ)
+func closestName(name string, known map[string]bool) string {
+	keys := make([]string, 0, len(known))
+	for k := range known {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	n := len([]rune(name))
+	limit := max(1, n/3)
+	best, bestD := "", limit+1
+	for _, k := range keys {
+		kn := len([]rune(k))
+		if k == name || kn-n > limit || n-kn > limit {
+			continue
+		}
+		if d := editDistance(name, k); d < bestD {
+			best, bestD = k, d
+		}
+	}
+	return best
 }
 
 // checkHidden は、読み込んだファイルの非公開の名前を使っていれば「定義されていません」にする
@@ -1766,8 +1864,8 @@ func (c *Checker) funValue(name string, env *TEnv, line Pos) Type {
 	if sig, ok := builtinFuns[name]; ok {
 		return sig()
 	}
-	c.checkHidden(name, env, line)
-	return newTVar()
+	c.unknownName(name, env, line)
+	return nil
 }
 
 func (c *Checker) inferRef(n *Ref, env *TEnv) Type {
@@ -2284,6 +2382,7 @@ func (c *Checker) doType(stmts []Node, i int, env *TEnv, line Pos) Type {
 	if sl.Line == 0 {
 		sl = line
 	}
+	c.checkActionList(v, sl)
 	if i+1 == len(stmts) {
 		out := newTVar()
 		c.post(&Constraint{T: v, Line: sl, Op: "wrap", Extra: []Type{out}}, env)
@@ -2367,6 +2466,35 @@ func (c *Checker) inferRunUnwrap(n *Run, env *TEnv) Type {
 }
 
 // doUnwrapType は手順の文の中の「した 中身」: 動作なら行ってから、その結果(成否・有無)の中の値を使う
+// exportedVars は読み込んだファイルから見える名前(suru_check.py の exported_vars と同じ)。実行するときと同じく、
+// そのファイルが読み込んだ名前(「読み込んで 使う」の名前や lib/ の組み込み)も、自分の定義と一緒に見える
+// (sc の親は checkUnit の local)
+func exportedVars(sc *TEnv) map[string]any {
+	out := map[string]any{}
+	if sc.parent != nil {
+		for k, v := range sc.parent.vars {
+			out[k] = v
+		}
+	}
+	for k, v := range sc.vars {
+		out[k] = v
+	}
+	return out
+}
+
+// actionListMessage は手順の文の値が動作のリストのときのエラー(#151)
+const actionListMessage = "この文は動作のリストを作るだけで、行いません。" +
+	"行うには「を 実行する」を付けてください(例: （xs の それぞれ を 表示する） を 実行する)"
+
+// checkActionList は、手順の文の値が動作のリストなら、行われないのでエラーにする
+func (c *Checker) checkActionList(t Type, line Pos) {
+	if r, ok := prune(t).(*TCon); ok && r.Name == "リスト" && len(r.Args) > 0 {
+		if e, ok := prune(r.Args[0]).(*TCon); ok && e.Name == "動作" {
+			c.fail(line, actionListMessage)
+		}
+	}
+}
+
 func (c *Checker) doUnwrapType(stmts []Node, i int, env *TEnv, line Pos, r *Run, key string) Type {
 	top := c.exits[len(c.exits)-1]
 	top.used = true

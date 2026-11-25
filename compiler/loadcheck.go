@@ -87,6 +87,28 @@ func libPrimitives(path string) []builtinInfo {
 	return nil
 }
 
+// mainLibPrimitives は、調べるファイルが lib/ のファイル(同梱のものと同じ中身のものも)なら、その組み込み
+// (リポジトリの lib/ のファイルそのものや、それが読み込む隣の lib/ のファイルを調べるとき)
+func mainLibPrimitives(path string) []builtinInfo {
+	if path == "" {
+		return nil
+	}
+	if bs := libPrimitives(path); bs != nil {
+		return bs
+	}
+	for _, emb := range []string{StdPath, NetPath, ThreadPath, PreludePath} {
+		if filepath.Base(path) != filepath.Base(strings.TrimPrefix(emb, embeddedLibPrefix)) {
+			continue
+		}
+		a, okA := readSource(path)
+		b, okB := readSource(emb)
+		if okA && okB && a == b {
+			return libPrimitives(emb)
+		}
+	}
+	return nil
+}
+
 // isLibFile は path が同梱の lib/ のファイル embedded(StdPath など)か、LibDir の同じ名前のファイルか
 func isLibFile(path, embedded string) bool {
 	if path == embedded {
