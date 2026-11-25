@@ -98,7 +98,8 @@ declare i64 @rt_global_cached(ptr, ptr, i32)
 declare void @rt_top(i64)
 declare void @rt_top_unwrap(i64)
 declare void @rt_safepoint()
-@rt_gc_stop = external global i32
+@rt_gc_stop = external dso_local global i32
+@rt_sp_tick = external thread_local(localexec) global i32
 declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)
 declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)
 declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)
@@ -343,6 +344,17 @@ sp.wait:
   call void @rt_safepoint()
   br label %b0`
 
+// 自分だけを呼ぶ再帰の関数の安全点(#81): スレッドごとの数(rt_sp_tick)を減らし、64 回に1回だけ rt_gc_stop を見る。
+// Python 版の SAFEPOINT_SELF と同じ
+const safepointSelf = `  %tk = load i32, ptr @rt_sp_tick, align 4
+  %tk1 = sub i32 %tk, 1
+  store i32 %tk1, ptr @rt_sp_tick, align 4
+  %tkz = icmp eq i32 %tk1, 0
+  br i1 %tkz, label %sp.tick, label %b0
+sp.tick:
+  store i32 64, ptr @rt_sp_tick, align 4
+` + safepoint
+
 // 呼んでも する のコードに戻らない実行時の関数(Python 版の LEAF_SAFE と同じ)
 var leafSafe = map[string]bool{}
 
@@ -355,8 +367,34 @@ func init() {
 	}
 }
 
-// 行の中の呼び出しがみな leafSafe なら真(Python 版の CALL_RE と同じ読み方: 「call 」の後の最初の @ か % から「(」まで)
-func isLeaf(lines []string) bool {
+// entrySafepoint は関数の入口の安全点: 葉なら置かない、自分だけを呼ぶなら間引く、ほかはいつも見る(Python 版の entry_safepoint と同じ)
+func entrySafepoint(header string, lines []string) string {
+	self := ""
+	if i := strings.Index(header, "@"); i >= 0 {
+		if j := strings.IndexAny(header[i:], "( \t\n"); j >= 0 && header[i+j] == '(' {
+			self = header[i : i+j]
+		}
+	}
+	leaf, onlySelf := true, true
+	forEachCall(lines, func(name string) {
+		if !leafSafe[name] {
+			leaf = false
+			if name != self {
+				onlySelf = false
+			}
+		}
+	})
+	switch {
+	case leaf:
+		return "  br label %b0"
+	case onlySelf && self != "":
+		return safepointSelf
+	}
+	return safepoint
+}
+
+// 行の中の呼び出しの名前ごとに f を呼ぶ(Python 版の CALL_RE と同じ読み方: 「call 」の後の最初の @ か % から「(」まで)
+func forEachCall(lines []string, f func(string)) {
 	for _, l := range lines {
 		for rest := l; ; {
 			i := strings.Index(rest, "call ")
@@ -378,13 +416,10 @@ func isLeaf(lines []string) bool {
 				rest = name[1:]
 				continue
 			}
-			if !leafSafe[name[:k]] {
-				return false
-			}
+			f(name[:k])
 			rest = name[k:]
 		}
 	}
-	return true
 }
 
 func isWordByte(c byte) bool {
@@ -410,11 +445,7 @@ func (f *fnGen) finish(header string) string {
 	} else {
 		fmt.Fprintf(&b, "\n  %%fr = alloca i64, i32 %d", f.nslots)
 	}
-	if isLeaf(f.lines) {
-		b.WriteString("\n  store ptr %up, ptr %fr\n  br label %b0")
-	} else {
-		b.WriteString("\n  store ptr %up, ptr %fr\n" + safepoint)
-	}
+	b.WriteString("\n  store ptr %up, ptr %fr\n" + entrySafepoint(header, f.lines))
 	for _, l := range f.lines {
 		b.WriteString("\n" + l)
 	}
@@ -564,11 +595,7 @@ func (c *Compiler) ex(node Node, sc *scope, fg *fnGen) string {
 		t := c.ex(n.Operand, sc, fg)
 		return fg.call("i64", "@rt_neg", fmt.Sprintf("i64 %s, i32 0", t))
 	case *Not:
-		t := c.ex(n.Operand, sc, fg)
-		b := fg.call("i32", "@rt_truth", fmt.Sprintf("i64 %s, ptr %s, i32 %d", t, c.cstr(Denai), posOf(lineOf(n.Operand))))
-		x := fg.tmp()
-		fg.emit(x + " = xor i32 " + b + ", 1")
-		return fg.call("i64", "@rt_bool", "i32 "+x)
+		return c.boolValue(c.truth(n, sc, fg, ""), fg)
 	case *BinOp:
 		return c.exBinOp(n, sc, fg)
 	case *If:
@@ -766,7 +793,7 @@ func (c *Compiler) exBinOp(n *BinOp, sc *scope, fg *fnGen) string {
 		fg.start(ok)
 		fastVal, fastLabel = val, ok
 	} else {
-		pred := map[string]string{"<": "slt", ">": "sgt", "<=": "sle", ">=": "sge", "==": "eq", "!=": "ne"}[n.Op]
+		pred := cmpPred[n.Op]
 		cmp, z := fg.tmp(), fg.tmp()
 		fg.emit(fmt.Sprintf("%s = icmp %s i64 %s, %s", cmp, pred, a, b))
 		fg.emit(fmt.Sprintf("%s = zext i1 %s to i32", z, cmp))
@@ -783,38 +810,93 @@ func (c *Compiler) exBinOp(n *BinOp, sc *scope, fg *fnGen) string {
 	return res
 }
 
-func (c *Compiler) logic(n *BinOp, sc *scope, fg *fnGen) string {
-	what := c.cstr(n.Op)
-	a := c.ex(n.Left, sc, fg)
-	ta := fg.call("i32", "@rt_truth", fmt.Sprintf("i64 %s, ptr %s, i32 %d", a, what, posOf(lineOf(n.Left))))
-	cc := fg.tmp()
-	stopOn := 0
-	if n.Op == KwMataha {
-		stopOn = 1
+// boolValue は i1 を真偽の値にする
+func (c *Compiler) boolValue(b string, fg *fnGen) string {
+	z := fg.tmp()
+	fg.emit(fmt.Sprintf("%s = zext i1 %s to i32", z, b))
+	return fg.call("i64", "@rt_bool", "i32 "+z)
+}
+
+// cmpPred は比較の演算子に対応する icmp の述語
+var cmpPred = map[string]string{"<": "slt", ">": "sgt", "<=": "sle", ">=": "sge", "==": "eq", "!=": "ne"}
+
+// truth は式の真偽を i1 で返す。what が "" なら「もし」の読み方(rt_truthy)、あれば真偽でないとエラー(rt_truth)。
+// 整数の比較・「かつ」「または」・「ではない」は真偽の値を作らずに分岐できるようにする(#80)。Python 版の truth と同じ
+func (c *Compiler) truth(n Node, sc *scope, fg *fnGen, what string) string {
+	toI1 := func(v string) string {
+		var t string
+		if what == "" {
+			t = fg.call("i32", "@rt_truthy", "i64 "+v)
+		} else {
+			t = fg.call("i32", "@rt_truth", fmt.Sprintf("i64 %s, ptr %s, i32 %d", v, c.cstr(what), posOf(lineOf(n))))
+		}
+		b := fg.tmp()
+		fg.emit(fmt.Sprintf("%s = icmp ne i32 %s, 0", b, t))
+		return b
 	}
-	fg.emit(fmt.Sprintf("%s = icmp eq i32 %s, %d", cc, ta, stopOn))
+	if nt, ok := n.(*Not); ok {
+		b := c.truth(nt.Operand, sc, fg, Denai)
+		x := fg.tmp()
+		fg.emit(fmt.Sprintf("%s = xor i1 %s, true", x, b))
+		return x
+	}
+	bo, ok := n.(*BinOp)
+	if ok && (bo.Op == KwKatsu || bo.Op == KwMataha) {
+		return c.logicI1(bo, sc, fg)
+	}
+	if !ok || cmpPred[bo.Op] == "" {
+		return toI1(c.ex(n, sc, fg))
+	}
+	// 比較: 両方が整数なら icmp の結果でそのまま分岐する
+	a := c.ex(bo.Left, sc, fg)
+	b := c.ex(bo.Right, sc, fg)
+	both, fast, slow, join := fg.tmp(), fg.newLabel(), fg.newLabel(), fg.newLabel()
+	x, cc, cmp := fg.tmp(), fg.tmp(), fg.tmp()
+	fg.emit(fmt.Sprintf("%s = and i64 %s, %s", x, a, b))
+	fg.emit(fmt.Sprintf("%s = and i64 %s, 1", both, x))
+	fg.emit(fmt.Sprintf("%s = icmp ne i64 %s, 0", cc, both))
+	fg.emit(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", cc, fast, slow))
+	fg.start(fast)
+	fg.emit(fmt.Sprintf("%s = icmp %s i64 %s, %s", cmp, cmpPred[bo.Op], a, b))
+	fg.emit("br label %" + join)
+	fg.start(slow)
+	v := fg.call("i64", "@rt_binop", fmt.Sprintf("i32 %d, i64 %s, i64 %s, i32 %d", opIDs[bo.Op], a, b, posOf(bo.Line)))
+	sv := toI1(v)
+	fg.emit("br label %" + join)
+	fg.start(join)
+	r := fg.tmp()
+	fg.emit(fmt.Sprintf("%s = phi i1 [%s, %%%s], [%s, %%%s]", r, cmp, fast, sv, slow))
+	return r
+}
+
+func (c *Compiler) logic(n *BinOp, sc *scope, fg *fnGen) string {
+	return c.boolValue(c.logicI1(n, sc, fg), fg)
+}
+
+// logicI1 は「かつ」「または」を i1 で返す: 左で決まれば右は計算しない
+func (c *Compiler) logicI1(n *BinOp, sc *scope, fg *fnGen) string {
+	ta := c.truth(n.Left, sc, fg, n.Op)
 	done, right, join := fg.newLabel(), fg.newLabel(), fg.newLabel()
-	fg.emit(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", cc, done, right))
+	stopOn := n.Op == KwMataha
+	if stopOn {
+		fg.emit(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", ta, done, right))
+	} else {
+		fg.emit(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", ta, right, done))
+	}
 	fg.start(done)
-	v1 := fg.call("i64", "@rt_bool", fmt.Sprintf("i32 %d", stopOn))
 	fg.emit("br label %" + join)
 	fg.start(right)
-	b := c.ex(n.Right, sc, fg)
-	tb := fg.call("i32", "@rt_truth", fmt.Sprintf("i64 %s, ptr %s, i32 %d", b, what, posOf(lineOf(n.Right))))
-	v2 := fg.call("i64", "@rt_bool", "i32 "+tb)
+	tb := c.truth(n.Right, sc, fg, n.Op)
 	l2 := fg.label
 	fg.emit("br label %" + join)
 	fg.start(join)
 	r := fg.tmp()
-	fg.emit(fmt.Sprintf("%s = phi i64 [%s, %%%s], [%s, %%%s]", r, v1, done, v2, l2))
+	fg.emit(fmt.Sprintf("%s = phi i1 [%t, %%%s], [%s, %%%s]", r, stopOn, done, tb, l2))
 	return r
 }
 
 func (c *Compiler) exIf(n *If, sc *scope, fg *fnGen) string {
-	cv := c.ex(n.Cond, sc, fg)
-	t := fg.call("i32", "@rt_truthy", "i64 "+cv)
-	b := fg.tmp()
-	fg.emit(fmt.Sprintf("%s = icmp ne i32 %s, 0", b, t))
+	b := c.truth(n.Cond, sc, fg, "")
 	lt, le, lj := fg.newLabel(), fg.newLabel(), fg.newLabel()
 	fg.emit(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", b, lt, le))
 	fg.start(lt)
@@ -1250,10 +1332,7 @@ func (c *Compiler) exMatch(n *Match, sc *scope, fg *fnGen) string {
 		local := newScope(sc, fg)
 		c.pattern(cs.Pat, subj, nxt, local, fg)
 		if cs.Guard != nil {
-			g := c.ex(cs.Guard, local, fg)
-			t := fg.call("i32", "@rt_truth", fmt.Sprintf("i64 %s, ptr %s, i32 %d", g, c.cstr(KwKatsu), posOf(lineOf(cs.Guard))))
-			cc := fg.tmp()
-			fg.emit(fmt.Sprintf("%s = icmp ne i32 %s, 0", cc, t))
+			cc := c.truth(cs.Guard, local, fg, KwKatsu)
 			ok := fg.newLabel()
 			fg.emit(fmt.Sprintf("br i1 %s, label %%%s, label %%%s", cc, ok, nxt))
 			fg.start(ok)

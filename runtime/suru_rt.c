@@ -27,9 +27,11 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 typedef int64_t V;
@@ -121,6 +123,7 @@ typedef struct GcBlk {
     int large, atomic;
     uint8_t *mark;       /* オブジェクトごとの状態(GC_FREE / GC_USED / GC_MARKED) */
     size_t cursor;       /* ここから先で空いているもの(GC_FREE)を探す */
+    size_t fresh;        /* ここから先は一度も使っていない(中身が 0 のまま)ので、確保するときに 0 で埋めなくてよい */
     struct GcBlk *next;  /* 空きのあるブロックのつながり */
 } GcBlk;
 
@@ -176,6 +179,7 @@ static pthread_cond_t world_stop_cv = PTHREAD_COND_INITIALIZER;   /* 動いて�
 static pthread_cond_t world_resume_cv = PTHREAD_COND_INITIALIZER; /* GC が終わった */
 static pthread_mutex_t alloc_mu = PTHREAD_MUTEX_INITIALIZER;      /* 領域の表と、共有の空きブロック */
 int32_t rt_gc_stop;                     /* GC が止まってほしいとき 1(IR の安全点が読む) */
+_Thread_local int32_t rt_sp_tick = 64;  /* 自分だけを呼ぶ再帰の関数が、安全点を見るまでの残りの回数(IR が減らす、#81) */
 static int world_running = 1;           /* 動いているスレッドの数(world_mu) */
 
 /* いまのレジスタとスタックの位置を残す(このあと GC がこのスレッドのスタックを調べてよい) */
@@ -333,11 +337,39 @@ static GcBlk *gc_find(uintptr_t p) {
     return p < (uintptr_t)b->end ? b : NULL;
 }
 
-/* 新しいブロック(どのつながりにも入れない。alloc_mu を持たずに呼び、表に足すところだけ持つ) */
+/* ブロックの領域は、大きな塊を mmap でまとめて取って切り分ける(#82)。ブロックごとに取るより
+ * ページを割り当てる回数(と mmap の呼び出し)が減り、Linux では大きなページ(2MB)も使える。
+ * 塊は GC_CHUNK にそろえ、ブロックは GC_BLOCK にそろう(gc_find が下位を落として引く)。
+ * mmap した領域は中身が 0 なので、初めて使うオブジェクトは 0 で埋めなくてよい(GcBlk.fresh)。ブロックは返さない */
+#define GC_CHUNK ((size_t)2 << 20)
+static char *gc_chunk_cur, *gc_chunk_end; /* alloc_mu */
+
+static char *gc_block_mem(void) {
+    if (world_multi) pthread_mutex_lock(&alloc_mu);
+    if (gc_chunk_cur == gc_chunk_end) {
+        size_t len = 2 * GC_CHUNK;
+        char *p = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) gc_oom();
+        char *a = (char *)(((uintptr_t)p + GC_CHUNK - 1) & ~(uintptr_t)(GC_CHUNK - 1));
+        if (a > p) munmap(p, (size_t)(a - p));
+        if (a + GC_CHUNK < p + len) munmap(a + GC_CHUNK, (size_t)(p + len - (a + GC_CHUNK)));
+#ifdef MADV_HUGEPAGE
+        madvise(a, GC_CHUNK, MADV_HUGEPAGE);
+#endif
+        gc_chunk_cur = a;
+        gc_chunk_end = a + GC_CHUNK;
+    }
+    char *mem = gc_chunk_cur;
+    gc_chunk_cur += GC_BLOCK;
+    if (world_multi) pthread_mutex_unlock(&alloc_mu);
+    return mem;
+}
+
+/* 新しいブロック(どのつながりにも入れない。alloc_mu を持たずに呼び、領域を取るところと表に足すところだけ持つ) */
 static GcBlk *gc_new_block(int atomic, int k) {
     GcBlk *b = malloc(sizeof(GcBlk));
-    char *mem = aligned_alloc(GC_BLOCK, GC_BLOCK); /* 番地を GC_BLOCK にそろえる(gc_find が下位を落として引く) */
-    if (!b || !mem) gc_oom();
+    if (!b) gc_oom();
+    char *mem = gc_block_mem();
     b->osz = GC_SIZES[k];
     b->nobj = GC_BLOCK / b->osz;
     b->start = mem;
@@ -347,6 +379,7 @@ static GcBlk *gc_new_block(int atomic, int k) {
     b->mark = calloc(b->nobj, 1);
     if (!b->mark) gc_oom();
     b->cursor = 0;
+    b->fresh = 0;
     b->next = NULL;
     if (world_multi) pthread_mutex_lock(&alloc_mu);
     gc_add_region(b);
@@ -555,7 +588,8 @@ static void *gc_alloc(int64_t size, int atomic) {
     b->cursor = i + 1;
     *f = GC_USED;
     void *o = b->start + i * b->osz;
-    memset(o, 0, GC_SIZES[k]);
+    if (i < b->fresh) memset(o, 0, GC_SIZES[k]); /* 前に使ったところ(新しい領域は 0 のまま) */
+    else b->fresh = i + 1;
     gc_count_alloc(t, GC_SIZES[k]);
     return o;
 }
@@ -3716,7 +3750,53 @@ static void world_changed(void) {
 /* world_mu を持って呼び、ready(arg) が真になるまで(外に出て)待つ。持ったまま戻るので、続けて状態を変えられる。
  * ほかのスレッドがみな同じように待っていて、どれも進めないなら、ずっと終わらないのでエラーにする
  * (動いているスレッドや、外部の関数や入力で待っているスレッドは、そのうち進むかもしれないので数えない) */
+/* 眠る前に回って待つ時間(#83)。相手がすぐに来る受け渡し(容量 0 の通路など)では、眠って起こされる
+ * (スレッドの切り替え2回、約 20 µs)より速い。回って間に合えば長くし、間に合わなければ短くする(適応的なスピン)。
+ * pause 命令の長さは CPU によって 10 倍ほど違うので、回数ではなく時間で区切る。CPU が1つなら回らない。
+ * ready は world_mu なしで読める(状態は atomic で書く)ものだけ */
+#define WORLD_SPIN_MIN_NS 1000
+#define WORLD_SPIN_MAX_NS 16000
+static int world_spin_ok = -1; /* 回ってよいか(まだ調べていなければ -1) */
+static int64_t world_spin_ns = 4000;
+
+static inline void cpu_relax(void) {
+#if defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__) || defined(__arm__)
+    __asm__ __volatile__("yield");
+#endif
+}
+
+static int64_t mono_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+/* world_mu を持って呼び、持ったまま戻る。手放している間に ready(arg) が真になれば 1。
+ * GC が止まってほしいとき(rt_gc_stop)はすぐにやめる(回っている間は「動いている」ので GC を待たせる) */
+static int world_spin_wait(int (*ready)(void *), void *arg) {
+    if (!world_multi) return 0;
+    if (world_spin_ok < 0) world_spin_ok = sysconf(_SC_NPROCESSORS_ONLN) > 1;
+    if (!world_spin_ok) return 0;
+    int64_t n = __atomic_load_n(&world_spin_ns, __ATOMIC_RELAXED);
+    pthread_mutex_unlock(&world_mu);
+    int ok = 0;
+    int64_t until = mono_ns() + n;
+    for (int i = 1; !__atomic_load_n(&rt_gc_stop, __ATOMIC_RELAXED); i++) {
+        if (ready(arg)) { ok = 1; break; }
+        cpu_relax();
+        if (i % 32 == 0 && mono_ns() > until) break;
+    }
+    pthread_mutex_lock(&world_mu);
+    if (ok) n = n * 2 > WORLD_SPIN_MAX_NS ? WORLD_SPIN_MAX_NS : n * 2;
+    else n = n / 2 < WORLD_SPIN_MIN_NS ? WORLD_SPIN_MIN_NS : n / 2;
+    __atomic_store_n(&world_spin_ns, n, __ATOMIC_RELAXED);
+    return ok;
+}
+
 static void world_wait(int (*ready)(void *), void *arg, int32_t pos) {
+    int spun = 0;
     while (!ready(arg)) {
         int stuck = 1;
         for (SThread *t = threads; t && stuck; t = t->next)
@@ -3724,6 +3804,10 @@ static void world_wait(int (*ready)(void *), void *arg, int32_t pos) {
         if (stuck) {
             world_unlock();
             fail(pos, "すべてのスレッドが待っていて、先に進めません(通路や合流の待ち)");
+        }
+        if (!spun) {
+            spun = 1;
+            if (world_spin_wait(ready, arg)) continue;
         }
         SThread *me = self_thread;
         me->warg = arg;
