@@ -7184,8 +7184,14 @@ def _take_json_flag(argv: list[str]) -> tuple[list[str], bool]:
     return out + argv[k:], found
 
 
+# 再帰の深さの上限(#152)。Python 3.12 からは Python の関数を呼ぶたびに C のスタックを使わないので、
+# 大きくしても止まらない(する の 1 段はおよそ Python の 3〜4 段で、20万段ほど。1 段におよそ 4KB のメモリを使う)。それより前は C のスタックがあふれないように小さくしておく
+RECURSION_LIMIT = 1_000_000 if sys.version_info >= (3, 12) else 10000
+DEEP_RECURSION_MESSAGE = "再帰が深すぎます(もっと深い再帰は、suruc か suru --翻訳 でコンパイルすると動きます)"
+
+
 def main(argv: list[str]) -> int:
-    sys.setrecursionlimit(10000)
+    sys.setrecursionlimit(RECURSION_LIMIT)
     if len(argv) >= 2 and argv[1] in ("--version", "--版"):
         print(f"する {__version__}")
         return 0
@@ -7208,7 +7214,12 @@ def main(argv: list[str]) -> int:
             return 2
         with open(rest[0], encoding="utf-8") as f:
             source = f.read()
-        if not type_check(source, os.path.dirname(os.path.abspath(rest[0])), rest[0], as_json):
+        try:
+            if not type_check(source, os.path.dirname(os.path.abspath(rest[0])), rest[0], as_json):
+                return 1
+        except RecursionError:
+            e = SuruError(DEEP_RECURSION_MESSAGE, None)
+            print(error_json(e, "型", rest[0]) if as_json else format_error(e, source), file=sys.stderr)
             return 1
         if not as_json:
             print("型の検査で問題は見つかりませんでした")
@@ -7238,6 +7249,8 @@ def main(argv: list[str]) -> int:
             return 1
     except SuruError as e:  # 構文のエラー
         return report(e, "構文")
+    except RecursionError:
+        return report(SuruError(DEEP_RECURSION_MESSAGE, None), "型")
     interp = Interpreter()
     interp.ctx.base_dir = base_dir
     interp.ctx.path = os.path.abspath(argv[1])
@@ -7245,6 +7258,9 @@ def main(argv: list[str]) -> int:
         interp.run(source, emit=lambda v: print(interp.format(v)))
     except SuruError as e:
         return report(e, "実行")
+    except RecursionError:
+        # Python のトレースバックではなく、する のエラーとして知らせる
+        return report(SuruError(DEEP_RECURSION_MESSAGE, None), "実行")
     return 0
 
 

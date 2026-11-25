@@ -207,7 +207,7 @@ def test_いろいろなプログラム(name, tmp_path):
 
 
 def test_深い再帰も動く(tmp_path):
-    # インタプリタでは再帰が深すぎて止まる深さ
+    # Python 3.11 までのインタプリタでは再帰が深すぎて止まる深さ
     assert compiled(DEEP, tmp_path).stdout == "100000\n"
 
 
