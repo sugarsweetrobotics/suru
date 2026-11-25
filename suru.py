@@ -5543,7 +5543,7 @@ def extern_builtin(d: Define) -> Builtin:
             f = ctypes.CFUNCTYPE(_ffi_ctype(ext.result), *[_ffi_ctype(t) for t in ts], use_errno=True)(fp.value)
             args = [_ffi_arg(t, a[p], d.name, p, line) for i, (t, p) in enumerate(zip(ext.params, parts)) if i != k]
             ctypes.set_errno(0)
-            return _ffi_result(ext.result, f(*args), d.name, line)
+            return _ffi_result(ext.result, _ffi_invoke(f, args), d.name, line)
         if not cfn:
             f = _ffi_symbol(ext, line)
             if ext.cargs:
@@ -5557,7 +5557,7 @@ def extern_builtin(d: Define) -> Builtin:
         if ext.cargs:
             args = [v if k == "定数" else args[v] for k, v in ext.cargs]
         ctypes.set_errno(0)
-        return _ffi_result(ext.result, cfn[0](*args), d.name, line)
+        return _ffi_result(ext.result, _ffi_invoke(cfn[0], args), d.name, line)
 
     def act(a: dict, line: int) -> Any:
         # 動作の C の関数は、子のプロセスや C の stdio と表示の順が入れ替わらないよう、それまでの表示を出してから呼ぶ
@@ -5568,6 +5568,185 @@ def extern_builtin(d: Define) -> Builtin:
         return Builtin(d.name, [(p, True) for p in parts],
                        lambda it, a, line: Action(d.name, lambda it2: act(a, line)))
     return Builtin(d.name, [(p, True) for p in parts], lambda it, a, line: call(a, line))
+
+# --- C から呼び戻す(「呼び戻し番地作成する」「通路送り番地作成する」。runtime/suru_rt.c の cb_* と同じ) ---
+CB_SLOTS, CB_MAX_INT, CB_MAX_FLT = 32, 6, 8
+CB_TYPES = {"数": "i64", "整数": "i32", "小数": "f64", "単精度": "f32", "真偽": "bool", "文字列": "str", "番地": "ptr"}
+CB_RET_TYPES = {"数": "i64", "整数": "i32", "小数": "f64", "単精度": "f32", "真偽": "bool", "番地": "ptr", "無": "void"}
+_CALLBACKS: dict = {}  # 番地 → (ctypes の関数, 値の返し方, 通路のパイプの口か None)
+_CB_TLS = __import__("threading").local()  # depth: 外部の関数を呼んでいる途中か、error: 呼び戻しの中のエラー
+
+
+def _cb_types(s: Any, fn: str, line: int) -> list:
+    s = _str(s, f"「{fn}」の「で」", line)
+    words = s.split()
+    out = []
+    for i, w in enumerate(words):
+        if i % 2 == 1:
+            if w != KW_TO or i == len(words) - 1:
+                raise SuruError(f"「{s}」は「{fn}」の引数の型の並びではありません(数・整数・小数・単精度・真偽・文字列・番地を「と」でつなぎます)", line)
+            continue
+        if w not in CB_TYPES:
+            raise SuruError(f"「{s}」は「{fn}」の引数の型の並びではありません(数・整数・小数・単精度・真偽・文字列・番地を「と」でつなぎます)", line)
+        out.append(CB_TYPES[w])
+        if sum(t not in ("f64", "f32") for t in out) > CB_MAX_INT or sum(t in ("f64", "f32") for t in out) > CB_MAX_FLT:
+            raise SuruError(f"「{fn}」の引数の型が多すぎます(整数・番地などは {CB_MAX_INT} 個、小数・単精度は {CB_MAX_FLT} 個までです)", line)
+    if not out:
+        raise SuruError(f"「{fn}」の引数の型を1つ以上書いてください(「番地 と 数」)", line)
+    return out
+
+
+def _cb_family(ret: str) -> str:
+    return ret if ret in ("f64", "f32") else "int"
+
+
+def _cb_take(ret: str, line: int) -> None:
+    fam = _cb_family(ret)
+    if sum(1 for v in _CALLBACKS.values() if v[1] == fam) >= CB_SLOTS:
+        raise SuruError(f"呼び戻しの番地が足りません(値の返し方ごとに {CB_SLOTS} 個までです。使わないものは「呼び戻し解放する」で放します)", line)
+
+
+def _cb_die(msg: str) -> None:
+    sys.stdout.flush()
+    sys.stderr.write(f"エラー: {msg}\n")
+    sys.stderr.flush()
+    os._exit(1)
+
+
+def _cb_value(t: str, x: Any) -> Any:
+    if t in ("f64", "f32"):
+        return float(x)
+    if t == "bool":
+        return x != 0
+    if t == "str":
+        return "" if x is None else x.decode("utf-8", "replace")
+    if t == "ptr":
+        return Address(x or 0)
+    if not MIN_COMPILED_INT <= x <= MAX_COMPILED_INT:
+        raise SuruError(f"整数が大きすぎます(コンパイルしたプログラムの整数は ±{MAX_COMPILED_INT} までです)", None)
+    return x
+
+
+def _ffi_invoke(f: Any, args: list) -> Any:
+    """C の関数を呼ぶ。呼び戻しの中でエラーになったら、戻ってからそのエラーにする"""
+    _CB_TLS.depth = getattr(_CB_TLS, "depth", 0) + 1
+    try:
+        r = f(*args)
+    finally:
+        _CB_TLS.depth -= 1
+    err = getattr(_CB_TLS, "error", None)
+    if err is not None and _CB_TLS.depth == 0:
+        _CB_TLS.error = None
+        raise err
+    return r
+
+
+def _cb_new(it: "Interpreter", f: Any, types: Any, ret: Any, line: int) -> Action:
+    import ctypes
+
+    if not isinstance(f, FUNCTION_TYPES):
+        raise SuruError(f"「呼び戻し番地作成する」の「を」は関数でなければなりません(「{format_value(f)}」が渡されました)", line)
+    ts = _cb_types(types, "呼び戻し番地作成する", line)
+    r = _str(ret, "「呼び戻し番地作成する」の「に」", line)
+    if r not in CB_RET_TYPES:
+        raise SuruError(f"「{r}」は呼び戻しの値の型ではありません(数・整数・小数・単精度・真偽・番地・無のどれかです)", line)
+    rt = CB_RET_TYPES[r]
+
+    def callback(*cargs: Any) -> Any:
+        if getattr(_CB_TLS, "depth", 0) <= 0:
+            _cb_die("呼び戻しの番地が、外部の関数を呼んでいる途中ではないところ(ほかのスレッドなど)から呼ばれました"
+                    "(ほかのスレッドからは「通路送り番地作成する」を使います)")
+        if getattr(_CB_TLS, "error", None) is not None:
+            return 0 if rt not in ("f64", "f32") else 0.0
+        try:
+            v = it.apply(f, [_cb_value(t, x) for t, x in zip(ts, cargs)], line)
+            if isinstance(v, ACTION_TYPES):
+                v = it.perform(v)
+            if rt == "void":
+                return None
+            c = _ffi_arg(rt, v, "呼び戻し", WO, line)
+            return c if rt != "ptr" else (c or 0)
+        except SuruError as e:
+            _CB_TLS.error = e
+            return None if rt == "void" else 0.0 if rt in ("f64", "f32") else 0
+
+    def perform(it2: "Interpreter") -> Address:
+        _cb_take(rt, line)
+        proto = ctypes.CFUNCTYPE(_ffi_ctype(rt), *[_ffi_ctype(t) for t in ts])
+        cf = proto(callback)
+        addr = ctypes.cast(cf, ctypes.c_void_p).value
+        _CALLBACKS[addr] = (cf, _cb_family(rt), None)
+        return Address(addr)
+    return Action("呼び戻し番地作成する", perform)
+
+
+def _cb_chan(sample: Any, chan: Any, types: Any, line: int) -> Action:
+    import ctypes
+
+    c = _need_chan(chan, "「通路送り番地作成する」の「へ」", line)
+    ts = _cb_types(types, "通路送り番地作成する", line)
+    if not isinstance(sample, Record) or len(sample.fields) != len(ts):
+        raise SuruError(f"「通路送り番地作成する」の「を」は、フィールドが {len(ts)} 個の組でなければなりません(「{format_value(sample)}」が渡されました)", line)
+    names = {v: k for k, v in CB_TYPES.items()}
+    for i, (t, x) in enumerate(zip(ts, sample.values), 1):
+        want = "真偽" if t == "bool" else "文字列" if t == "str" else "数"
+        ok = isinstance(x, bool) if t == "bool" else isinstance(x, str) if t == "str" else (isinstance(x, (int, float)) and not isinstance(x, bool))
+        if not ok:
+            raise SuruError(f"見本の{i}番目のフィールド「{format_value(x)}」は{want}でなければなりません(型は「{names[t]}」。番地は番地数値にした数で届きます)", line)
+    if not isinstance(c, _PipeChan) or c.path is not None or c.w < 0:
+        raise SuruError("「通路送り番地作成する」の通路は、プロセス間通路作成する で作って、まだ受け取っていない通路にします", line)
+
+    def perform(it2: "Interpreter") -> Address:
+        _cb_take("void", line)
+        fd = os.dup(c.w)
+
+        def callback(*cargs: Any) -> None:
+            vals = []
+            for t, x in zip(ts, cargs):
+                if t in ("f64", "f32"):
+                    vals.append(float(x))
+                elif t == "bool":
+                    vals.append(x != 0)
+                elif t == "str":
+                    vals.append("" if x is None else x.decode("utf-8", "replace"))
+                else:
+                    vals.append(_signed_addr(x or 0) if t == "ptr" else x)
+            d = _serialize(Record(sample.ctor, sample.type_name, sample.fields, tuple(vals)), line)
+            data = len(d).to_bytes(4, "little") + d
+            try:
+                while data:
+                    data = data[os.write(fd, data):]
+            except OSError:
+                pass  # 受け取る相手がいない: 捨てる
+
+        cf = ctypes.CFUNCTYPE(None, *[_ffi_ctype(t) for t in ts])(callback)
+        addr = ctypes.cast(cf, ctypes.c_void_p).value
+        _CALLBACKS[addr] = (cf, "int", fd)
+        return Address(addr)
+    return Action("通路送り番地作成する", perform)
+
+
+def _cb_free(p: Any, line: int) -> Action:
+    a = _addr(p, "「呼び戻し解放する」の「を」", line)
+
+    def perform(it: "Interpreter") -> int:
+        if a.value not in _CALLBACKS:
+            raise SuruError(f"「{format_value(a)}」は呼び戻しの番地ではありません(放したものか、作っていないもの)", line)
+        _, _, fd = _CALLBACKS.pop(a.value)
+        if fd is not None:
+            os.close(fd)
+        return 0
+    return Action("呼び戻し解放する", perform)
+
+
+STD_PRIMITIVES.extend([
+    Builtin("呼び戻し番地作成する", [(WO, True), ("で", True), ("に", True)],
+            lambda it, a, line: _cb_new(it, a[WO], a["で"], a["に"], line)),
+    Builtin("呼び戻し解放する", [(WO, True)], lambda it, a, line: _cb_free(a[WO], line)),
+])
+THREAD_PRIMITIVES.append(Builtin("通路送り番地作成する", [(WO, True), ("へ", True), ("で", True)],
+                                 lambda it, a, line: _cb_chan(a[WO], a["へ"], a["で"], line)))
+
 
 # lib/ のファイルごとの組み込み(そのファイルの中と、読み込んだ側の「標準内の…」「通信内の…」で使える)
 LIB_PRIMITIVES = {STD_PATH: STD_PRIMITIVES, NET_PATH: NET_PRIMITIVES, THREAD_PATH: THREAD_PRIMITIVES,

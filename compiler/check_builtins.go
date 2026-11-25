@@ -277,6 +277,8 @@ func init() {
 	shapePrim("C直列化する", func(x, y Type) []TParam { return []TParam{{WO, x}, {"で", cshape(x)}} }, func(x, y Type) Type { return bytesT })
 	shapePrim("C復元する", func(x, y Type) []TParam { return []TParam{{WO, bytesT}, {"で", cshape(x)}} }, func(x, y Type) Type { return x })
 	shapePrim("構造体読取する", func(x, y Type) []TParam { return []TParam{{"から", addr}, {"で", NUM}, {WO, cshape(x)}} }, func(x, y Type) Type { return act(x) })
+	shapePrim("呼び戻し番地作成する", func(x, y Type) []TParam { return []TParam{{WO, x}, {"で", STR}, {"に", STR}} }, func(x, y Type) Type { return act(addr) })
+	simple("呼び戻し解放する", []TParam{{WO, addr}}, act(NUM))
 	shapePrim("構造体書込する", func(x, y Type) []TParam { return []TParam{{WO, x}, {"へ", addr}, {"で", NUM}, {"に", cshape(x)}} }, func(x, y Type) Type { return act(NUM) })
 	// C のメモリを型を決めて読み書きする(suru.py の C_MEM_TYPES)
 	for _, m := range []struct {
@@ -427,6 +429,7 @@ func init() {
 	chanPrim("通路送信する", func(x Type) []TParam { return []TParam{{WO, x}, {"へ", chanT(x)}} }, func(x Type) Type { return act(x) })
 	chanPrim("通路受信する", func(x Type) []TParam { return []TParam{{"から", chanT(x)}} }, func(x Type) Type { return act(x) })
 	chanPrim("通路閉鎖する", func(x Type) []TParam { return []TParam{{WO, chanT(x)}} }, func(x Type) Type { return act(chanT(x)) })
+	chanPrim("通路送り番地作成する", func(x Type) []TParam { return []TParam{{WO, x}, {"へ", chanT(x)}, {"で", STR}} }, func(x Type) Type { return act(addr) })
 	lockT, slotT := &TCon{"ロック", []Type{addr}}, &TCon{"枠", []Type{addr}} // 中身の欄はいつも番地(表示では省かれる)
 	boxT := func(t Type) Type { return &TCon{"箱", []Type{t}} }
 	simple("ロック作成する", nil, act(lockT))

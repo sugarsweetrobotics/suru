@@ -2118,6 +2118,8 @@ _shape_prim("C位置にする", lambda x, y: [(WO, _cshape_t(x)), ("で", NUM)],
 _shape_prim("C直列化する", lambda x, y: [(WO, x), ("で", _cshape_t(x))], lambda x, y: BYTES)
 _shape_prim("C復元する", lambda x, y: [(WO, BYTES), ("で", _cshape_t(x))], lambda x, y: x)
 _shape_prim("構造体読取する", lambda x, y: [("から", ADDR), ("で", NUM), (WO, _cshape_t(x))], lambda x, y: act(x))
+_shape_prim("呼び戻し番地作成する", lambda x, y: [(WO, x), ("で", STR), ("に", STR)], lambda x, y: act(ADDR))
+_simple("呼び戻し解放する", [(WO, ADDR)], act(NUM))
 _shape_prim("構造体書込する", lambda x, y: [(WO, x), ("へ", ADDR), ("で", NUM), ("に", _cshape_t(x))], lambda x, y: act(NUM))
 # C のメモリを型を決めて読み書きする(suru.py の C_MEM_TYPES)
 for _t, _v in [("符号付き8", NUM), ("符号付き16", NUM), ("符号付き32", NUM), ("符号付き64", NUM), ("符号なし8", NUM),
@@ -2290,6 +2292,7 @@ _simple("名前つき通路削除する", [(WO, STR)], act(NUM))
 _chan_prim("通路送信する", lambda x: [(WO, x), ("へ", _chan(x))], lambda x: act(x))
 _chan_prim("通路受信する", lambda x: [("から", _chan(x))], lambda x: act(x))
 _chan_prim("通路閉鎖する", lambda x: [(WO, _chan(x))], lambda x: act(_chan(x)))
+_chan_prim("通路送り番地作成する", lambda x: [(WO, x), ("へ", _chan(x)), ("で", STR)], lambda x: act(ADDR))
 
 
 LOCK, SLOT = TCon("ロック", (ADDR,)), TCon("枠", (ADDR,))  # 中身の欄はいつも番地(表示では省かれる)

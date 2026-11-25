@@ -69,7 +69,7 @@ typedef struct Fn {
     struct Trait *trait;    /* FK_TRAIT */
     int32_t wo, wo_list;
 } Fn;
-enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_SENDB, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT, A_MEMR, A_MEMW, A_STRUCTR, A_STRUCTW,
+enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_SENDB, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT, A_MEMR, A_MEMW, A_STRUCTR, A_STRUCTW, A_CB_NEW, A_CB_CHAN, A_CB_FREE,
        A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_FIFO_NEW, A_CH_FIFO_OPEN, A_CH_FIFO_DEL, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
        A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY, A_INPUT_OPT, A_RECVB, A_TIMEOUT,
        A_UDP_OPEN, A_UDP_SEND, A_UDP_RECV, A_LOCAL_PORT, A_PEER_ADDR, A_PEER_PORT,
@@ -988,6 +988,8 @@ static V impl_fn(Impl *im, const char *name) {
     return 0;
 }
 
+static void cb_mark_tables(void); /* 呼び戻しの表(下で定義) */
+static V cb_run(Act *a);
 static void gc_mark_tables(void) {
     for (int i = 0; i < nshared; i++) gc_mark((uintptr_t)shared[i].v);
     for (int i = 0; i < nctors; i++) gc_mark((uintptr_t)ctors[i]->nullary);
@@ -995,6 +997,7 @@ static void gc_mark_tables(void) {
         for (int j = 0; j < traits[i]->nm; j++) gc_mark((uintptr_t)traits[i]->m[j].deflt);
     for (int i = 0; i < nimpls; i++)
         for (int j = 0; j < impls[i].n; j++) gc_mark((uintptr_t)impls[i].fns[j]);
+    cb_mark_tables();
 }
 
 static const char *SHOWABLE = "表示可能", *TO_STRING = "文字列化する", *MAPPABLE = "写像可能",
@@ -1658,6 +1661,7 @@ static V act_run(Act *a) {
     }
     case A_CALL: return apply1(a->a, V_EMPTY, a->pos); /* 外部の関数を呼ぶ動作 */
     case A_PEEK: case A_POKE: case A_ERRNO: case A_FAIL: case A_ARGS: case A_EXIT: case A_MEMR: case A_MEMW: case A_STRUCTR: case A_STRUCTW: return mem_run(a);
+    case A_CB_NEW: case A_CB_CHAN: case A_CB_FREE: return cb_run(a);
     case A_SPAWN: case A_JOIN: case A_NCPU: case A_CH_NEW: case A_CH_PIPE: case A_CH_FIFO_NEW: case A_CH_FIFO_OPEN: case A_CH_FIFO_DEL: case A_CH_SEND: case A_CH_RECV: case A_CH_CLOSE: case A_CH_EACH:
     case A_LOCK_NEW: case A_LOCKED: case A_SLOT_NEW: case A_SLOTTED: case A_BOX_NEW: case A_BOX_GET: case A_BOX_UPDATE: case A_BOX_SET:
         return thread_run(a);
@@ -4283,6 +4287,317 @@ BI(t_pmap) { /* を, で */
     return (V)(intptr_t)out;
 }
 
+/* ------------------------------------------------------------------ */
+/* C から呼び戻す(「呼び戻し番地作成する」「通路送り番地作成する」)        */
+/* ------------------------------------------------------------------ */
+/* 呼び戻しの番地は、前もって作っておいた入口(トランポリン)の1つ。入口は整数のレジスタの引数を 8 つ、
+ * 浮動小数点のレジスタの引数を 8 つ受け取る形にしておき、宣言した型の順に、整数の仲間(数・整数・真偽・番地・文字列)は
+ * 整数の方から、小数・単精度は浮動小数点の方から取る(x86-64 の System V と arm64 の、レジスタで渡す範囲だけ)。
+ * 値の返し方(整数・double・float)ごとに CB_SLOTS 個ずつある。 */
+#define CB_SLOTS 32
+int64_t rt_ffi_i64(V v, const char *fname, int32_t part, int32_t pos);
+int32_t rt_ffi_i32(V v, const char *fname, int32_t part, int32_t pos);
+int32_t rt_ffi_bool(V v, const char *fname, int32_t part, int32_t pos);
+void *rt_ffi_ptr(V v, const char *fname, int32_t part, int32_t pos);
+double rt_ffi_f64(V v, const char *fname, int32_t part, int32_t pos);
+#define CB_MAX_INT 6
+#define CB_MAX_FLT 8
+enum { CBT_I64, CBT_I32, CBT_F64, CBT_F32, CBT_BOOL, CBT_STR, CBT_PTR, CBT_VOID };
+static const char *const CBT_NAMES[] = {"数", "整数", "小数", "単精度", "真偽", "文字列", "番地", "無"};
+enum { CBR_INT, CBR_F64, CBR_F32 };
+typedef struct {
+    int used, chan;       /* chan: 通路に送るだけ */
+    int nargs, ret;
+    int8_t at[CB_MAX_INT + CB_MAX_FLT];
+    V fn;                 /* 呼ぶ する の関数(chan なら 0) */
+    int fd;               /* chan: パイプの書く口(dup したもの) */
+    Buf head;             /* chan: 直列化した値の頭(SURU\1 r 形の名前 フィールドの数) */
+    char **fields;        /* chan: フィールドの名前 */
+} CbSlot;
+static CbSlot cb_slots[3][CB_SLOTS];
+static pthread_mutex_t cb_mu = PTHREAD_MUTEX_INITIALIZER;
+static _Thread_local int ffi_depth; /* このスレッドが外部の関数を呼んでいる途中か(入れ子の数) */
+
+static void cb_mark_tables(void) {
+    for (int f = 0; f < 3; f++)
+        for (int k = 0; k < CB_SLOTS; k++)
+            if (cb_slots[f][k].used && cb_slots[f][k].fn) gc_mark((uintptr_t)cb_slots[f][k].fn);
+}
+
+__attribute__((noreturn)) static void cb_die(const char *msg) {
+    fprintf(stderr, "エラー: %s\n", msg);
+    fflush(stderr);
+    _exit(1);
+}
+
+/* 呼ばれた引数を、宣言の型の順に取り出す(ia: 整数のレジスタ、da: 浮動小数点のレジスタ) */
+static void cb_args(const CbSlot *s, const int64_t *ia, const double *da, int64_t *iv, double *dv) {
+    int ki = 0, kd = 0;
+    for (int i = 0; i < s->nargs; i++) {
+        int t = s->at[i];
+        if (t == CBT_F64) dv[i] = da[kd++];
+        else if (t == CBT_F32) {
+            float f;
+            memcpy(&f, &da[kd++], sizeof f); /* float はレジスタの下の 32 ビット */
+            dv[i] = f;
+        } else iv[i] = ia[ki++];
+    }
+}
+
+static V cb_value(int t, int64_t i, double d) {
+    switch (t) {
+    case CBT_I64: return mk_int(i, 0);
+    case CBT_I32: return mk_int((int32_t)i, 0);
+    case CBT_BOOL: return rt_bool((int32_t)i != 0);
+    case CBT_STR: return (const char *)(intptr_t)i ? cstr((const char *)(intptr_t)i) : cstr("");
+    case CBT_PTR: return rt_ffi_from_ptr((void *)(intptr_t)i);
+    }
+    return rt_float(d);
+}
+
+/* 通路に送る: GC の値を作らずに直列化してパイプに書く(する の知らないスレッドからも呼べる) */
+static void cb_send(CbSlot *s, const int64_t *iv, const double *dv) {
+    Buf b = {0};
+    buf_add(&b, "\0\0\0\0", 4);
+    buf_add(&b, s->head.s, s->head.n);
+    for (int i = 0; i < s->nargs; i++) {
+        ser_text(&b, s->fields[i], (int64_t)strlen(s->fields[i]));
+        int t = s->at[i];
+        if (t == CBT_F64 || t == CBT_F32) {
+            uint64_t u;
+            memcpy(&u, &dv[i], 8);
+            buf_add(&b, "f", 1);
+            ser_u64(&b, u);
+        } else if (t == CBT_BOOL) buf_add(&b, (int32_t)iv[i] ? "b\1" : "b\0", 2);
+        else if (t == CBT_STR) {
+            const char *p = (const char *)(intptr_t)iv[i];
+            buf_add(&b, "s", 1);
+            ser_text(&b, p ? p : "", p ? (int64_t)strlen(p) : 0);
+        } else {
+            buf_add(&b, "i", 1);
+            ser_u64(&b, (uint64_t)(t == CBT_I32 ? (int64_t)(int32_t)iv[i] : iv[i]));
+        }
+    }
+    uint32_t n = (uint32_t)(b.n - 4);
+    for (int i = 0; i < 4; i++) b.s[i] = (char)((n >> (8 * i)) & 255);
+    size_t off = 0;
+    int e = errno;
+    while (off < b.n) {
+        ssize_t k = write(s->fd, b.s + off, b.n - off);
+        if (k < 0 && errno == EINTR) continue;
+        if (k < 0) break; /* 受け取る相手がいない: 捨てる */
+        off += (size_t)k;
+    }
+    errno = e;
+    free(b.s);
+}
+
+/* 入口から呼ばれる。する の関数を呼んで(値が動作なら行って)、値を C の型にする */
+static int64_t cb_call(int fam, int k, const int64_t *ia, const double *da, double *dret) {
+    CbSlot *s = &cb_slots[fam][k];
+    int64_t iv[CB_MAX_INT + CB_MAX_FLT] = {0};
+    double dv[CB_MAX_INT + CB_MAX_FLT] = {0};
+    if (!s->used) cb_die("解放した呼び戻しの番地が呼ばれました");
+    cb_args(s, ia, da, iv, dv);
+    if (s->chan) {
+        cb_send(s, iv, dv);
+        return 0;
+    }
+    if (ffi_depth <= 0)
+        cb_die("呼び戻しの番地が、外部の関数を呼んでいる途中ではないところ(ほかのスレッドなど)から呼ばれました"
+               "(ほかのスレッドからは「通路送り番地作成する」を使います)");
+    int e = errno;
+    ffi_depth--;
+    world_acquire();
+    V args[CB_MAX_INT + CB_MAX_FLT];
+    for (int i = 0; i < s->nargs; i++) args[i] = cb_value(s->at[i], iv[i], dv[i]);
+    V r = rt_force(apply(s->fn, s->nargs, args, 0));
+    if (TAG(r) == T_ACT || TAG(r) == T_PURE) r = rt_force(perform(r));
+    int64_t out = 0;
+    switch (s->ret) {
+    case CBT_VOID: break;
+    case CBT_I64: out = rt_ffi_i64(r, "呼び戻し", P_WO, 0); break;
+    case CBT_I32: out = rt_ffi_i32(r, "呼び戻し", P_WO, 0); break;
+    case CBT_BOOL: out = rt_ffi_bool(r, "呼び戻し", P_WO, 0); break;
+    case CBT_PTR: out = (int64_t)(intptr_t)rt_ffi_ptr(r, "呼び戻し", P_WO, 0); break;
+    default: *dret = rt_ffi_f64(r, "呼び戻し", P_WO, 0);
+    }
+    world_release();
+    ffi_depth++;
+    errno = e;
+    return out;
+}
+
+#define CB_PARAMS int64_t a0, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6, int64_t a7, \
+                  double d0, double d1, double d2, double d3, double d4, double d5, double d6, double d7
+#define CB_ARRAYS int64_t ia[8] = {a0, a1, a2, a3, a4, a5, a6, a7}; double da[8] = {d0, d1, d2, d3, d4, d5, d6, d7}; double dr = 0
+#define CB_TRAMP(K) \
+    static int64_t cbi_##K(CB_PARAMS) { CB_ARRAYS; return cb_call(CBR_INT, K, ia, da, &dr); } \
+    static double cbd_##K(CB_PARAMS) { CB_ARRAYS; cb_call(CBR_F64, K, ia, da, &dr); return dr; } \
+    static float cbf_##K(CB_PARAMS) { CB_ARRAYS; cb_call(CBR_F32, K, ia, da, &dr); return (float)dr; }
+CB_TRAMP(0) CB_TRAMP(1) CB_TRAMP(2) CB_TRAMP(3) CB_TRAMP(4) CB_TRAMP(5) CB_TRAMP(6) CB_TRAMP(7)
+CB_TRAMP(8) CB_TRAMP(9) CB_TRAMP(10) CB_TRAMP(11) CB_TRAMP(12) CB_TRAMP(13) CB_TRAMP(14) CB_TRAMP(15)
+CB_TRAMP(16) CB_TRAMP(17) CB_TRAMP(18) CB_TRAMP(19) CB_TRAMP(20) CB_TRAMP(21) CB_TRAMP(22) CB_TRAMP(23)
+CB_TRAMP(24) CB_TRAMP(25) CB_TRAMP(26) CB_TRAMP(27) CB_TRAMP(28) CB_TRAMP(29) CB_TRAMP(30) CB_TRAMP(31)
+#define CB_ROW(P) {(void *)P##0, (void *)P##1, (void *)P##2, (void *)P##3, (void *)P##4, (void *)P##5, (void *)P##6, (void *)P##7, \
+    (void *)P##8, (void *)P##9, (void *)P##10, (void *)P##11, (void *)P##12, (void *)P##13, (void *)P##14, (void *)P##15, \
+    (void *)P##16, (void *)P##17, (void *)P##18, (void *)P##19, (void *)P##20, (void *)P##21, (void *)P##22, (void *)P##23, \
+    (void *)P##24, (void *)P##25, (void *)P##26, (void *)P##27, (void *)P##28, (void *)P##29, (void *)P##30, (void *)P##31}
+static void *const CB_ENTRY[3][CB_SLOTS] = {CB_ROW(cbi_), CB_ROW(cbd_), CB_ROW(cbf_)};
+
+/* 「番地 と 数」を型の番号の列にする */
+static int cb_parse_types(Str *s, int8_t *at, const char *fn, int32_t pos) {
+    int n = 0, ki = 0, kd = 0;
+    const char *p = s->s, *end = s->s + s->n;
+    while (p < end) {
+        while (p < end && (*p == ' ' || !strncmp(p, "　", 3))) p += *p == ' ' ? 1 : 3;
+        if (p >= end) break;
+        const char *q = p;
+        while (q < end && *q != ' ' && strncmp(q, "　", 3)) q++;
+        size_t len = (size_t)(q - p);
+        if (n > 0) {
+            if (len != strlen("と") || memcmp(p, "と", len)) goto bad;
+            p = q;
+            while (p < end && (*p == ' ' || !strncmp(p, "　", 3))) p += *p == ' ' ? 1 : 3;
+            q = p;
+            while (q < end && *q != ' ' && strncmp(q, "　", 3)) q++;
+            len = (size_t)(q - p);
+        }
+        int t = -1;
+        for (int i = 0; i < CBT_VOID; i++)
+            if (strlen(CBT_NAMES[i]) == len && !memcmp(CBT_NAMES[i], p, len)) t = i;
+        if (t < 0) goto bad;
+        if (t == CBT_F64 || t == CBT_F32) kd++;
+        else ki++;
+        if (ki > CB_MAX_INT || kd > CB_MAX_FLT)
+            fail(pos, "「%s」の引数の型が多すぎます(整数・番地などは %d 個、小数・単精度は %d 個までです)", fn, CB_MAX_INT, CB_MAX_FLT);
+        at[n++] = (int8_t)t;
+        p = q;
+    }
+    if (n == 0) fail(pos, "「%s」の引数の型を1つ以上書いてください(「番地 と 数」)", fn);
+    return n;
+bad:
+    fail(pos, "「%s」は「%s」の引数の型の並びではありません(数・整数・小数・単精度・真偽・文字列・番地を「と」でつなぎます)", s->s, fn);
+}
+
+static int cb_ret_type(Str *s, int32_t pos) {
+    for (int i = 0; i <= CBT_VOID; i++)
+        if (i != CBT_STR && strcmp(CBT_NAMES[i], s->s) == 0) return i;
+    fail(pos, "「%s」は呼び戻しの値の型ではありません(数・整数・小数・単精度・真偽・番地・無のどれかです)", s->s);
+}
+
+/* 空いている入口を取る(なければエラー) */
+static int cb_take(int fam, int32_t pos) {
+    pthread_mutex_lock(&cb_mu);
+    for (int k = 0; k < CB_SLOTS; k++)
+        if (!cb_slots[fam][k].used) {
+            memset(&cb_slots[fam][k], 0, sizeof(CbSlot));
+            cb_slots[fam][k].used = 1;
+            pthread_mutex_unlock(&cb_mu);
+            return k;
+        }
+    pthread_mutex_unlock(&cb_mu);
+    fail(pos, "呼び戻しの番地が足りません(値の返し方ごとに %d 個までです。使わないものは「呼び戻し解放する」で放します)", CB_SLOTS);
+}
+
+static V cb_new(V *a, int take, int32_t pos) { /* を, で, に。take が 0 なら確かめるだけ */
+    if (TAG(a[0]) != T_FN) fail(pos, "「呼び戻し番地作成する」の「を」は関数でなければなりません(「%s」が渡されました)", plain(a[0]).s);
+    int8_t at[CB_MAX_INT + CB_MAX_FLT];
+    int n = cb_parse_types(need_str(a[1], "「呼び戻し番地作成する」の「で」", pos), at, "呼び戻し番地作成する", pos);
+    int ret = cb_ret_type(need_str(a[2], "「呼び戻し番地作成する」の「に」", pos), pos);
+    int fam = ret == CBT_F64 ? CBR_F64 : ret == CBT_F32 ? CBR_F32 : CBR_INT;
+    if (!take) return 0;
+    int k = cb_take(fam, pos);
+    CbSlot *s = &cb_slots[fam][k];
+    s->nargs = n;
+    s->ret = ret;
+    memcpy(s->at, at, sizeof at);
+    s->fn = a[0];
+    return rt_ffi_from_ptr(CB_ENTRY[fam][k]);
+}
+
+static V cb_chan(V *a, int take, int32_t pos) { /* を(見本), へ(通路), で(型) */
+    V sample = rt_force(a[0]);
+    Chan *c = need_chan(a[1], "「通路送り番地作成する」の「へ」", pos);
+    int8_t at[CB_MAX_INT + CB_MAX_FLT];
+    int n = cb_parse_types(need_str(a[2], "「通路送り番地作成する」の「で」", pos), at, "通路送り番地作成する", pos);
+    if (TAG(sample) != T_REC || AS(Rec, sample)->c->n != n)
+        fail(pos, "「通路送り番地作成する」の「を」は、フィールドが %d 個の組でなければなりません(「%s」が渡されました)", n, plain(sample).s);
+    Rec *r = AS(Rec, sample);
+    for (int i = 0; i < n; i++) {
+        V x = rt_force(r->v[i]);
+        int t = at[i];
+        const char *want = t == CBT_BOOL ? "真偽" : t == CBT_STR ? "文字列" : "数";
+        int ok = t == CBT_BOOL ? TAG(x) == T_BOOL : t == CBT_STR ? TAG(x) == T_STR : is_num(x);
+        if (!ok)
+            fail(pos, "見本の%d番目のフィールド「%s」は%sでなければなりません(型は「%s」。番地は番地数値にした数で届きます)", i + 1, plain(x).s, want, CBT_NAMES[t]);
+    }
+    if (c->kind != CH_PIPE || c->path || c->wfd < 0)
+        fail(pos, "「通路送り番地作成する」の通路は、プロセス間通路作成する で作って、まだ受け取っていない通路にします");
+    if (!take) return 0;
+    int fd = dup((int)c->wfd);
+    if (fd < 0) fail(pos, "通路を複製できませんでした(%s)", strerror(errno));
+    int k = cb_take(CBR_INT, pos);
+    CbSlot *s = &cb_slots[CBR_INT][k];
+    s->chan = 1;
+    s->nargs = n;
+    s->ret = CBT_VOID;
+    memcpy(s->at, at, sizeof at);
+    s->fd = fd;
+    buf_add(&s->head, "SURU\1r", 6);
+    ser_text(&s->head, r->c->name, (int64_t)strlen(r->c->name));
+    ser_u32(&s->head, (uint32_t)n);
+    s->fields = malloc((size_t)n * sizeof(char *));
+    for (int i = 0; i < n; i++) s->fields[i] = strdup(r->c->fields[i]);
+    return rt_ffi_from_ptr(CB_ENTRY[CBR_INT][k]);
+}
+
+static V cb_free(V p, int32_t pos) {
+    void *q = need_addr(p, "「呼び戻し解放する」の「を」", pos)->p;
+    pthread_mutex_lock(&cb_mu);
+    for (int f = 0; f < 3; f++)
+        for (int k = 0; k < CB_SLOTS; k++)
+            if (CB_ENTRY[f][k] == q && cb_slots[f][k].used) {
+                CbSlot *s = &cb_slots[f][k];
+                if (s->chan) {
+                    close(s->fd);
+                    free(s->head.s);
+                    for (int i = 0; i < s->nargs; i++) free(s->fields[i]);
+                    free(s->fields);
+                }
+                memset(s, 0, sizeof *s);
+                pthread_mutex_unlock(&cb_mu);
+                return mk_int(0, pos);
+            }
+    pthread_mutex_unlock(&cb_mu);
+    fail(pos, "「%s」は呼び戻しの番地ではありません(放したものか、作っていないもの)", plain(p).s);
+}
+
+BI(m_cb_new) {
+    cb_new(a, 0, pos);
+    Act *x = AS(Act, mk_act_pos(A_CB_NEW, "呼び戻し番地作成する", a[0], a[1], pos));
+    x->c = a[2];
+    return (V)(intptr_t)x;
+}
+BI(m_cb_chan) {
+    need_chan(a[1], "「通路送り番地作成する」の「へ」", pos);
+    Act *x = AS(Act, mk_act_pos(A_CB_CHAN, "通路送り番地作成する", a[0], a[1], pos));
+    x->c = a[2];
+    return (V)(intptr_t)x;
+}
+BI(m_cb_free) {
+    need_addr(a[0], "「呼び戻し解放する」の「を」", pos);
+    return mk_act_pos(A_CB_FREE, "呼び戻し解放する", a[0], 0, pos);
+}
+static V cb_run(Act *a) {
+    V args[3] = {a->a, a->b, a->c};
+    switch (a->kind) {
+    case A_CB_NEW: return cb_new(args, 1, a->pos);
+    case A_CB_CHAN: return cb_chan(args, 1, a->pos);
+    default: return cb_free(a->a, a->pos);
+    }
+}
+
 static const BuiltinDef STD_PRIMITIVES[] = {
     {"切捨する", 1, P1_WO, NULL, s_floor},
     {"平方根にする", 1, P1_WO, NULL, s_sqrt},
@@ -4339,6 +4654,8 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"C復元する", 2, P2_WO_DE, NULL, m_cshape_de},
     {"構造体読取する", 3, P3_KARA_DE_WO, NULL, m_struct_read},
     {"構造体書込する", 4, P4_WO_HE_DE_NI, NULL, m_struct_write},
+    {"呼び戻し番地作成する", 3, P3_WO_DE_NI, NULL, m_cb_new},
+    {"呼び戻し解放する", 1, P1_WO, NULL, m_cb_free},
     {"符号付き8読取する", 2, P2_KARA_DE, NULL, m_rd_i8},
     {"符号付き8書込する", 3, P3_WO_HE_DE, NULL, m_wr_i8},
     {"符号付き16読取する", 2, P2_KARA_DE, NULL, m_rd_i16},
@@ -4386,6 +4703,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"通路受信する", 1, P1_KARA, NULL, c_recv},
     {"通路閉鎖する", 1, P1_WO, NULL, c_close},
     {"通路処理する", 2, P2_WO_DE, NULL, c_each},
+    {"通路送り番地作成する", 3, P3_WO_HE_DE, NULL, m_cb_chan},
     {"ロック作成する", 0, NULL, NULL, l_new},
     {"排他実行する", 2, P2_DE_WO, NULL, l_run},
     {"枠作成する", 1, P1_DE, NULL, s_new},
@@ -4470,10 +4788,12 @@ const uint8_t *rt_ffi_bytes(V v, const char *fname, int32_t part, int32_t pos) {
 /* 外部の関数を呼ぶ前後: 呼んでいる間は外に出る(待つ関数の間も GC がこのスレッドを待たないように) */
 void rt_ffi_pre(void) {
     world_release();
+    ffi_depth++;
     errno = 0;
 }
 void rt_ffi_post(void) {
     ffi_errno = errno;
+    ffi_depth--;
     world_acquire();
 }
 

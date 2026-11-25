@@ -44,7 +44,8 @@ func init() {
 	for _, t := range cMemTypes {
 		stdPrimitives = append(stdPrimitives, builtinInfo{t + "読取する", nil}, builtinInfo{t + "書込する", nil})
 	}
-	for _, n := range []string{"C形作成する", "入れ子設定する", "C大きさにする", "C揃えにする", "C位置にする", "C直列化する", "C復元する", "構造体読取する", "構造体書込する"} {
+	for _, n := range []string{"C形作成する", "入れ子設定する", "C大きさにする", "C揃えにする", "C位置にする", "C直列化する", "C復元する", "構造体読取する", "構造体書込する",
+		"呼び戻し番地作成する", "呼び戻し解放する"} {
 		stdPrimitives = append(stdPrimitives, builtinInfo{n, nil})
 	}
 }
@@ -64,6 +65,7 @@ var threadPrimitives = []builtinInfo{
 	{"通路作成する", nil}, {"プロセス間通路作成する", nil}, {"名前つき通路作成する", nil}, {"名前つき通路接続する", nil}, {"名前つき通路削除する", nil}, {"通路送信する", nil}, {"通路受信する", nil}, {"通路閉鎖する", nil}, {"通路処理する", nil},
 	{"ロック作成する", nil}, {"排他実行する", nil}, {"枠作成する", nil}, {"枠内実行する", nil},
 	{"箱作成する", nil}, {"箱読取する", nil}, {"箱更新する", nil}, {"箱書込する", nil},
+	{"通路送り番地作成する", nil},
 }
 
 // 基本.suru の中と「基本内の…」(自動で読み込んだときは前置きなしでも)で使える組み込み
