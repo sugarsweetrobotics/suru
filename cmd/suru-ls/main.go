@@ -30,7 +30,7 @@ import (
 )
 
 // version はリリースのときに -ldflags "-X main.version=…" で書きかえる
-var version = "0.4.0"
+var version = "0.5.0"
 
 // --- JSON-RPC ---
 
