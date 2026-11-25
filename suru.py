@@ -6389,8 +6389,27 @@ LINT_FLAGS = ("--点検", "--lint")  # lib/点検.suru(する で書いた点検
 LINT_SOURCE = "「点検」 を 読み込む\n点検内の点検実行する\n"
 
 
+def lint_lib_files() -> list[str]:
+    """点検が使う lib のファイルの名前(点検.suru から「「X」 を 読み込む」をたどったものと 基本.suru)。
+    キャッシュの名前はこのファイルだけで決めるので、ほかの lib のファイルを変えても作り直さない"""
+    import re
+
+    pattern = re.compile(r"^[ \t　]*「([^「」]+)」[ \t　]*を[ \t　]*読み込", re.M)
+    found: set[str] = set()
+    todo = ["点検", "基本"]
+    while todo:
+        name = todo.pop()
+        path = os.path.join(LIB_DIR, name + SOURCE_SUFFIX)
+        if name in found or not os.path.exists(path):
+            continue
+        found.add(name)
+        with open(path, encoding="utf-8") as f:
+            todo += pattern.findall(f.read())
+    return sorted(n + SOURCE_SUFFIX for n in found)
+
+
 def lint_binary() -> str | None:
-    """点検をバイナリにしたもの。clang があれば初めに一度だけ作って、キャッシュに置く(lib が変われば作り直す)。
+    """点検をバイナリにしたもの。clang があれば初めに一度だけ作って、キャッシュに置く(点検が使う lib のファイルが変われば作り直す)。
     作れなければ None(インタプリタで動かす)"""
     import hashlib
 
@@ -6400,10 +6419,9 @@ def lint_binary() -> str | None:
     if cc is None or os.environ.get("SURU_LINT_INTERP"):
         return None
     h = hashlib.sha256((__version__ + cc).encode())
-    for name in sorted(os.listdir(LIB_DIR)):
-        if name.endswith(SOURCE_SUFFIX):
-            with open(os.path.join(LIB_DIR, name), "rb") as f:
-                h.update(name.encode() + b"\0" + f.read())
+    for name in lint_lib_files():
+        with open(os.path.join(LIB_DIR, name), "rb") as f:
+            h.update(name.encode() + b"\0" + f.read())
     with open(suru_compile.RUNTIME, "rb") as f:
         h.update(f.read())
     cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"), "suru")

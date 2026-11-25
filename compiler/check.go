@@ -247,8 +247,60 @@ func (s *Shapes) findRecursion(v *TVar, t Type) bool {
 				}
 			}
 			s.recursive[ps[i]] = template(a, n, v, t, mapping)
+			// 同じ値のほかのフィールドに、そろえられる同じ型がもう入っていれば、それも自分自身を中に持つ
+			// (やり直す回数を減らす。「木 の 木」のように型の引数が違う同じ型は入れ子の別の型なので除く)
+			for j, b := range n.Args {
+				if j == i {
+					continue
+				}
+				for _, m := range typeNodes(b, nil) {
+					if m.Name == n.Name && compatible(m, n) {
+						s.recursive[ps[j]] = template(b, n, newTVar(), newTVar(), mapping)
+						break
+					}
+				}
+			}
 			return true
 		}
+	}
+	return false
+}
+
+// compatible は a と b をそろえられそうか(型変数は何にでもそろうとみなす。何も決めない)
+func compatible(a, b Type) bool {
+	a, b = prune(a), prune(b)
+	if a == b {
+		return true
+	}
+	if _, ok := a.(*TVar); ok {
+		return true
+	}
+	if _, ok := b.(*TVar); ok {
+		return true
+	}
+	if ac, ok := a.(*TCon); ok {
+		bc, ok := b.(*TCon)
+		if !ok || ac.Name != bc.Name || len(ac.Args) != len(bc.Args) {
+			return false
+		}
+		for i := range ac.Args {
+			if !compatible(ac.Args[i], bc.Args[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	if af, ok := a.(*TFun); ok {
+		bf, ok := b.(*TFun)
+		if !ok || len(af.Params) != len(bf.Params) {
+			return false
+		}
+		for i := range af.Params {
+			if !compatible(af.Params[i].T, bf.Params[i].T) {
+				return false
+			}
+		}
+		return compatible(af.Result, bf.Result)
 	}
 	return false
 }
@@ -315,7 +367,9 @@ func template(a Type, node *TCon, v *TVar, t Type, mapping map[*TVar]Type) Type 
 	var build func(x Type) Type
 	build = func(x Type) Type {
 		x = prune(x)
-		if xc, ok := x.(*TCon); ok && xc == node {
+		if xc, ok := x.(*TCon); ok && (xc == node || xc.Name == node.Name) {
+			// 同じ型は同じ型の引数で中に持つ(別の型の引数のまま覚えると、後でフィールドがまた再帰するものに
+			// なって型の引数の数が変わったとき、そろわなくなる)
 			return selfType
 		}
 		if xv, ok := x.(*TVar); ok && xv == v {

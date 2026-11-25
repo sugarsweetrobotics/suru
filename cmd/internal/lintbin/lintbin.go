@@ -2,7 +2,7 @@
 // Copyright (c) 2026 sugarsweetrobotics
 
 // Package lintbin は点検(lib/点検.suru、する で書いた linter)をバイナリにする(suru-ls と kumu で使う)。
-// バイナリは初めの1回だけ作ってキャッシュに置く(lib・実行時ライブラリ・C コンパイラが変われば作り直す)。
+// バイナリは初めの1回だけ作ってキャッシュに置く(点検が使う lib のファイル・実行時ライブラリ・C コンパイラが変われば作り直す)。
 package lintbin
 
 import (
@@ -12,8 +12,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
-	"strings"
 
 	suru "github.com/suru-lang/suru"
 	"github.com/suru-lang/suru/cmd/internal/native"
@@ -22,6 +22,49 @@ import (
 
 // lintSource は点検を動かすだけのプログラム(suru.py の LINT_SOURCE と同じ)
 const lintSource = "「点検」 を 読み込む\n点検内の点検実行する\n"
+
+var importRe = regexp.MustCompile(`(?m)^[ \t　]*「([^「」]+)」[ \t　]*を[ \t　]*読み込`)
+
+// readLib は lib のファイルを読む(LibDir があればそこ、なければ埋め込んだもの)
+func readLib(name string) ([]byte, bool) {
+	if compiler.LibDir != "" {
+		b, err := os.ReadFile(filepath.Join(compiler.LibDir, name))
+		return b, err == nil
+	}
+	if compiler.LibFS != nil {
+		b, err := fs.ReadFile(compiler.LibFS, name)
+		return b, err == nil
+	}
+	return nil, false
+}
+
+// libFiles は点検が使う lib のファイルの名前(点検.suru から「「X」 を 読み込む」をたどったものと 基本.suru。suru.py の
+// lint_lib_files と同じ)。キャッシュの名前はこのファイルだけで決めるので、ほかの lib のファイルを変えても作り直さない
+func libFiles() []string {
+	found := map[string]bool{}
+	todo := []string{"点検", "基本"}
+	for len(todo) > 0 {
+		name := todo[len(todo)-1]
+		todo = todo[:len(todo)-1]
+		if found[name] {
+			continue
+		}
+		b, ok := readLib(name + compiler.SourceSuffix)
+		if !ok {
+			continue
+		}
+		found[name] = true
+		for _, m := range importRe.FindAllStringSubmatch(string(b), -1) {
+			todo = append(todo, m[1])
+		}
+	}
+	var names []string
+	for n := range found {
+		names = append(names, n+compiler.SourceSuffix)
+	}
+	sort.Strings(names)
+	return names
+}
 
 // Binary は点検のバイナリの道。salt は呼ぶ側の名前と版(キャッシュの名前を分ける)
 func Binary(salt string) (string, error) {
@@ -32,35 +75,10 @@ func Binary(salt string) (string, error) {
 	h := sha256.New()
 	h.Write([]byte(salt + "\x00" + cc + "\x00"))
 	h.Write(suru.Runtime)
-	var names []string
-	files := map[string][]byte{}
-	if compiler.LibFS != nil {
-		_ = fs.WalkDir(compiler.LibFS, ".", func(p string, e fs.DirEntry, err error) error {
-			if err == nil && !e.IsDir() && strings.HasSuffix(p, compiler.SourceSuffix) {
-				if b, err := fs.ReadFile(compiler.LibFS, p); err == nil {
-					names = append(names, p)
-					files[p] = b
-				}
-			}
-			return nil
-		})
-	}
-	if compiler.LibDir != "" {
-		ents, _ := os.ReadDir(compiler.LibDir)
-		names = names[:0]
-		for _, e := range ents {
-			if strings.HasSuffix(e.Name(), compiler.SourceSuffix) {
-				if b, err := os.ReadFile(filepath.Join(compiler.LibDir, e.Name())); err == nil {
-					names = append(names, e.Name())
-					files[e.Name()] = b
-				}
-			}
-		}
-	}
-	sort.Strings(names)
-	for _, n := range names {
+	for _, n := range libFiles() {
+		b, _ := readLib(n)
 		h.Write([]byte(n + "\x00"))
-		h.Write(files[n])
+		h.Write(b)
 	}
 	dir := native.CacheDir()
 	exe := filepath.Join(dir, "点検-"+hex.EncodeToString(h.Sum(nil))[:16])
