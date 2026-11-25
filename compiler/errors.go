@@ -44,6 +44,98 @@ func where(p Pos) string {
 type SuruError struct {
 	Message string
 	Line    Pos
+	// Kind は --json の「kind」(構文・型・実行・コンパイル)。"" なら呼ぶ側が決める
+	Kind string
+	// Origin は読み込んだファイルの中のエラーを読み込む行のエラーにしたときの、元のエラー(いちばん内側のファイルのもの)。
+	// OriginFile はそのファイルの道
+	Origin     *SuruError
+	OriginFile string
+}
+
+// moduleError は読み込んだファイル(name・path)の中のエラー err を、読み込む行(line)のエラーにする
+func moduleError(err *SuruError, name, path string, line Pos) *SuruError {
+	w := ""
+	if err.Line.Line != 0 {
+		w = where(err.Line)
+	}
+	out := &SuruError{Message: "「" + name + SourceSuffix + "」の" + w + ": " + err.Message, Line: line}
+	if err.Origin != nil {
+		out.Origin, out.OriginFile = err.Origin, err.OriginFile
+	} else {
+		out.Origin, out.OriginFile = err, path
+		if err.Line.File != "" {
+			out.OriginFile = err.Line.File
+		}
+	}
+	return out
+}
+
+// ErrorJSON は --json のときのエラーの1行の JSON(suru.py の error_json と同じ)。
+// kind は e.Kind が "" のときに使う。path は本体のファイルの道
+func ErrorJSON(e *SuruError, kind, path string) string {
+	if e.Kind != "" {
+		kind = e.Kind
+	}
+	if e.Origin != nil {
+		path = e.OriginFile
+		e = e.Origin
+	}
+	if e.Line.File != "" {
+		path = e.Line.File
+	}
+	var b strings.Builder
+	b.WriteString(`{"file":`)
+	if path == "" {
+		b.WriteString("null")
+	} else {
+		b.WriteString(jsonString(path))
+	}
+	b.WriteString(`,"line":`)
+	if e.Line.Line == 0 {
+		b.WriteString("null")
+	} else {
+		b.WriteString(strconv.Itoa(e.Line.Line))
+	}
+	b.WriteString(`,"column":`)
+	if e.Line.Line == 0 || e.Line.Col == 0 {
+		b.WriteString("null")
+	} else {
+		b.WriteString(strconv.Itoa(e.Line.Col))
+	}
+	b.WriteString(`,"kind":` + jsonString(kind) + `,"rule":null,"message":` + jsonString(e.Message) + "}")
+	return b.String()
+}
+
+// jsonString は Python の json.dumps(s, ensure_ascii=False) と同じ JSON の文字列
+func jsonString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
+		default:
+			if r < 0x20 {
+				fmt.Fprintf(&b, `\u%04x`, r)
+			} else {
+				b.WriteRune(r)
+			}
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func (e *SuruError) Error() string {

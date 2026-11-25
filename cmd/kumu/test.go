@@ -172,9 +172,11 @@ func indent(s string) string {
 }
 
 // lint はプロジェクトのファイル(組.suru と 出力/ は除く)を点検する
+// (--json を付けると、知らせを1行に1つの JSON で出す)
 func (k *kumu) lint(args []string) int {
-	if len(args) != 0 {
-		fmt.Fprintln(k.stderr, "使い方: kumu 点検")
+	asJSON := len(args) == 1 && (args[0] == "--json" || args[0] == "--JSON")
+	if len(args) != 0 && !asJSON {
+		fmt.Fprintln(k.stderr, "使い方: kumu 点検 [--json]")
 		return 2
 	}
 	p, err := FindProject(k.dir)
@@ -199,6 +201,9 @@ func (k *kumu) lint(args []string) int {
 	if err != nil {
 		return k.fail(err)
 	}
+	if asJSON {
+		paths = append([]string{"--json"}, paths...)
+	}
 	c := exec.Command(exe, paths...)
 	c.Dir = k.dir
 	c.Stdout, c.Stderr = k.stdout, k.stderr
@@ -208,6 +213,9 @@ func (k *kumu) lint(args []string) int {
 			return ee.ExitCode()
 		}
 		return k.fail(err)
+	}
+	if asJSON {
+		return 0
 	}
 	fmt.Fprintf(k.stderr, "%d 個のファイルを点検しました。知らせることはありません\n", len(paths))
 	return 0

@@ -3094,11 +3094,7 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 	})
 	curPosFile = savedFile
 	if err != nil {
-		w := ""
-		if err.Line.Line != 0 {
-			w = where(err.Line)
-		}
-		raise(line, "「"+stem+SourceSuffix+"」の"+w+": "+err.Message)
+		panic(moduleError(err, stem, path, line))
 	}
 	ctx.Ctors.Update(sub.Ctors)
 	ctx.Types.Update(sub.Types)
