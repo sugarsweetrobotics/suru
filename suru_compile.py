@@ -36,6 +36,7 @@ FFI_IR = {"i64": "i64", "f64": "double", "f32": "float", "i32": "i32", "bool": "
 LINK_MARK = "; suru-link: "  # IR の中の、リンクするライブラリの印(build が読む)
 PART_IDS = {"を": 0, "に": 1, "で": 2, "から": 3, "へ": 4, "より": 5, "が": 6}
 OPS = {"+": 0, "-": 1, "*": 2, "/": 3, "%": 4, "^": 5, "<": 6, ">": 7, "<=": 8, ">=": 9, "==": 10, "!=": 11}
+CMP_PRED = {"<": "slt", ">": "sgt", "<=": "sle", ">=": "sge", "==": "eq", "!=": "ne"}
 INT_MAX = (1 << 62) - 1
 INT_MIN = -(1 << 62)
 
@@ -107,7 +108,8 @@ declare i64 @rt_global_cached(ptr, ptr, i32)
 declare void @rt_top(i64)
 declare void @rt_top_unwrap(i64)
 declare void @rt_safepoint()
-@rt_gc_stop = external global i32
+@rt_gc_stop = external dso_local global i32
+@rt_sp_tick = external thread_local(localexec) global i32
 declare {i64, i1} @llvm.sadd.with.overflow.i64(i64, i64)
 declare {i64, i1} @llvm.ssub.with.overflow.i64(i64, i64)
 declare {i64, i1} @llvm.smul.with.overflow.i64(i64, i64)
@@ -203,8 +205,28 @@ LEAF_SAFE = frozenset("""@rt_alloc @rt_bool @rt_float @rt_str @rt_list @rt_make_
 CALL_RE = re.compile(r"\bcall [^@%]*([@%][^(\s]*)\(")
 
 
-def is_leaf(lines: list[str]) -> bool:
-    return all(m.group(1) in LEAF_SAFE for line in lines for m in CALL_RE.finditer(line))
+# 自分だけを呼ぶ再帰の関数の安全点(#81): スレッドごとの数(rt_sp_tick)を減らし、SP_TICK 回に1回だけ rt_gc_stop を見る。
+# GC を待たせるのは、ほかの関数を呼ばない(確保もしない)計算の 64 回分だけ。Go 版の safepointSelf と同じ
+SP_TICK = 64
+SAFEPOINT_SELF = f"""  %tk = load i32, ptr @rt_sp_tick, align 4
+  %tk1 = sub i32 %tk, 1
+  store i32 %tk1, ptr @rt_sp_tick, align 4
+  %tkz = icmp eq i32 %tk1, 0
+  br i1 %tkz, label %sp.tick, label %b0
+sp.tick:
+  store i32 {SP_TICK}, ptr @rt_sp_tick, align 4
+""" + SAFEPOINT
+
+
+def entry_safepoint(header: str, lines: list[str]) -> str:
+    """関数の入口の安全点: 葉なら置かない、自分だけを呼ぶなら間引く、ほかはいつも見る"""
+    calls = {m.group(1) for line in lines for m in CALL_RE.finditer(line)} - LEAF_SAFE
+    if not calls:
+        return "  br label %b0"
+    m = re.search(r"(@[^(\s]*)\(", header)
+    if m is not None and calls == {m.group(1)}:
+        return SAFEPOINT_SELF
+    return SAFEPOINT
 
 
 class FnGen:
@@ -294,7 +316,7 @@ class FnGen:
             frame.append(f"  %fr = alloca i64, i32 {self.nslots}")
         frame.append("  store ptr %up, ptr %fr")
         # 安全点: GC がほかのスレッドを止めたいとき(rt_gc_stop が 1)は、ここで止まる
-        enter = "  br label %b0" if is_leaf(self.lines) else SAFEPOINT
+        enter = entry_safepoint(header, self.lines)
         return "\n".join([f"{header} {{", "entry:"] + self.entry + frame + [enter] + self.lines + ["}"])
 
 
@@ -454,11 +476,55 @@ class Compiler:
         return fg.call("i64", "@rt_neg", f"i64 {t}, i32 0")
 
     def ex_Not(self, node: S.Not, sc: Scope, fg: FnGen) -> str:
-        t = self.ex(node.operand, sc, fg)
-        b = fg.call("i32", "@rt_truth", f"i64 {t}, ptr {self.cstr(S.DENAI)}, i32 {pos_of(getattr(node.operand, 'line', 0))}")
-        x = fg.tmp()
-        fg.emit(f"{x} = xor i32 {b}, 1")
-        return fg.call("i64", "@rt_bool", f"i32 {x}")
+        return self.bool_value(self.truth(node, sc, fg, None), fg)
+
+    def bool_value(self, b: str, fg: FnGen) -> str:
+        """i1 を真偽の値にする"""
+        z = fg.tmp()
+        fg.emit(f"{z} = zext i1 {b} to i32")
+        return fg.call("i64", "@rt_bool", f"i32 {z}")
+
+    def truth(self, node: Any, sc: Scope, fg: FnGen, what: str | None) -> str:
+        """式の真偽を i1 で。what が None なら「もし」の読み方(rt_truthy)、あれば真偽でないとエラー(rt_truth)。
+        整数の比較・「かつ」「または」・「ではない」は真偽の値を作らずに分岐できるようにする(#80)"""
+        def to_i1(v: str) -> str:
+            if what is None:
+                t = fg.call("i32", "@rt_truthy", f"i64 {v}")
+            else:
+                t = fg.call("i32", "@rt_truth", f"i64 {v}, ptr {self.cstr(what)}, i32 {pos_of(getattr(node, 'line', 0))}")
+            b = fg.tmp()
+            fg.emit(f"{b} = icmp ne i32 {t}, 0")
+            return b
+
+        if isinstance(node, S.Not):
+            b = self.truth(node.operand, sc, fg, S.DENAI)
+            x = fg.tmp()
+            fg.emit(f"{x} = xor i1 {b}, true")
+            return x
+        if isinstance(node, S.BinOp) and node.op in (S.KW_KATSU, S.KW_MATAHA):
+            return self.logic_i1(node, sc, fg)
+        if not (isinstance(node, S.BinOp) and node.op in CMP_PRED):
+            return to_i1(self.ex(node, sc, fg))
+        # 比較: 両方が整数なら icmp の結果でそのまま分岐する
+        a = self.ex(node.left, sc, fg)
+        b = self.ex(node.right, sc, fg)
+        both, fast, slow, join = fg.tmp(), fg.new_label(), fg.new_label(), fg.new_label()
+        x, c, cmp = fg.tmp(), fg.tmp(), fg.tmp()
+        fg.emit(f"{x} = and i64 {a}, {b}")
+        fg.emit(f"{both} = and i64 {x}, 1")
+        fg.emit(f"{c} = icmp ne i64 {both}, 0")
+        fg.emit(f"br i1 {c}, label %{fast}, label %{slow}")
+        fg.start(fast)
+        fg.emit(f"{cmp} = icmp {CMP_PRED[node.op]} i64 {a}, {b}")
+        fg.emit(f"br label %{join}")
+        fg.start(slow)
+        v = fg.call("i64", "@rt_binop", f"i32 {OPS[node.op]}, i64 {a}, i64 {b}, i32 {pos_of(node)}")
+        sv = to_i1(v)
+        fg.emit(f"br label %{join}")
+        fg.start(join)
+        r = fg.tmp()
+        fg.emit(f"{r} = phi i1 [{cmp}, %{fast}], [{sv}, %{slow}]")
+        return r
 
     def ex_BinOp(self, node: S.BinOp, sc: Scope, fg: FnGen) -> str:
         if node.op in (S.KW_KATSU, S.KW_MATAHA):
@@ -506,7 +572,7 @@ class Compiler:
             fg.start(ok)
             fast_val, fast_label = val, ok
         else:
-            pred = {"<": "slt", ">": "sgt", "<=": "sle", ">=": "sge", "==": "eq", "!=": "ne"}[node.op]
+            pred = CMP_PRED[node.op]
             cmp, z = fg.tmp(), fg.tmp()
             fg.emit(f"{cmp} = icmp {pred} i64 {a}, {b}")
             fg.emit(f"{z} = zext i1 {cmp} to i32")
@@ -522,34 +588,30 @@ class Compiler:
         return res
 
     def logic(self, node: S.BinOp, sc: Scope, fg: FnGen) -> str:
-        """「かつ」「または」: 左で決まれば右は計算しない"""
-        what = self.cstr(node.op)
-        a = self.ex(node.left, sc, fg)
-        ta = fg.call("i32", "@rt_truth", f"i64 {a}, ptr {what}, i32 {pos_of(getattr(node.left, 'line', 0))}")
-        c = fg.tmp()
-        stop_on = 1 if node.op == S.KW_MATAHA else 0
-        fg.emit(f"{c} = icmp eq i32 {ta}, {stop_on}")
+        return self.bool_value(self.logic_i1(node, sc, fg), fg)
+
+    def logic_i1(self, node: S.BinOp, sc: Scope, fg: FnGen) -> str:
+        """「かつ」「または」を i1 で: 左で決まれば右は計算しない"""
+        ta = self.truth(node.left, sc, fg, node.op)
         done, right, join = fg.new_label(), fg.new_label(), fg.new_label()
-        fg.emit(f"br i1 {c}, label %{done}, label %{right}")
+        stop_on = node.op == S.KW_MATAHA
+        if stop_on:
+            fg.emit(f"br i1 {ta}, label %{done}, label %{right}")
+        else:
+            fg.emit(f"br i1 {ta}, label %{right}, label %{done}")
         fg.start(done)
-        v1 = fg.call("i64", "@rt_bool", f"i32 {stop_on}")
         fg.emit(f"br label %{join}")
         fg.start(right)
-        b = self.ex(node.right, sc, fg)
-        tb = fg.call("i32", "@rt_truth", f"i64 {b}, ptr {what}, i32 {pos_of(getattr(node.right, 'line', 0))}")
-        v2 = fg.call("i64", "@rt_bool", f"i32 {tb}")
+        tb = self.truth(node.right, sc, fg, node.op)
         l2 = fg.label
         fg.emit(f"br label %{join}")
         fg.start(join)
         r = fg.tmp()
-        fg.emit(f"{r} = phi i64 [{v1}, %{done}], [{v2}, %{l2}]")
+        fg.emit(f"{r} = phi i1 [{'true' if stop_on else 'false'}, %{done}], [{tb}, %{l2}]")
         return r
 
     def ex_If(self, node: S.If, sc: Scope, fg: FnGen) -> str:
-        c = self.ex(node.cond, sc, fg)
-        t = fg.call("i32", "@rt_truthy", f"i64 {c}")
-        b = fg.tmp()
-        fg.emit(f"{b} = icmp ne i32 {t}, 0")
+        b = self.truth(node.cond, sc, fg, None)
         lt, le, lj = fg.new_label(), fg.new_label(), fg.new_label()
         fg.emit(f"br i1 {b}, label %{lt}, label %{le}")
         fg.start(lt)
@@ -891,10 +953,7 @@ class Compiler:
             local = Scope(sc, fg)
             self.pattern(pat, subj, nxt, local, fg)
             if guard is not None:
-                g = self.ex(guard, local, fg)
-                t = fg.call("i32", "@rt_truth", f"i64 {g}, ptr {self.cstr(S.KW_KATSU)}, i32 {pos_of(getattr(guard, 'line', 0))}")
-                c = fg.tmp()
-                fg.emit(f"{c} = icmp ne i32 {t}, 0")
+                c = self.truth(guard, local, fg, S.KW_KATSU)
                 ok = fg.new_label()
                 fg.emit(f"br i1 {c}, label %{ok}, label %{nxt}")
                 fg.start(ok)
