@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import itertools
+import os
 from dataclasses import fields as dc_fields
 from dataclasses import is_dataclass
 from typing import Any
@@ -28,7 +29,7 @@ from suru import (
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
     PValue, Ref, RESULT, Run, Sequel, Str, SuruError, module_error, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
     HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, Import, Module, MODULE_SEP, SOURCE_SUFFIX, _where, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
-    parse_program, collect_runs, _run_key, LIB_PRIMITIVES, GA, UNWRAP_TYPES, _call_name, TUPLE_TYPE,
+    parse_program, collect_runs, _run_key, LIB_PRIMITIVES, GA, UNWRAP_TYPES, _call_name, TUPLE_TYPE, PRELUDE_PATH,
 )
 
 # ---------------------------------------------------------------------------
@@ -699,7 +700,10 @@ class Checker:
         self.base = TEnv()  # 性質の実装(どのファイルのものも)
         self.checked: dict = {}  # 読み込んだファイル(絶対パス → その定義の型)
         self.recorded: dict = {}
-        env = self.env = self.check_unit(program)
+        # lib/ のファイルそのものを調べるときは、そのファイルの組み込みも見える
+        path = os.path.abspath(self.ctx.path) if getattr(self.ctx, "path", "") else ""
+        names = [b.name for b in LIB_PRIMITIVES.get(path, ())] if path else []
+        env = self.env = self.check_unit(program, {n: PrimRef(n) for n in names} or None)
         for s in program:
             if isinstance(s, (Define,) + TOP_LEVEL_ONLY):
                 continue
@@ -721,7 +725,7 @@ class Checker:
                     local.hidden[s.module.name + MODULE_SEP + name] = s.module.name
                     if s.open:
                         local.hidden[name] = s.module.name
-                for name, v in scope.vars.items():
+                for name, v in exported_vars(scope).items():
                     if not name.startswith("\0") and MODULE_SEP not in name and name not in s.module.private:
                         local.vars[s.module.name + MODULE_SEP + name] = v
                         if s.open:
@@ -1104,8 +1108,7 @@ class Checker:
         info = self.ctx.ctors.get(node.name)
         if info is not None and not info[1]:
             return self.ctor_type(node.name)  # 中身のない形(「赤」)
-        self.check_hidden(node.name, env, node.line)
-        return TVar()  # 分からない名前は実行時にエラーになる
+        raise self.unknown_name(node.name, env, node.line)
 
     def infer_ListLit(self, node: ListLit, env: TEnv) -> Any:
         return self.list_type([(self.infer(item, env), first_line(item)) for item in node.items])
@@ -1325,8 +1328,12 @@ class Checker:
         if typer is not None:
             self.env = env
             return typer(self, args, line)
+        raise self.unknown_name(name, env, line)
+
+    def unknown_name(self, name: str, env: TEnv, line: Any) -> SuruError:
+        """どこにも定義のない名前のエラー(打ち間違いを動かす前に知らせる #149)"""
         self.check_hidden(name, env, line)
-        return TVar()  # 実行時にエラーになる名前
+        return self.err(f"「{display_name(name)}」は定義されていません{unknown_hint(name, env, self)}", line)
 
     def check_hidden(self, name: str, env: TEnv, line: Any) -> None:
         """読み込んだファイルの非公開の名前を使っていれば「定義されていません」にする
@@ -1364,8 +1371,7 @@ class Checker:
         sig = BUILTIN_FUNS.get(name)
         if sig is not None:
             return sig()
-        self.check_hidden(name, env, line)
-        return TVar()
+        raise self.unknown_name(name, env, line)
 
     def infer_Ref(self, node: Ref, env: TEnv) -> Any:
         t = prune(self.fun_value(node.name, env, node.line))
@@ -1749,12 +1755,21 @@ class Checker:
                 return TVar()
             return self.do_type(stmts, i + 1, local, line)
         v = self.infer(s, env)
+        self.check_action_list(v, first_line(s) or line)
         if i + 1 == len(stmts):
             out = TVar()
             self.post(Constraint(v, first_line(s) or line, op="wrap", extra=(out,)), env)
             return out
         k = self.do_type(stmts, i + 1, env, line)
         return self.bind(v, TVar(), k, first_line(s) or line, "手順の途中の文の値({t})は動作ではありません", env)
+
+    def check_action_list(self, t: Any, line: Any) -> None:
+        """手順の文の値が動作のリストなら、行われないのでエラーにする(#151)"""
+        r = prune(t)
+        if isinstance(r, TCon) and r.name == "リスト" and r.args:
+            e = prune(r.args[0])
+            if isinstance(e, TCon) and e.name == "動作":
+                raise self.err(ACTION_LIST_MESSAGE, line)
 
     def do_unwrap_type(self, stmts: list, i: int, env: TEnv, line: Any, r: Run, key: str) -> Any:
         """手順の文の中の「した 中身」: 動作なら行ってから、その結果(成否・有無)の中の値を使う"""
@@ -1782,6 +1797,59 @@ def impl_key(trait: str, type_name: str, method: str) -> str:
 
 def display_name(name: str) -> str:
     return name.split("\0")[-1]
+
+
+def exported_vars(scope: TEnv) -> dict:
+    """読み込んだファイルから見える名前。実行するときと同じく、そのファイルが読み込んだ名前(「読み込んで 使う」の名前や
+    lib/ の組み込み)も、自分の定義と一緒に見える(scope の親は check_unit の local)"""
+    out = dict(scope.parent.vars) if scope.parent is not None else {}
+    out.update(scope.vars)
+    return out
+
+
+ACTION_LIST_MESSAGE = ("この文は動作のリストを作るだけで、行いません。"
+                       "行うには「を 実行する」を付けてください(例: （xs の それぞれ を 表示する） を 実行する)")
+
+
+def unknown_hint(name: str, env: TEnv, checker: Any) -> str:
+    """定義のない名前のエラーに付ける案内(演算子の詰め書き・読み込み忘れ・近い名前)"""
+    if any(op in name for op in "+-*/%^<>=＋－＊／×÷"):
+        return "(演算子の前後に空白を入れてください。詰めて書くと1つの名前になります)"
+    for path, prims in LIB_PRIMITIVES.items():
+        if path != PRELUDE_PATH and any(b.name == name for b in prims):
+            lib = os.path.splitext(os.path.basename(path))[0]
+            return f"(「{lib}」 を 読み込んで 使う と書くと使えます)"
+    known: set = set(BUILTIN_CALLS) | set(BUILTIN_FUNS) | set(checker.method_trait) | set(checker.ctx.ctors)
+    e: TEnv | None = env
+    while e is not None:
+        known.update(n for n in e.vars if not n.startswith("\0"))
+        e = e.parent
+    close = closest_name(name, known)
+    return f"(「{close}」のことですか)" if close else ""
+
+
+def edit_distance(a: str, b: str) -> int:
+    """文字ごとの編集距離(足す・消す・置きかえる)"""
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def closest_name(name: str, known: Any) -> str:
+    """打ち間違いと思われる名前に一番近い名前(文字数の3分の1まで、少なくとも1文字の違い。同じ近さなら文字の番号の順で先のもの)"""
+    limit = max(1, len(name) // 3)
+    best, best_d = "", limit + 1
+    for k in sorted(known):
+        if k == name or abs(len(k) - len(name)) > limit:
+            continue
+        d = edit_distance(name, k)
+        if d < best_d:
+            best, best_d = k, d
+    return best
 
 
 def _is_action(t: Any) -> bool:

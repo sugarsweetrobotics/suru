@@ -23,7 +23,7 @@ func TestAnalyzeExamples(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		a := Analyze(string(b), filepath.Dir(f))
+		a := AnalyzeFile(string(b), filepath.Dir(f), f)
 		if a.Error != nil {
 			t.Errorf("%s: %v", f, a.Error)
 		}
