@@ -185,13 +185,17 @@ func (k *kumu) run(args []string) int {
 	if target != "" {
 		return k.mcu(cmd, p, target, port)
 	}
+	cb, err := PrepareC(p, deps, k.stderr)
+	if err != nil {
+		return k.fail(err)
+	}
 	if cmd == "書き込む" {
 		return k.fail(fmt.Errorf("書き込む には マイコンの対象 が要ります(%s に「対象 とは 「arduino-uno」」と書くか、--対象 で選んでください)", ConfigName))
 	}
 	if cmd == "試験" {
-		return k.test(p, progArgs, opt, check)
+		return k.test(p, progArgs, opt, check, cb)
 	}
-	exe, err := k.build(p, opt, check)
+	exe, err := k.build(p, opt, check, cb)
 	if err != nil {
 		return k.fail(err)
 	}
@@ -221,14 +225,14 @@ func (k *kumu) fail(err error) int {
 
 // build は入口のファイルをコンパイルして 出力/名前 を作る。
 // IR・最適化・実行時ライブラリが前と同じなら clang を呼ばない
-func (k *kumu) build(p *Project, opt string, check bool) (string, error) {
+func (k *kumu) build(p *Project, opt string, check bool, cb *CBuild) (string, error) {
 	path := p.EntryPath()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("入口のファイル「%s」が読めません", p.Entry+compiler.SourceSuffix)
 	}
 	exe := filepath.Join(p.Root, OutDir, p.Name)
-	built, err := compileTo(string(data), path, exe, opt, check)
+	built, err := compileTo(string(data), path, exe, opt, check, cb)
 	if err != nil {
 		return "", err
 	}
@@ -248,8 +252,8 @@ func (k *kumu) rel(path string) string {
 }
 
 // compileTo は path(中身は source)をコンパイルして exe を作る。
-// IR・最適化・実行時ライブラリが前と同じなら clang を呼ばない(built が false)
-func compileTo(source, path, exe, opt string, check bool) (built bool, err error) {
+// IR・最適化・実行時ライブラリ・Cソースが前と同じなら clang を呼ばない(built が false)
+func compileTo(source, path, exe, opt string, check bool, cb *CBuild) (built bool, err error) {
 	source = compiler.NormalizeNewlines(source)
 	ir, serr := compiler.CompileSource(source, filepath.Dir(path), path, check)
 	if serr != nil {
@@ -259,7 +263,11 @@ func compileTo(source, path, exe, opt string, check bool) (built bool, err error
 		return false, err
 	}
 	h := sha256.New()
-	for _, part := range []string{version, opt, ir, string(suru.Runtime), strings.Join(compiler.LinkFlags(ir), " ")} {
+	cdigest := ""
+	if cb != nil {
+		cdigest = cb.Digest
+	}
+	for _, part := range []string{version, opt, ir, string(suru.Runtime), strings.Join(compiler.LinkFlags(ir), " "), cdigest} {
 		fmt.Fprintf(h, "%d:%s", len(part), part)
 	}
 	digest := hex.EncodeToString(h.Sum(nil))
@@ -274,7 +282,7 @@ func compileTo(source, path, exe, opt string, check bool) (built bool, err error
 		return false, err
 	}
 	defer os.Remove(llPath)
-	if err := native.Build(llPath, exe, opt); err != nil {
+	if err := native.BuildWith(llPath, exe, opt, cb.Args()); err != nil {
 		return false, err
 	}
 	return true, os.WriteFile(stamp, []byte(digest), 0o644)

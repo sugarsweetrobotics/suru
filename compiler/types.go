@@ -185,6 +185,10 @@ var basicTypes = setOf("数", "文字列", "真偽", "番地", "バイト列")
 
 // numAliases は外部の関数の宣言で使う数の別名
 var numAliases = setOf("小数", "整数", "無", "単精度")
+
+// CShapeType は C の構造体の形(「C形作成する」。型の引数は組の型)
+const CShapeType = "C形"
+
 var monadTypes = setOf("動作", "リスト")
 
 func bindVar(v *TVar, t Type) {

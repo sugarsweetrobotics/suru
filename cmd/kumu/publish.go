@@ -78,11 +78,16 @@ func (k *kumu) publish(args []string) int {
 	if out, _ := git("-C", p.Root, "tag", "--list", tag); strings.TrimSpace(out) != "" {
 		return k.fail(fmt.Errorf("タグ %s はもうあります(組.suru の版を上げてください)", tag))
 	}
-	if _, err := Resolve(p, k.stderr); err != nil {
+	deps, err := Resolve(p, k.stderr)
+	if err != nil {
 		return k.fail(err)
 	}
 	if runTests {
-		if rc := k.test(p, nil, "-O0", true); rc != 0 {
+		cb, err := PrepareC(p, deps, k.stderr)
+		if err != nil {
+			return k.fail(err)
+		}
+		if rc := k.test(p, nil, "-O0", true, cb); rc != 0 {
 			return k.fail(fmt.Errorf("不合格の試験があるので、タグを付けませんでした(--試験なし で試験を飛ばせます)"))
 		}
 	}

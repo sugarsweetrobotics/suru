@@ -22,15 +22,18 @@ const OutDir = "出力"
 
 // Project は 組.suru に書いたプロジェクトの設定
 type Project struct {
-	Root    string   // 組.suru のあるフォルダ(絶対パス)
-	Name    string   // 名前(作るバイナリの名前にもなる)
-	Version string   // 版
-	Entry   string   // 入口のファイルの名前(.suru なし)
-	Deps    []Dep    // 依存(書いた順)
-	depLine int      // 「依存 とは …」の行(なければ 0)
-	SysDeps []SysDep // 外部依存: システムの C のライブラリ(pkg-config の名前)
-	Guide   []string // 導入案内: 外部依存が無いときに見せる入れ方
-	Target  string   // 対象: マイコンの基板(「arduino-uno」など。空ならこの計算機)
+	Root      string   // 組.suru のあるフォルダ(絶対パス)
+	Name      string   // 名前(作るバイナリの名前にもなる)
+	Version   string   // 版
+	Entry     string   // 入口のファイルの名前(.suru なし)
+	Deps      []Dep    // 依存(書いた順)
+	depLine   int      // 「依存 とは …」の行(なければ 0)
+	SysDeps   []SysDep // 外部依存: システムの C のライブラリ(pkg-config の名前)
+	Guide     []string // 導入案内: 外部依存が無いときに見せる入れ方
+	Target    string   // 対象: マイコンの基板(「arduino-uno」など。空ならこの計算機)
+	CSources  []string // Cソース: 一緒に作る C のファイル(プロジェクトのフォルダからの道)
+	CFlags    []string // C引数: C のソースをコンパイルするときの引数(${…} は環境変数。空白で分ける)
+	LinkFlags []string // リンク引数: リンクするときの引数(依存のものも全部使う)
 }
 
 // SysDep は 組.suru の外部依存の1つ。「libpcre2-8」か、最低の版を付けた「libpcre2-8@10.30」
@@ -52,7 +55,7 @@ func (p *Project) EntryPath() string {
 }
 
 // configKeys は 組.suru に書ける項目(書く順)
-var configKeys = []string{"名前", "版", "入口", "依存", "外部依存", "導入案内", "対象"}
+var configKeys = []string{"名前", "版", "入口", "依存", "外部依存", "導入案内", "対象", "Cソース", "C引数", "リンク引数"}
 
 // ParseConfig は 組.suru の中身を読む。する の定義「名前 とは 「…」」だけを書ける
 func ParseConfig(source, root string) (*Project, error) {
@@ -84,10 +87,26 @@ func ParseConfig(source, root string) (*Project, error) {
 			p.Deps, p.depLine = deps, pos.Line
 			continue
 		}
-		if d.Name == "外部依存" || d.Name == "導入案内" {
+		if d.Name == "外部依存" || d.Name == "導入案内" || d.Name == "Cソース" || d.Name == "C引数" || d.Name == "リンク引数" {
 			items, err := stringList(d)
 			if err != nil {
 				return nil, configError(&compiler.SuruError{Message: err.Error(), Line: pos}, source)
+			}
+			switch d.Name {
+			case "Cソース":
+				for _, it := range items {
+					if it == "" || filepath.IsAbs(it) || strings.HasPrefix(filepath.Clean(it), "..") {
+						return nil, configError(&compiler.SuruError{Message: fmt.Sprintf("Cソース「%s」には、プロジェクトのフォルダの中のファイルを書きます", it), Line: pos}, source)
+					}
+				}
+				p.CSources = items
+				continue
+			case "C引数":
+				p.CFlags = items
+				continue
+			case "リンク引数":
+				p.LinkFlags = items
+				continue
 			}
 			if d.Name == "導入案内" {
 				p.Guide = items

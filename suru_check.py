@@ -140,6 +140,7 @@ def occurs(v: TVar, t: Any) -> bool:
 BASIC = ("数", "文字列", "真偽", "番地", "バイト列")
 NUM_ALIASES = ("小数", "整数", "無", "単精度")  # 外部の関数の宣言で使う数の別名
 MONADS = ("動作", "リスト")  # 組み込みの連鎖可能な型
+CSHAPE = "C形"  # C の構造体の形(「C形作成する」。型の引数は組の型)
 
 # 自分の型のフィールドごとの、いつも使う型(型名 → 引数ごとの型か None)。エラーの表示で、
 # 引数がすべてこの型(かどうでもよい型変数)なら省く
@@ -992,6 +993,8 @@ class Checker:
             return TCon(te.name)
         if te.name in MONADS:
             return TCon(te.name, (args[0],))
+        if te.name == CSHAPE:
+            return TCon(CSHAPE, (args[0],))
         if te.name not in self.shapes.keys:
             return TVar()  # 「関数」: どんな関数でもよい
         inst = self.fresh_type(te.name)
@@ -1789,7 +1792,7 @@ def _is_action(t: Any) -> bool:
 
 def prune_is_record(t: Any) -> bool:
     r = prune(t)
-    return isinstance(r, TCon) and r.name not in ("数", "文字列", "真偽", "リスト", "動作", "番地", "バイト列")
+    return isinstance(r, TCon) and r.name not in ("数", "文字列", "真偽", "リスト", "動作", "番地", "バイト列", CSHAPE)
 
 
 # ---------------------------------------------------------------------------
@@ -2085,6 +2088,45 @@ def _t_fixed_deserialize(c, a, line):
 
 _simple("バイト列取得する", [("から", ADDR), (WO, NUM)], act(BYTES))
 _simple("書込する", [(WO, BYTES), ("へ", ADDR)], act(NUM))
+_simple("番地加算する", [(WO, ADDR), ("で", NUM)], ADDR)
+
+
+def _cshape_t(t: Any) -> Any:
+    return TCon(CSHAPE, (t,))
+
+
+def _shape_prim(name: str, params: Any, result: Any) -> None:
+    """型の引数に組の型をとる、C形の組み込み(params と result は x(組の型)と y(どんな型でもよい)から作る)"""
+    def sig():
+        x, y = TVar(), TVar()
+        return TFun(params(x, y), result(x, y))
+
+    def fn(c, a, line):
+        x, y = TVar(), TVar()
+        for p, t in params(x, y):
+            _need(c, a, p, t, line, name)
+        return result(x, y)
+
+    prim(name, {p: True for p, _ in sig().params}, sig)(fn)
+
+
+_shape_prim("C形作成する", lambda x, y: [(WO, x), ("で", lst(STR))], lambda x, y: _cshape_t(x))
+_shape_prim("入れ子設定する", lambda x, y: [(WO, _cshape_t(x)), ("で", NUM), ("に", _cshape_t(y))], lambda x, y: _cshape_t(x))
+_shape_prim("C大きさにする", lambda x, y: [(WO, _cshape_t(x))], lambda x, y: NUM)
+_shape_prim("C揃えにする", lambda x, y: [(WO, _cshape_t(x))], lambda x, y: NUM)
+_shape_prim("C位置にする", lambda x, y: [(WO, _cshape_t(x)), ("で", NUM)], lambda x, y: NUM)
+_shape_prim("C直列化する", lambda x, y: [(WO, x), ("で", _cshape_t(x))], lambda x, y: BYTES)
+_shape_prim("C復元する", lambda x, y: [(WO, BYTES), ("で", _cshape_t(x))], lambda x, y: x)
+_shape_prim("構造体読取する", lambda x, y: [("から", ADDR), ("で", NUM), (WO, _cshape_t(x))], lambda x, y: act(x))
+_shape_prim("呼び戻し番地作成する", lambda x, y: [(WO, x), ("で", STR), ("に", STR)], lambda x, y: act(ADDR))
+_simple("呼び戻し解放する", [(WO, ADDR)], act(NUM))
+_shape_prim("構造体書込する", lambda x, y: [(WO, x), ("へ", ADDR), ("で", NUM), ("に", _cshape_t(x))], lambda x, y: act(NUM))
+# C のメモリを型を決めて読み書きする(suru.py の C_MEM_TYPES)
+for _t, _v in [("符号付き8", NUM), ("符号付き16", NUM), ("符号付き32", NUM), ("符号付き64", NUM), ("符号なし8", NUM),
+               ("符号なし16", NUM), ("符号なし32", NUM), ("符号なし64", NUM), ("単精度", NUM), ("小数", NUM),
+               ("番地", ADDR), ("真偽", BOOL), ("C文字列", STR)]:
+    _simple(_t + "読取する", [("から", ADDR), ("で", NUM)], act(_v))
+    _simple(_t + "書込する", [(WO, _v), ("へ", ADDR), ("で", NUM)], act(NUM))
 _simple("エラー番号取得する", [], act(NUM))
 _simple("引数取得する", [], act(lst(STR)))
 
@@ -2250,6 +2292,7 @@ _simple("名前つき通路削除する", [(WO, STR)], act(NUM))
 _chan_prim("通路送信する", lambda x: [(WO, x), ("へ", _chan(x))], lambda x: act(x))
 _chan_prim("通路受信する", lambda x: [("から", _chan(x))], lambda x: act(x))
 _chan_prim("通路閉鎖する", lambda x: [(WO, _chan(x))], lambda x: act(_chan(x)))
+_chan_prim("通路送り番地作成する", lambda x: [(WO, x), ("へ", _chan(x)), ("で", STR)], lambda x: act(ADDR))
 
 
 LOCK, SLOT = TCon("ロック", (ADDR,)), TCon("枠", (ADDR,))  # 中身の欄はいつも番地(表示では省かれる)

@@ -1151,7 +1151,7 @@ TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import, ExternLib, Vis
 TYPE_VAR_NAMES = "甲乙丙丁戊己庚辛壬癸"
 # 小数・整数・単精度は数の別名(外部の関数の宣言で C の double・int・float を表す)。番地は C のポインタ
 # 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
-BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作", "単精度")
+BUILTIN_TYPES = ("数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作", "単精度", "C形")
 # 外部の関数に渡せる型 → C の型の名前(バイト列は引数だけ、無は値だけ)
 FFI_TYPES = {"数": "i64", "小数": "f64", "整数": "i32", "真偽": "bool", "文字列": "str", "番地": "ptr",
              "バイト列": "bytes", "無": "void", "単精度": "f32"}
@@ -2448,7 +2448,7 @@ def _type_word(tok: Token, args: list) -> Any:
         return TypeVarName(name)
     if name in ("数", "文字列", "真偽", "小数", "整数", "番地", "バイト列", "無", "単精度") and args:
         raise SuruError(f"「{name}」は型の引数をとりません", tok.line)
-    if name in ("リスト", "動作") and len(args) != 1:
+    if name in ("リスト", "動作", "C形") and len(args) != 1:
         raise SuruError(f"「{name}」の前には型を1つ書いてください(「数 の {name}」)", tok.line)
     if name not in BUILTIN_TYPES and name not in _CTX.types:
         raise SuruError(f"「{name}」という型はありません", tok.line)
@@ -3310,6 +3310,8 @@ def type_name_of(v: Any) -> str:
         return v.type_name
     if isinstance(v, Address):
         return "番地"
+    if isinstance(v, CShape):
+        return "C形"
     if isinstance(v, bytes):
         return "バイト列"
     if isinstance(v, ACTION_TYPES):
@@ -3948,6 +3950,7 @@ STD_PRIMITIVES = [
     Builtin("固定復元する", [(WO, True), ("で", True)], lambda it, a, line: _fixed_deserialize(a[WO], a["で"], line)),
     Builtin("バイト列取得する", [("から", True), (WO, True)], lambda it, a, line: _peek(a["から"], a[WO], line)),
     Builtin("書込する", [(WO, True), ("へ", True)], lambda it, a, line: _poke(a[WO], a["へ"], line)),
+    Builtin("番地加算する", [(WO, True), ("で", True)], lambda it, a, line: _addr_add(a[WO], a["で"], line)),
     Builtin("エラー番号取得する", [], lambda it, a, line: Action("エラー番号取得する", lambda it2: _errno())),
     Builtin("失敗する", [(WO, True)], lambda it, a, line: _fail_action(a[WO], line)),
     # 環境(lib/環境.suru が使う)
@@ -4068,6 +4071,366 @@ def _poke(b: Any, p: Any, line: int) -> Action:
             ctypes.memmove(addr.value, data, len(data))
         return len(data)
     return Action("書込する", perform)
+
+
+# --- C のメモリを型を決めて読み書きする(番地 + 位置のところの値を1つ) ---
+# C の型の名前 → (struct の書式, 大きさ, 種類)。種類: i 整数、f 小数、p 番地、b 真偽(ほかに C文字列: NUL で終わる文字列)
+C_SCALARS = {
+    "符号付き8": ("b", 1, "i"), "符号付き16": ("h", 2, "i"), "符号付き32": ("i", 4, "i"), "符号付き64": ("q", 8, "i"),
+    "符号なし8": ("B", 1, "i"), "符号なし16": ("H", 2, "i"), "符号なし32": ("I", 4, "i"), "符号なし64": ("Q", 8, "i"),
+    "単精度": ("f", 4, "f"), "小数": ("d", 8, "f"), "番地": ("Q", 8, "p"), "真偽": ("B", 1, "b"),
+}
+C_MEM_TYPES = tuple(C_SCALARS) + ("C文字列",)
+
+
+def _int_range(t: str) -> tuple[int, int]:
+    """C の整数の型に入る範囲(64 ビットはコンパイルしたプログラムの整数の範囲にそろえる)"""
+    unsigned = t.startswith("符号なし")
+    bits = int(t[4:])
+    if unsigned:
+        return 0, min((1 << bits) - 1, MAX_COMPILED_INT)
+    return max(-(1 << (bits - 1)), MIN_COMPILED_INT), min((1 << (bits - 1)) - 1, MAX_COMPILED_INT)
+
+
+def _c_offset(v: Any, fn: str, line: int) -> int:
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    if isinstance(v, bool) or not isinstance(v, int) or not MIN_COMPILED_INT <= v <= MAX_COMPILED_INT:
+        raise SuruError(f"「{fn}」の「で」は位置(整数のバイト数)でなければなりません(「{format_value(v)}」が渡されました)", line)
+    return v
+
+
+def _c_encode(t: str, v: Any, what: str, line: int) -> bytes:
+    """する の値を C の型 t のバイト列にする(入らなければエラー)"""
+    import struct
+
+    if t == "C文字列":
+        if not isinstance(v, str):
+            raise SuruError(f"{what}は文字列でなければなりません(「{format_value(v)}」が渡されました)", line)
+        data = v.encode("utf-8")
+        if b"\0" in data:
+            raise SuruError(f"{what}は途中に文字コード 0 を含まない文字列でなければなりません", line)
+        return data + b"\0"
+    fmt, _, kind = C_SCALARS[t]
+    if kind == "p":
+        return struct.pack("=" + fmt, _addr(v, what, line).value)
+    if kind == "b":
+        if not isinstance(v, bool):
+            raise SuruError(f"{what}は真偽でなければなりません(「{format_value(v)}」が渡されました)", line)
+        return struct.pack("=" + fmt, 1 if v else 0)
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise SuruError(f"{what}は数でなければなりません(「{format_value(v)}」が渡されました)", line)
+    if kind == "f":
+        return struct.pack("=" + fmt, float(v))
+    lo, hi = _int_range(t)
+    n = int(v) if isinstance(v, float) and v.is_integer() else v
+    if not isinstance(n, int) or not lo <= n <= hi:
+        raise SuruError(f"「{format_value(v)}」は{t}に入りません({lo} から {hi} までの整数です)", line)
+    return struct.pack("=" + fmt, n)
+
+
+def _c_decode(t: str, data: bytes, line: int) -> Any:
+    """C の型 t のバイト列を する の値にする"""
+    import struct
+
+    fmt, _, kind = C_SCALARS[t]
+    (r,) = struct.unpack("=" + fmt, data)
+    if kind == "p":
+        return Address(r)
+    if kind == "b":
+        return r != 0
+    if kind == "f":
+        return float(r)
+    if not MIN_COMPILED_INT <= r <= MAX_COMPILED_INT:
+        raise SuruError(f"{t}の値 {r} が大きすぎます(整数は ±{MAX_COMPILED_INT} までです)", line)
+    return r
+
+
+def _mem_read(t: str, p: Any, off: Any, line: int) -> Action:
+    fn = t + "読取する"
+    base = _addr(p, f"「{fn}」の「から」", line)
+    k = _c_offset(off, fn, line)
+
+    def perform(it: "Interpreter") -> Any:
+        import ctypes
+
+        if base.value == 0:
+            raise SuruError("番地(0x0)からは読み取れません", line)
+        at = (base.value + k) & 0xFFFFFFFFFFFFFFFF
+        if t == "C文字列":
+            return ctypes.string_at(at).decode("utf-8", "replace")
+        return _c_decode(t, ctypes.string_at(at, C_SCALARS[t][1]), line)
+    return Action(fn, perform)
+
+
+def _mem_write(t: str, v: Any, p: Any, off: Any, line: int) -> Action:
+    fn = t + "書込する"
+    data = _c_encode(t, v, f"「{fn}」の「を」", line)
+    base = _addr(p, f"「{fn}」の「へ」", line)
+    k = _c_offset(off, fn, line)
+
+    def perform(it: "Interpreter") -> int:
+        import ctypes
+
+        if base.value == 0:
+            raise SuruError("番地(0x0)へは書き込めません", line)
+        ctypes.memmove((base.value + k) & 0xFFFFFFFFFFFFFFFF, data, len(data))
+        return len(data)
+    return Action(fn, perform)
+
+
+def _addr_add(p: Any, n: Any, line: int) -> Address:
+    base = _addr(p, "「番地加算する」の「を」", line)
+    if isinstance(n, float) and n.is_integer():
+        n = int(n)
+    if isinstance(n, bool) or not isinstance(n, int) or not MIN_COMPILED_INT <= n <= MAX_COMPILED_INT:
+        raise SuruError(f"「番地加算する」の「で」は整数でなければなりません(「{format_value(n)}」が渡されました)", line)
+    return Address((base.value + n) & 0xFFFFFFFFFFFFFFFF)
+
+
+def _mem_builtins() -> list:
+    out = []
+    for t in C_MEM_TYPES:
+        out.append(Builtin(t + "読取する", [("から", True), ("で", True)],
+                           lambda it, a, line, t=t: _mem_read(t, a["から"], a["で"], line)))
+        out.append(Builtin(t + "書込する", [(WO, True), ("へ", True), ("で", True)],
+                           lambda it, a, line, t=t: _mem_write(t, a[WO], a["へ"], a["で"], line)))
+    return out
+
+
+STD_PRIMITIVES.extend(_mem_builtins())
+
+
+# --- C の構造体の形(「C形作成する」): 組と、C と同じ並び(揃えと詰め物)のメモリを行き来する ---
+@dataclass(frozen=True, eq=False)
+class CField:
+    """C形の欄: 型の名前(C_SCALARS か「構造体」)、配列なら要素の数、構造体なら中の形"""
+
+    ctype: str
+    count: Any  # 配列の要素の数(配列でなければ None)
+    inner: Any = None  # 構造体の欄の形(入れ子設定するまで None)
+
+
+@dataclass(frozen=True, eq=False)
+class CShape:
+    """C形: 見本の組と、フィールドごとの欄"""
+
+    sample: Record
+    fields: tuple
+
+    def __str__(self) -> str:
+        return f"<C形 {short_type_name(self.sample.ctor)}>"
+
+
+CSHAPE_STRUCT = "構造体"
+CSHAPE_MAX_COUNT = 1 << 20  # 配列の欄の要素の数の上限
+
+
+def _cshape(v: Any, what: str, line: int) -> CShape:
+    if not isinstance(v, CShape):
+        raise SuruError(f"{what}はC形でなければなりません(「{format_value(v)}」が渡されました)", line)
+    return v
+
+
+def _cfield_spec(s: str, line: int) -> CField:
+    """「符号付き32」「符号なし8[16]」「構造体」「構造体[3]」を読む"""
+    name, count = s, None
+    if s.endswith("]") and "[" in s:
+        name, num = s[:-1].split("[", 1)
+        if not num.isdigit() or not num.isascii() or not 1 <= int(num) <= CSHAPE_MAX_COUNT:
+            raise SuruError(f"C形の欄「{s}」の配列の大きさは 1 から {CSHAPE_MAX_COUNT} までの整数で書きます(「符号なし8[16]」)", line)
+        count = int(num)
+    if name not in C_SCALARS and name != CSHAPE_STRUCT:
+        raise SuruError(f"「{s}」はC形の欄の型ではありません(符号付き8〜64・符号なし8〜64・単精度・小数・番地・真偽・構造体、"
+                        "配列は「符号なし8[16]」)", line)
+    return CField(name, count)
+
+
+def _cfield_fits(f: CField, x: Any, k: int, line: int) -> None:
+    """見本のフィールドの値 x が欄 f に合うか(合わなければエラー)"""
+    def bad(want: str) -> SuruError:
+        return SuruError(f"C形の見本の{k}番目のフィールド「{format_value(x)}」は{want}でなければなりません(欄は「{_cfield_name(f)}」)", line)
+
+    if f.count is not None:
+        if not isinstance(x, tuple):
+            raise bad("リスト")
+        items = x
+    else:
+        items = (x,)
+    for y in items:
+        if f.ctype == CSHAPE_STRUCT:
+            if not isinstance(y, Record):
+                raise bad("組")
+            if f.inner is not None and y.ctor != f.inner.sample.ctor:
+                raise bad(f"「{short_type_name(f.inner.sample.ctor)}」の組")
+            continue
+        kind = C_SCALARS[f.ctype][2]
+        if kind == "p" and not isinstance(y, Address):
+            raise bad("番地")
+        if kind == "b" and not isinstance(y, bool):
+            raise bad("真偽")
+        if kind in ("i", "f") and (isinstance(y, bool) or not isinstance(y, (int, float))):
+            raise bad("数")
+
+
+def _cfield_name(f: CField) -> str:
+    return f.ctype + (f"[{f.count}]" if f.count is not None else "")
+
+
+def _cshape_make(sample: Any, specs: Any, line: int) -> CShape:
+    if not isinstance(sample, Record) or not sample.fields:
+        raise SuruError(f"「C形作成する」の「を」はフィールドのある組でなければなりません(「{format_value(sample)}」が渡されました)", line)
+    specs = _list(specs, "「C形作成する」の「で」", line)
+    if len(specs) != len(sample.fields):
+        raise SuruError(f"C形の欄の数({len(specs)})が、見本のフィールドの数({len(sample.fields)})と違います", line)
+    fields = tuple(_cfield_spec(_str(s, "C形の欄", line), line) for s in specs)
+    for k, (f, x) in enumerate(zip(fields, sample.values), 1):
+        _cfield_fits(f, x, k, line)
+    return CShape(sample, fields)
+
+
+def _cshape_nest(shape: Any, k: Any, inner: Any, line: int) -> CShape:
+    s = _cshape(shape, "「入れ子設定する」の「を」", line)
+    sub = _cshape(inner, "「入れ子設定する」の「に」", line)
+    if isinstance(k, bool) or not isinstance(k, int) or not 1 <= k <= len(s.fields):
+        raise SuruError(f"「入れ子設定する」の「で」は 1 から {len(s.fields)} までの欄の番号です(「{format_value(k)}」が渡されました)", line)
+    old = s.fields[k - 1]
+    if old.ctype != CSHAPE_STRUCT:
+        raise SuruError(f"C形の{k}番目の欄は「{_cfield_name(old)}」なので、入れ子にできません(「構造体」と書いた欄だけです)", line)
+    f = CField(CSHAPE_STRUCT, old.count, sub)
+    _cfield_fits(f, s.sample.values[k - 1], k, line)
+    return CShape(s.sample, s.fields[:k - 1] + (f,) + s.fields[k:])
+
+
+def _cfield_layout(f: CField, line: int) -> tuple[int, int]:
+    """欄の (大きさ, 揃え)"""
+    if f.ctype == CSHAPE_STRUCT:
+        if f.inner is None:
+            raise SuruError("C形に、中の形が決まっていない「構造体」の欄があります(「入れ子設定する」で決めます)", line)
+        size, align = _cshape_layout(f.inner, line)[:2]
+    else:
+        size = align = C_SCALARS[f.ctype][1]
+    return size * (f.count or 1), align
+
+
+def _cshape_layout(s: CShape, line: int) -> tuple[int, int, tuple]:
+    """C と同じ規則の (大きさ, 揃え, 欄ごとの位置): 欄はその揃えの倍数の位置に置き、全体は一番大きい揃えの倍数"""
+    off, top, offs = 0, 1, []
+    for f in s.fields:
+        size, align = _cfield_layout(f, line)
+        off = (off + align - 1) // align * align
+        offs.append(off)
+        off += size
+        top = max(top, align)
+    return (off + top - 1) // top * top, top, tuple(offs)
+
+
+def _cshape_put(s: CShape, x: Any, out: bytearray, at: int, line: int) -> None:
+    """組 x を out[at:] に C の並びで書く"""
+    if not isinstance(x, Record) or x.ctor != s.sample.ctor:
+        raise SuruError(f"「{format_value(x)}」はC形と違う組です(C形は「{short_type_name(s.sample.ctor)}」)", line)
+    _, _, offs = _cshape_layout(s, line)
+    for k, (f, v, off) in enumerate(zip(s.fields, x.values, offs), 1):
+        items = (v,)
+        if f.count is not None:
+            if not isinstance(v, tuple) or len(v) != f.count:
+                raise SuruError(f"「{format_value(v)}」は{f.count}個の要素のリストではありません({k}番目のフィールド「{x.fields[k - 1]}」)", line)
+            items = v
+        size = _cfield_layout(CField(f.ctype, None, f.inner), line)[0]
+        for i, y in enumerate(items):
+            if f.ctype == CSHAPE_STRUCT:
+                _cshape_put(f.inner, y, out, at + off + i * size, line)
+            else:
+                data = _c_encode(f.ctype, y, f"{k}番目のフィールド「{x.fields[k - 1]}」", line)
+                out[at + off + i * size:at + off + (i + 1) * size] = data
+
+
+def _cshape_get(s: CShape, data: bytes, at: int, line: int) -> Record:
+    _, _, offs = _cshape_layout(s, line)
+    values = []
+    for f, off in zip(s.fields, offs):
+        size = _cfield_layout(CField(f.ctype, None, f.inner), line)[0]
+        items = []
+        for i in range(f.count or 1):
+            p = at + off + i * size
+            if f.ctype == CSHAPE_STRUCT:
+                items.append(_cshape_get(f.inner, data, p, line))
+            else:
+                items.append(_c_decode(f.ctype, data[p:p + size], line))
+        values.append(tuple(items) if f.count is not None else items[0])
+    return Record(s.sample.ctor, s.sample.type_name, s.sample.fields, tuple(values))
+
+
+def _cshape_bytes(x: Any, shape: Any, line: int) -> bytes:
+    s = _cshape(shape, "「C直列化する」の「で」", line)
+    out = bytearray(_cshape_layout(s, line)[0])
+    _cshape_put(s, x, out, 0, line)
+    return bytes(out)
+
+
+def _cshape_from_bytes(b: Any, shape: Any, line: int) -> Record:
+    data = _bytes(b, "「C復元する」の「を」", line)
+    s = _cshape(shape, "「C復元する」の「で」", line)
+    n = _cshape_layout(s, line)[0]
+    if len(data) != n:
+        raise SuruError(f"バイト列の長さがC形と違います(C形は {n} バイト、バイト列は {len(data)} バイト)", line)
+    return _cshape_get(s, data, 0, line)
+
+
+def _struct_read(p: Any, off: Any, shape: Any, line: int) -> Action:
+    base = _addr(p, "「構造体読取する」の「から」", line)
+    k = _c_offset(off, "構造体読取する", line)
+    s = _cshape(shape, "「構造体読取する」の「を」", line)
+    n = _cshape_layout(s, line)[0]
+
+    def perform(it: "Interpreter") -> Any:
+        import ctypes
+
+        if base.value == 0:
+            raise SuruError("番地(0x0)からは読み取れません", line)
+        return _cshape_get(s, ctypes.string_at((base.value + k) & 0xFFFFFFFFFFFFFFFF, n), 0, line)
+    return Action("構造体読取する", perform)
+
+
+def _struct_write(x: Any, p: Any, off: Any, shape: Any, line: int) -> Action:
+    s = _cshape(shape, "「構造体書込する」の「に」", line)
+    data = _cshape_bytes(x, s, line)
+    base = _addr(p, "「構造体書込する」の「へ」", line)
+    k = _c_offset(off, "構造体書込する", line)
+
+    def perform(it: "Interpreter") -> int:
+        import ctypes
+
+        if base.value == 0:
+            raise SuruError("番地(0x0)へは書き込めません", line)
+        ctypes.memmove((base.value + k) & 0xFFFFFFFFFFFFFFFF, data, len(data))
+        return len(data)
+    return Action("構造体書込する", perform)
+
+
+STD_PRIMITIVES.extend([
+    Builtin("C形作成する", [(WO, True), ("で", True)], lambda it, a, line: _cshape_make(a[WO], a["で"], line)),
+    Builtin("入れ子設定する", [(WO, True), ("で", True), ("に", True)],
+            lambda it, a, line: _cshape_nest(a[WO], a["で"], a["に"], line)),
+    Builtin("C大きさにする", [(WO, True)],
+            lambda it, a, line: _cshape_layout(_cshape(a[WO], "「C大きさにする」の「を」", line), line)[0]),
+    Builtin("C揃えにする", [(WO, True)],
+            lambda it, a, line: _cshape_layout(_cshape(a[WO], "「C揃えにする」の「を」", line), line)[1]),
+    Builtin("C位置にする", [(WO, True), ("で", True)], lambda it, a, line: _cshape_offset(a[WO], a["で"], line)),
+    Builtin("C直列化する", [(WO, True), ("で", True)], lambda it, a, line: _cshape_bytes(a[WO], a["で"], line)),
+    Builtin("C復元する", [(WO, True), ("で", True)], lambda it, a, line: _cshape_from_bytes(a[WO], a["で"], line)),
+    Builtin("構造体読取する", [("から", True), ("で", True), (WO, True)],
+            lambda it, a, line: _struct_read(a["から"], a["で"], a[WO], line)),
+    Builtin("構造体書込する", [(WO, True), ("へ", True), ("で", True), ("に", True)],
+            lambda it, a, line: _struct_write(a[WO], a["へ"], a["で"], a["に"], line)),
+])
+
+
+def _cshape_offset(shape: Any, k: Any, line: int) -> int:
+    s = _cshape(shape, "「C位置にする」の「を」", line)
+    if isinstance(k, bool) or not isinstance(k, int) or not 1 <= k <= len(s.fields):
+        raise SuruError(f"「C位置にする」の「で」は 1 から {len(s.fields)} までの欄の番号です(「{format_value(k)}」が渡されました)", line)
+    return _cshape_layout(s, line)[2][k - 1]
 
 
 def _errno() -> int:
@@ -4967,6 +5330,115 @@ def _ffi_lib(path: str, line: int) -> Any:
     return lib
 
 
+# kumu の「Cソース」: プロジェクトと依存の C のソースを共有ライブラリにして、外部の関数を探すところに足す
+# (cmd/kumu/csrc.go と同じ設定を読む。作ったものは kumu_home()/C/ に置き、中身が同じなら作り直さない)
+_PROJECT_C: dict = {}  # プロジェクトのフォルダ → 開いたライブラリ(なければ None)
+_FFI_BASE = [""]  # 動かしているプログラムのフォルダ(Interpreter.run が決める)
+
+
+def _config_strings(path: str) -> dict:
+    """組.suru の文字列か、それを と でつないだ項目(名前 → 文字列のリスト)"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            program = parse_program(f.read(), ParseContext())
+    except (OSError, SuruError):
+        return {}
+    out = {}
+    for s in program:
+        if isinstance(s, Define) and isinstance(s.body, Str):
+            out[s.name] = [s.body.value]
+        elif isinstance(s, Define) and isinstance(s.body, ListLit) and all(isinstance(x, Str) for x in s.body.items):
+            out[s.name] = [x.value for x in s.body.items]
+    return out
+
+
+def _expand_flags(items: list, key: str, project: str, line: int) -> list:
+    """${名前} を環境変数にして、空白で分ける(Go の expandFlags と同じ)"""
+    import re
+
+    out = []
+    for it in items:
+        for name in re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", it):
+            if name not in os.environ:
+                raise SuruError(f"「{project}」の{key}「{it}」に使う環境変数「{name}」がありません", line)
+        out.extend(re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ[m.group(1)], it).split())
+    return out
+
+
+def _project_root(base_dir: str) -> str | None:
+    d = os.path.abspath(base_dir or ".")
+    while True:
+        if os.path.exists(os.path.join(d, PROJECT_CONFIG)):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def _project_c_lib(base_dir: str, line: int) -> Any:
+    """base_dir のプロジェクトと依存の Cソース から作った共有ライブラリ(なければ None)"""
+    import ctypes
+    import hashlib
+    import glob
+    import shutil
+    import subprocess
+
+    root = _project_root(base_dir)
+    if root is None:
+        return None
+    if root in _PROJECT_C:
+        return _PROJECT_C[root]
+    _PROJECT_C[root] = None
+    dirs = [root] + [d for d in find_packages(root).values() if os.path.abspath(d) != root]
+    units = []
+    for d in dirs:
+        cfg = _config_strings(os.path.join(d, PROJECT_CONFIG))
+        name = (cfg.get("名前") or [os.path.basename(d)])[0]
+        if cfg.get("Cソース") or cfg.get("リンク引数"):
+            units.append((name, d, cfg.get("Cソース", []), _expand_flags(cfg.get("C引数", []), "C引数", name, line),
+                          _expand_flags(cfg.get("リンク引数", []), "リンク引数", name, line)))
+    if not units:
+        return None
+    cc = next((c for c in (os.environ.get("CC", ""), "clang", "cc") if c and shutil.which(c)), None)
+    if cc is None:
+        raise SuruError("Cソースを使うには C コンパイラ(clang)が必要です", line)
+    h = hashlib.sha256(cc.encode())
+    for name, d, srcs, cflags, links in units:
+        h.update(("\0".join([name] + cflags + links)).encode())
+        for src in srcs:
+            path = os.path.join(d, *src.split("/"))
+            try:
+                with open(path, "rb") as f:
+                    h.update(path.encode() + b"\0" + f.read())
+            except OSError:
+                raise SuruError(f"「{name}」のCソース「{src}」が読めません", line) from None
+            for hp in sorted(glob.glob(os.path.join(os.path.dirname(path), "*.h"))):
+                with open(hp, "rb") as f:
+                    h.update(os.path.basename(hp).encode() + b"\0" + f.read())
+    out_dir = os.path.join(kumu_home(), "C", h.hexdigest()[:16])
+    so = os.path.join(out_dir, "libkumu_c.so")
+    if not os.path.exists(so):
+        os.makedirs(out_dir, exist_ok=True)
+        objs, links_all = [], []
+        for name, d, srcs, cflags, links in units:
+            links_all += links
+            for i, src in enumerate(srcs):
+                obj = os.path.join(out_dir, f"{len(objs)}.o")
+                r = subprocess.run([cc, "-O2", "-fPIC", "-c", os.path.join(d, *src.split("/")), "-o", obj] + cflags,
+                                   capture_output=True, text=True)
+                if r.returncode != 0:
+                    raise SuruError(f"「{name}」のCソース「{src}」のコンパイルに失敗しました:\n{r.stdout}{r.stderr}", line)
+                objs.append(obj)
+        tmp = f"{so}.{os.getpid()}.tmp"
+        r = subprocess.run([cc, "-shared", "-o", tmp] + objs + links_all, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SuruError(f"Cソースの共有ライブラリを作れませんでした:\n{r.stdout}{r.stderr}", line)
+        os.replace(tmp, so)
+    _PROJECT_C[root] = ctypes.CDLL(so, use_errno=True)
+    return _PROJECT_C[root]
+
+
 def _ffi_symbol(ext: Extern, line: int) -> Any:
     import ctypes
 
@@ -4974,6 +5446,9 @@ def _ffi_symbol(ext: Extern, line: int) -> Any:
         lib = _ffi_lib(path, line)
         if hasattr(lib, ext.symbol):
             return getattr(lib, ext.symbol)
+    own = _project_c_lib(_FFI_BASE[0], line)
+    if own is not None and hasattr(own, ext.symbol):
+        return getattr(own, ext.symbol)
     proc = _FFI_LIBS.setdefault("\0プロセス", ctypes.CDLL(None, use_errno=True))  # libc などリンク済みのもの
     if hasattr(proc, ext.symbol):
         return getattr(proc, ext.symbol)
@@ -5068,7 +5543,7 @@ def extern_builtin(d: Define) -> Builtin:
             f = ctypes.CFUNCTYPE(_ffi_ctype(ext.result), *[_ffi_ctype(t) for t in ts], use_errno=True)(fp.value)
             args = [_ffi_arg(t, a[p], d.name, p, line) for i, (t, p) in enumerate(zip(ext.params, parts)) if i != k]
             ctypes.set_errno(0)
-            return _ffi_result(ext.result, f(*args), d.name, line)
+            return _ffi_result(ext.result, _ffi_invoke(f, args), d.name, line)
         if not cfn:
             f = _ffi_symbol(ext, line)
             if ext.cargs:
@@ -5082,7 +5557,7 @@ def extern_builtin(d: Define) -> Builtin:
         if ext.cargs:
             args = [v if k == "定数" else args[v] for k, v in ext.cargs]
         ctypes.set_errno(0)
-        return _ffi_result(ext.result, cfn[0](*args), d.name, line)
+        return _ffi_result(ext.result, _ffi_invoke(cfn[0], args), d.name, line)
 
     def act(a: dict, line: int) -> Any:
         # 動作の C の関数は、子のプロセスや C の stdio と表示の順が入れ替わらないよう、それまでの表示を出してから呼ぶ
@@ -5093,6 +5568,185 @@ def extern_builtin(d: Define) -> Builtin:
         return Builtin(d.name, [(p, True) for p in parts],
                        lambda it, a, line: Action(d.name, lambda it2: act(a, line)))
     return Builtin(d.name, [(p, True) for p in parts], lambda it, a, line: call(a, line))
+
+# --- C から呼び戻す(「呼び戻し番地作成する」「通路送り番地作成する」。runtime/suru_rt.c の cb_* と同じ) ---
+CB_SLOTS, CB_MAX_INT, CB_MAX_FLT = 32, 6, 8
+CB_TYPES = {"数": "i64", "整数": "i32", "小数": "f64", "単精度": "f32", "真偽": "bool", "文字列": "str", "番地": "ptr"}
+CB_RET_TYPES = {"数": "i64", "整数": "i32", "小数": "f64", "単精度": "f32", "真偽": "bool", "番地": "ptr", "無": "void"}
+_CALLBACKS: dict = {}  # 番地 → (ctypes の関数, 値の返し方, 通路のパイプの口か None)
+_CB_TLS = __import__("threading").local()  # depth: 外部の関数を呼んでいる途中か、error: 呼び戻しの中のエラー
+
+
+def _cb_types(s: Any, fn: str, line: int) -> list:
+    s = _str(s, f"「{fn}」の「で」", line)
+    words = s.split()
+    out = []
+    for i, w in enumerate(words):
+        if i % 2 == 1:
+            if w != KW_TO or i == len(words) - 1:
+                raise SuruError(f"「{s}」は「{fn}」の引数の型の並びではありません(数・整数・小数・単精度・真偽・文字列・番地を「と」でつなぎます)", line)
+            continue
+        if w not in CB_TYPES:
+            raise SuruError(f"「{s}」は「{fn}」の引数の型の並びではありません(数・整数・小数・単精度・真偽・文字列・番地を「と」でつなぎます)", line)
+        out.append(CB_TYPES[w])
+        if sum(t not in ("f64", "f32") for t in out) > CB_MAX_INT or sum(t in ("f64", "f32") for t in out) > CB_MAX_FLT:
+            raise SuruError(f"「{fn}」の引数の型が多すぎます(整数・番地などは {CB_MAX_INT} 個、小数・単精度は {CB_MAX_FLT} 個までです)", line)
+    if not out:
+        raise SuruError(f"「{fn}」の引数の型を1つ以上書いてください(「番地 と 数」)", line)
+    return out
+
+
+def _cb_family(ret: str) -> str:
+    return ret if ret in ("f64", "f32") else "int"
+
+
+def _cb_take(ret: str, line: int) -> None:
+    fam = _cb_family(ret)
+    if sum(1 for v in _CALLBACKS.values() if v[1] == fam) >= CB_SLOTS:
+        raise SuruError(f"呼び戻しの番地が足りません(値の返し方ごとに {CB_SLOTS} 個までです。使わないものは「呼び戻し解放する」で放します)", line)
+
+
+def _cb_die(msg: str) -> None:
+    sys.stdout.flush()
+    sys.stderr.write(f"エラー: {msg}\n")
+    sys.stderr.flush()
+    os._exit(1)
+
+
+def _cb_value(t: str, x: Any) -> Any:
+    if t in ("f64", "f32"):
+        return float(x)
+    if t == "bool":
+        return x != 0
+    if t == "str":
+        return "" if x is None else x.decode("utf-8", "replace")
+    if t == "ptr":
+        return Address(x or 0)
+    if not MIN_COMPILED_INT <= x <= MAX_COMPILED_INT:
+        raise SuruError(f"整数が大きすぎます(コンパイルしたプログラムの整数は ±{MAX_COMPILED_INT} までです)", None)
+    return x
+
+
+def _ffi_invoke(f: Any, args: list) -> Any:
+    """C の関数を呼ぶ。呼び戻しの中でエラーになったら、戻ってからそのエラーにする"""
+    _CB_TLS.depth = getattr(_CB_TLS, "depth", 0) + 1
+    try:
+        r = f(*args)
+    finally:
+        _CB_TLS.depth -= 1
+    err = getattr(_CB_TLS, "error", None)
+    if err is not None and _CB_TLS.depth == 0:
+        _CB_TLS.error = None
+        raise err
+    return r
+
+
+def _cb_new(it: "Interpreter", f: Any, types: Any, ret: Any, line: int) -> Action:
+    import ctypes
+
+    if not isinstance(f, FUNCTION_TYPES):
+        raise SuruError(f"「呼び戻し番地作成する」の「を」は関数でなければなりません(「{format_value(f)}」が渡されました)", line)
+    ts = _cb_types(types, "呼び戻し番地作成する", line)
+    r = _str(ret, "「呼び戻し番地作成する」の「に」", line)
+    if r not in CB_RET_TYPES:
+        raise SuruError(f"「{r}」は呼び戻しの値の型ではありません(数・整数・小数・単精度・真偽・番地・無のどれかです)", line)
+    rt = CB_RET_TYPES[r]
+
+    def callback(*cargs: Any) -> Any:
+        if getattr(_CB_TLS, "depth", 0) <= 0:
+            _cb_die("呼び戻しの番地が、外部の関数を呼んでいる途中ではないところ(ほかのスレッドなど)から呼ばれました"
+                    "(ほかのスレッドからは「通路送り番地作成する」を使います)")
+        if getattr(_CB_TLS, "error", None) is not None:
+            return 0 if rt not in ("f64", "f32") else 0.0
+        try:
+            v = it.apply(f, [_cb_value(t, x) for t, x in zip(ts, cargs)], line)
+            if isinstance(v, ACTION_TYPES):
+                v = it.perform(v)
+            if rt == "void":
+                return None
+            c = _ffi_arg(rt, v, "呼び戻し", WO, line)
+            return c if rt != "ptr" else (c or 0)
+        except SuruError as e:
+            _CB_TLS.error = e
+            return None if rt == "void" else 0.0 if rt in ("f64", "f32") else 0
+
+    def perform(it2: "Interpreter") -> Address:
+        _cb_take(rt, line)
+        proto = ctypes.CFUNCTYPE(_ffi_ctype(rt), *[_ffi_ctype(t) for t in ts])
+        cf = proto(callback)
+        addr = ctypes.cast(cf, ctypes.c_void_p).value
+        _CALLBACKS[addr] = (cf, _cb_family(rt), None)
+        return Address(addr)
+    return Action("呼び戻し番地作成する", perform)
+
+
+def _cb_chan(sample: Any, chan: Any, types: Any, line: int) -> Action:
+    import ctypes
+
+    c = _need_chan(chan, "「通路送り番地作成する」の「へ」", line)
+    ts = _cb_types(types, "通路送り番地作成する", line)
+    if not isinstance(sample, Record) or len(sample.fields) != len(ts):
+        raise SuruError(f"「通路送り番地作成する」の「を」は、フィールドが {len(ts)} 個の組でなければなりません(「{format_value(sample)}」が渡されました)", line)
+    names = {v: k for k, v in CB_TYPES.items()}
+    for i, (t, x) in enumerate(zip(ts, sample.values), 1):
+        want = "真偽" if t == "bool" else "文字列" if t == "str" else "数"
+        ok = isinstance(x, bool) if t == "bool" else isinstance(x, str) if t == "str" else (isinstance(x, (int, float)) and not isinstance(x, bool))
+        if not ok:
+            raise SuruError(f"見本の{i}番目のフィールド「{format_value(x)}」は{want}でなければなりません(型は「{names[t]}」。番地は番地数値にした数で届きます)", line)
+    if not isinstance(c, _PipeChan) or c.path is not None or c.w < 0:
+        raise SuruError("「通路送り番地作成する」の通路は、プロセス間通路作成する で作って、まだ受け取っていない通路にします", line)
+
+    def perform(it2: "Interpreter") -> Address:
+        _cb_take("void", line)
+        fd = os.dup(c.w)
+
+        def callback(*cargs: Any) -> None:
+            vals = []
+            for t, x in zip(ts, cargs):
+                if t in ("f64", "f32"):
+                    vals.append(float(x))
+                elif t == "bool":
+                    vals.append(x != 0)
+                elif t == "str":
+                    vals.append("" if x is None else x.decode("utf-8", "replace"))
+                else:
+                    vals.append(_signed_addr(x or 0) if t == "ptr" else x)
+            d = _serialize(Record(sample.ctor, sample.type_name, sample.fields, tuple(vals)), line)
+            data = len(d).to_bytes(4, "little") + d
+            try:
+                while data:
+                    data = data[os.write(fd, data):]
+            except OSError:
+                pass  # 受け取る相手がいない: 捨てる
+
+        cf = ctypes.CFUNCTYPE(None, *[_ffi_ctype(t) for t in ts])(callback)
+        addr = ctypes.cast(cf, ctypes.c_void_p).value
+        _CALLBACKS[addr] = (cf, "int", fd)
+        return Address(addr)
+    return Action("通路送り番地作成する", perform)
+
+
+def _cb_free(p: Any, line: int) -> Action:
+    a = _addr(p, "「呼び戻し解放する」の「を」", line)
+
+    def perform(it: "Interpreter") -> int:
+        if a.value not in _CALLBACKS:
+            raise SuruError(f"「{format_value(a)}」は呼び戻しの番地ではありません(放したものか、作っていないもの)", line)
+        _, _, fd = _CALLBACKS.pop(a.value)
+        if fd is not None:
+            os.close(fd)
+        return 0
+    return Action("呼び戻し解放する", perform)
+
+
+STD_PRIMITIVES.extend([
+    Builtin("呼び戻し番地作成する", [(WO, True), ("で", True), ("に", True)],
+            lambda it, a, line: _cb_new(it, a[WO], a["で"], a["に"], line)),
+    Builtin("呼び戻し解放する", [(WO, True)], lambda it, a, line: _cb_free(a[WO], line)),
+])
+THREAD_PRIMITIVES.append(Builtin("通路送り番地作成する", [(WO, True), ("へ", True), ("で", True)],
+                                 lambda it, a, line: _cb_chan(a[WO], a["へ"], a["で"], line)))
+
 
 # lib/ のファイルごとの組み込み(そのファイルの中と、読み込んだ側の「標準内の…」「通信内の…」で使える)
 LIB_PRIMITIVES = {STD_PATH: STD_PRIMITIVES, NET_PATH: NET_PRIMITIVES, THREAD_PATH: THREAD_PRIMITIVES,
@@ -5528,6 +6182,7 @@ class Interpreter:
 
     def run_program(self, program: list, emit: Any = None, emit_stmt: Any = None) -> list[Any]:
         """解析済みのプログラムを実行する。emit_stmt を渡すと、値ができるたびに (値, 文) で呼ぶ"""
+        _FFI_BASE[0] = self.ctx.base_dir  # Cソース(kumu)を探すプロジェクト
         self.load_program(program, self.globals)
         results = []
         for s in program:

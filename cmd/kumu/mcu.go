@@ -41,6 +41,9 @@ func (k *kumu) mcu(cmd string, p *Project, target, port string) int {
 	case "試験":
 		return k.fail(fmt.Errorf("マイコン向け(%s)のプロジェクトの試験はまだできません", b.Display))
 	}
+	if len(p.CSources) > 0 || len(p.LinkFlags) > 0 {
+		return k.fail(fmt.Errorf("マイコン向け(%s)のプロジェクトでは、Cソース・リンク引数はまだ使えません", b.Display))
+	}
 	tools, err := mcu.FindTools(cmd == "書き込む")
 	if err != nil {
 		return k.fail(err)

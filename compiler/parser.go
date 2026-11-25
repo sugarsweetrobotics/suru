@@ -113,7 +113,7 @@ func (t *TypeMap) Update(o *TypeMap) {
 
 // 小数・整数は数の別名(外部の関数の宣言で C の double・int を表す)。番地は C のポインタ
 // 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
-var builtinTypes = []string{"数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作", "単精度"}
+var builtinTypes = []string{"数", "文字列", "真偽", "リスト", "関数", "動作", "小数", "整数", "番地", "バイト列", "無", "入出力動作", "単精度", "C形"}
 
 // KwExtern は外部の関数・ライブラリの印
 const KwExtern = "外部の"
@@ -1937,7 +1937,7 @@ func typeWord(t *Token, args []Node) Node {
 	if (name == "数" || name == "文字列" || name == "真偽" || name == "小数" || name == "整数" || name == "番地" || name == "バイト列" || name == "無" || name == "単精度") && len(args) > 0 {
 		raise(t.Line, "「"+name+"」は型の引数をとりません")
 	}
-	if (name == "リスト" || name == "動作") && len(args) != 1 {
+	if (name == "リスト" || name == "動作" || name == "C形") && len(args) != 1 {
 		raise(t.Line, "「"+name+"」の前には型を1つ書いてください(「数 の "+name+"」)")
 	}
 	if !builtinTypeSet[name] && !curCtx.Types.Has(name) {
