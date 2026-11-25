@@ -184,6 +184,12 @@ def unify(a: Any, b: Any) -> None:
         unify(b, a)
         return
     if isinstance(a, TCon) and isinstance(b, TCon):
+        if {a.name, b.name} == {TUPLE_TYPE, "リスト"}:
+            # 要素ごとに型の決まったリスト(「a と b を 受け取って」など)に、同じ型の要素のリストを合わせる
+            tup, elem = (a, b.args[0]) if a.name == TUPLE_TYPE else (b, a.args[0])
+            for x in tup.args:
+                unify(x, elem)
+            return
         if a.name != b.name or len(a.args) != len(b.args):
             raise Mismatch()
         for x, y in zip(a.args, b.args):
@@ -1226,7 +1232,9 @@ class Checker:
 
     def infer_Lambda(self, node: Lambda, env: TEnv) -> Any:
         local = TEnv(env)
-        params = [(p, self.bind_param(pat, local)) for p, pat in node.params]
+        # 「a と b を 受け取って」の a・b は別々の型でよい(#150)
+        params = [(p, self.bind_param(pat, local, None if isinstance(pat, str) else TCon(TUPLE_TYPE, tuple(TVar() for _ in pat))))
+                  for p, pat in node.params]
         result = TVar()
         self.exits.append(("関数", result))
         try:
@@ -1852,6 +1860,12 @@ def closest_name(name: str, known: Any) -> str:
     return best
 
 
+def _is_tuple(t: Any, n: int) -> bool:
+    """t が n 個の要素の「と」の型(要素ごとに型の決まったリスト)か"""
+    r = prune(t)
+    return isinstance(r, TCon) and r.name == TUPLE_TYPE and len(r.args) == n
+
+
 def _is_action(t: Any) -> bool:
     r = prune(t)
     return isinstance(r, PureVar) or (isinstance(r, TCon) and r.name == "動作")
@@ -1993,7 +2007,10 @@ def _t_fold(c, a, line):
     acc = a["から"]
     _need(c, a, WO, lst(elem), line, "畳み込みする")
     f = prune(a["で"])
-    if isinstance(f, TFun) and len(f.params) == 1:
+    if isinstance(f, TFun) and len(f.params) == 1 and _is_tuple(f.params[0][1], 2):
+        # 「a と b を 受け取って」(要素ごとに型の決まったリスト)には、累積値と要素を別々の型のまま渡す
+        r = c.apply(f, [TCon(TUPLE_TYPE, (acc, elem))], line, "「畳み込みする」の「で」")
+    elif isinstance(f, TFun) and len(f.params) == 1:
         # 引数が1つの関数には（累積値 と 要素）のリストを渡す
         c.unify_or(acc, elem, line, lambda sa, sb: f"「畳み込みする」の初期値({sa})と要素({sb})の型が違います")
         r = c.apply(f, [lst(acc)], line, "「畳み込みする」の「で」")

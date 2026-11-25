@@ -125,7 +125,10 @@ func init() {
 		need(c, a, WO, lst(elem), line, "畳み込みする")
 		f := prune(a.must("で"))
 		var r Type
-		if ff, ok := f.(*TFun); ok && len(ff.Params) == 1 {
+		if ff, ok := f.(*TFun); ok && len(ff.Params) == 1 && isTupleOf(ff.Params[0].T, 2) {
+			// 「a と b を 受け取って」(要素ごとに型の決まったリスト)には、累積値と要素を別々の型のまま渡す
+			r = c.apply(f, []Type{&TCon{Name: TupleType, Args: []Type{acc, elem}}}, line, "「畳み込みする」の「で」")
+		} else if ff, ok := f.(*TFun); ok && len(ff.Params) == 1 {
 			c.unifyOr(acc, elem, line, func(sa, sb string) string {
 				return "「畳み込みする」の初期値(" + sa + ")と要素(" + sb + ")の型が違います"
 			})

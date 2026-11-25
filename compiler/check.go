@@ -21,6 +21,12 @@ func displayName(name string) string {
 	return name[i+1:]
 }
 
+// isTupleOf は t が n 個の要素の「と」の型(要素ごとに型の決まったリスト)か
+func isTupleOf(t Type, n int) bool {
+	r, ok := prune(t).(*TCon)
+	return ok && r.Name == TupleType && len(r.Args) == n
+}
+
 func isAction(t Type) bool {
 	r := prune(t)
 	if v, ok := r.(*TVar); ok {
@@ -1387,7 +1393,16 @@ func (c *Checker) infer(node Node, env *TEnv) Type {
 		local := newTEnv(env)
 		var params []TParam
 		for _, p := range n.Params {
-			params = append(params, TParam{p.Part, c.bindParam(p, local, nil)})
+			// 「a と b を 受け取って」の a・b は別々の型でよい(#150)
+			var declared Type
+			if p.List {
+				items := make([]Type, len(p.Names))
+				for k := range items {
+					items[k] = newTVar()
+				}
+				declared = &TCon{Name: TupleType, Args: items}
+			}
+			params = append(params, TParam{p.Part, c.bindParam(p, local, declared)})
 		}
 		result := newTVar()
 		c.exits = append(c.exits, &exitCtx{kind: "関数", t: result})
