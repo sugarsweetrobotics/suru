@@ -107,6 +107,23 @@ n を 三倍する とは
 数 を 二倍する は 数
 """
 
+# ライブラリでも、非公開の一番外の定義(公開とするの一覧にない定義)は使われていなければ知らせる
+HIDDEN = """数 を 甲する は 数
+x を 甲する とは x を 丙する
+数 を 乙する は 数
+x を 乙する とは x
+数 を 丙する は 数
+x を 丙する とは x
+乙する と 丙する は 非公開とする
+"""
+
+LISTED = """数 を 甲する は 数
+x を 甲する とは x
+数 を 乙する は 数
+x を 乙する とは x
+甲する は 公開とする
+"""
+
 # 句読点の書き方と空白の書き方が混ざっていれば、少ないほうの最初の文で1回だけ知らせる
 MIXED = """x とは 1
 y とは 2
@@ -133,6 +150,24 @@ n を 場同枝する とは もし n が 3 ならば 1 そうでなければ 1
 n を 自比較する とは n = n または （もし n が n ならば 真 そうでなければ n < n）
 数 を 括弧する は 数
 n を 括弧する とは （n） + （（n を 二倍する）） + （n + 1） * 2 + （横 は （n） で 縦 は 2 の 点） の 横
+数 を 二若する は 真偽 の リスト
+n を 二若する とは （もし n > 1 ならば 真 そうでなければ 偽） と （もし n > 2 ならば 真 そうでなければ 偽） と （n < n かつ n < n）
+数 を 定数する は 数
+n を 定数する とは もし 真 ならば n そうでなければ 0
+数 を 場同枝二する は 数
+n を 場同枝二する とは
+  もし n が
+    1 ならば 0
+    2 ならば 0
+    そうでなければ 0
+形状 を 場別枝する は 数
+形 を 場別枝する とは
+  もし 形 が
+    半径 の 円 ならば 0
+    そうでなければ 0
+数 を 左括弧する は 数
+n を 左括弧する とは （n + 1） + 2 + （n * 2） + 1 - （（n - 1） - 2） * 3
+形状 とは 半径 の 円 か 辺 の 正方形
 """
 
 SYNTAX_OUT = """\
@@ -149,6 +184,14 @@ syntax.suru:15:50: 自分との比較: 同じ式どうしを比べているの�
 syntax.suru:17:13: 不要な括弧: この括弧は外しても読み方が変わりません
 syntax.suru:17:19: 不要な括弧: この括弧は外しても読み方が変わりません
 syntax.suru:17:53: 不要な括弧: この括弧は外しても読み方が変わりません
+syntax.suru:19:14: 冗長な真偽: 真か偽を返すだけの『もし』は、条件をそのまま書けます
+syntax.suru:19:43: 冗長な真偽: 真か偽を返すだけの『もし』は、条件をそのまま書けます
+syntax.suru:19:74: 自分との比較: 同じ式どうしを比べているので、結果はいつも同じです
+syntax.suru:19:83: 自分との比較: 同じ式どうしを比べているので、結果はいつも同じです
+syntax.suru:21:13: 定数の条件: 条件がいつも真なので、『もし』を使わずに『ならば』の後ろの式だけを書けます
+syntax.suru:24:3: 同じ枝: 場合分けのどの場合も『そうでなければ』と同じ式です
+syntax.suru:34:14: 不要な括弧: この括弧は外しても読み方が変わりません
+syntax.suru:34:43: 不要な括弧: この括弧は外しても読み方が変わりません
 """
 
 KINDS = ["interp"] + (["binary"] if suru_compile.find_cc() is not None else [])
@@ -185,10 +228,14 @@ def test_定義と使用(kind, tmp_path):
     (tmp_path / "defs.suru").write_text(DEFS, encoding="utf-8")
     (tmp_path / "lib.suru").write_text(LIBRARY, encoding="utf-8")
     (tmp_path / "mixed.suru").write_text(MIXED, encoding="utf-8")
-    r = run_lint(kind, tmp_path, "defs.suru", "lib.suru", "mixed.suru")
+    (tmp_path / "hidden.suru").write_text(HIDDEN, encoding="utf-8")
+    (tmp_path / "listed.suru").write_text(LISTED, encoding="utf-8")
+    r = run_lint(kind, tmp_path, "defs.suru", "hidden.suru", "lib.suru", "listed.suru", "mixed.suru")
     assert r.returncode == 1, r.stderr
     assert r.stdout == DEFS_OUT + (
+        "hidden.suru:4:5: 未使用の定義: 「乙する」は定義されていますが、使われていません\n"
         "lib.suru:2:5: 型の宣言なし: 「三倍する」に型の宣言がありません(『数 を 三倍する は 数』のように書きます)\n"
+        "listed.suru:4:5: 未使用の定義: 「乙する」は定義されていますが、使われていません\n"
         "mixed.suru:3:1: 書き方の混在: このファイルは空白の書き方が3文、句読点の書き方が2文あります。空白の書き方にそろえると読みやすくなります\n")
 
 
@@ -238,3 +285,11 @@ def test_フォルダの中のファイルの読み込みは最後の名前で�
     (tmp_path / "本体.suru").write_text("「庫/部品」 を 読み込む\n3 を 部品内の二倍して 表示する\n", encoding="utf-8")
     r = run_lint(kind, tmp_path, "本体.suru")
     assert (r.returncode, r.stdout) == (0, ""), r.stdout + r.stderr
+
+
+def test_点検が使うファイルだけでキャッシュの名前を決める():
+    import suru
+
+    files = suru.lint_lib_files()
+    assert {"点検.suru", "字句.suru", "構文.suru", "表.suru", "基本.suru", "標準.suru"} <= set(files)
+    assert "通信.suru" not in files and "スレッド.suru" not in files

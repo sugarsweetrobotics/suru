@@ -313,6 +313,8 @@ class Scheme:
         self.vars = vars_
         self.t = t
         self.constraints = constraints or []
+        # 自由な型変数がない(全部 vars)と分かったら 真。vars の型変数は後から決まらないので、ずっと閉じたまま
+        self.closed = False
 
     def instantiate(self, pending: list | None = None) -> Any:
         mapping: dict = {v: PureVar(None) if isinstance(v, PureVar) else TVar() for v in self.vars}
@@ -370,7 +372,13 @@ class TEnv:
         while e is not None:
             for v in e.vars.values():
                 if isinstance(v, Scheme):
-                    out |= ftv(v.t) - set(v.vars)
+                    # 一番外の定義の型はほとんど閉じているので、毎回数え直さない(大きなプログラムで型の検査が遅くなっていた)
+                    if v.closed:
+                        continue
+                    fv = ftv(v.t) - set(v.vars)
+                    if not fv:
+                        v.closed = True
+                    out |= fv
                 else:
                     ftv(v, out)
             e = e.parent
@@ -533,6 +541,11 @@ class Shapes:
                     if j != i and isinstance(rb, TVar) and rb is not v:
                         mapping[rb] = self.ph[ps[j]]
                 self.recursive[ps[i]] = _template(a, n, v, t, mapping)
+                # 同じ値のほかのフィールドに、そろえられる同じ型がもう入っていれば、それも自分自身を中に持つ
+                # (やり直す回数を減らす。「木 の 木」のように型の引数が違う同じ型は入れ子の別の型なので除く)
+                for j, b in enumerate(n.args):
+                    if j != i and any(isinstance(m, TCon) and m.name == n.name and _compatible(m, n) for m in _nodes(b)):
+                        self.recursive[ps[j]] = _template(b, n, TVar(), TVar(), mapping)
                 return True
         return False
 
@@ -573,7 +586,9 @@ def _template(a: Any, node: TCon, v: TVar, t: Any, mapping: dict) -> Any:
 
     def build(x: Any) -> Any:
         x = prune(x)
-        if x is node:
+        if x is node or (isinstance(x, TCon) and x.name == node.name):
+            # 同じ型は同じ型の引数で中に持つ(別の型の引数のまま覚えると、後でフィールドがまた再帰するものに
+            # なって型の引数の数が変わったとき、そろわなくなる)
             return SELF
         if x is v:
             if seen[0]:
@@ -591,6 +606,19 @@ def _template(a: Any, node: TCon, v: TVar, t: Any, mapping: dict) -> Any:
         return x
 
     return build(a)
+
+
+def _compatible(a: Any, b: Any) -> bool:
+    """a と b をそろえられそうか(型変数は何にでもそろうとみなす。何も決めない)"""
+    a, b = prune(a), prune(b)
+    if a is b or isinstance(a, TVar) or isinstance(b, TVar):
+        return True
+    if isinstance(a, TCon) and isinstance(b, TCon):
+        return a.name == b.name and len(a.args) == len(b.args) and all(map(_compatible, a.args, b.args))
+    if isinstance(a, TFun) and isinstance(b, TFun):
+        return (len(a.params) == len(b.params) and all(_compatible(x, y) for (_, x), (_, y) in zip(a.params, b.params))
+                and _compatible(a.result, b.result))
+    return False
 
 
 def _teq(a: Any, b: Any) -> bool:
@@ -792,7 +820,8 @@ class Checker:
             self.mono_names = saved_mono
             for name, (_, tvars) in declared.items():
                 self.check_rigid(sigs[name], tvars)
-            outer_free = scope.free_vars()
+            # 型変数が残っていなければ一般化するものはないので、環境の自由な型変数は数えない
+            outer_free = scope.free_vars() if any(ftv(mono[d.name]) for d in comp) else set()
             taken: set = set()
             for d in comp:
                 t = mono[d.name]
