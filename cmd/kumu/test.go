@@ -79,7 +79,7 @@ func runnerSource(importPath, module string, names []string) string {
 }
 
 // test は 試験/ のファイルの試験を1つずつ別のプロセスで動かす。filters があれば、名前かファイルの道にどれかを含むものだけ
-func (k *kumu) test(p *Project, filters []string, opt string, check bool) int {
+func (k *kumu) test(p *Project, filters []string, opt string, check bool, cb *CBuild) int {
 	files, err := suruFiles(filepath.Join(p.Root, TestDir))
 	if err != nil {
 		return k.fail(err)
@@ -134,7 +134,7 @@ func (k *kumu) test(p *Project, filters []string, opt string, check bool) int {
 			return k.fail(err)
 		}
 		exe := filepath.Join(runDir, "実行")
-		if _, err := compileTo(src, runPath, exe, opt, check); err != nil {
+		if _, err := compileTo(src, runPath, exe, opt, check, cb); err != nil {
 			fmt.Fprintf(k.stdout, "✗ %s(作れません)\n%s\n", rel, indent(strings.TrimPrefix(err.Error(), "エラー: ")))
 			failed += len(names)
 			continue

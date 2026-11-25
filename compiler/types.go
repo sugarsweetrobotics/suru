@@ -188,6 +188,7 @@ var numAliases = setOf("小数", "整数", "無", "単精度")
 
 // CShapeType は C の構造体の形(「C形作成する」。型の引数は組の型)
 const CShapeType = "C形"
+
 var monadTypes = setOf("動作", "リスト")
 
 func bindVar(v *TVar, t Type) {

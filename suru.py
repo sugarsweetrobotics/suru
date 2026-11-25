@@ -5330,6 +5330,115 @@ def _ffi_lib(path: str, line: int) -> Any:
     return lib
 
 
+# kumu の「Cソース」: プロジェクトと依存の C のソースを共有ライブラリにして、外部の関数を探すところに足す
+# (cmd/kumu/csrc.go と同じ設定を読む。作ったものは kumu_home()/C/ に置き、中身が同じなら作り直さない)
+_PROJECT_C: dict = {}  # プロジェクトのフォルダ → 開いたライブラリ(なければ None)
+_FFI_BASE = [""]  # 動かしているプログラムのフォルダ(Interpreter.run が決める)
+
+
+def _config_strings(path: str) -> dict:
+    """組.suru の文字列か、それを と でつないだ項目(名前 → 文字列のリスト)"""
+    try:
+        with open(path, encoding="utf-8") as f:
+            program = parse_program(f.read(), ParseContext())
+    except (OSError, SuruError):
+        return {}
+    out = {}
+    for s in program:
+        if isinstance(s, Define) and isinstance(s.body, Str):
+            out[s.name] = [s.body.value]
+        elif isinstance(s, Define) and isinstance(s.body, ListLit) and all(isinstance(x, Str) for x in s.body.items):
+            out[s.name] = [x.value for x in s.body.items]
+    return out
+
+
+def _expand_flags(items: list, key: str, project: str, line: int) -> list:
+    """${名前} を環境変数にして、空白で分ける(Go の expandFlags と同じ)"""
+    import re
+
+    out = []
+    for it in items:
+        for name in re.findall(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", it):
+            if name not in os.environ:
+                raise SuruError(f"「{project}」の{key}「{it}」に使う環境変数「{name}」がありません", line)
+        out.extend(re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ[m.group(1)], it).split())
+    return out
+
+
+def _project_root(base_dir: str) -> str | None:
+    d = os.path.abspath(base_dir or ".")
+    while True:
+        if os.path.exists(os.path.join(d, PROJECT_CONFIG)):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def _project_c_lib(base_dir: str, line: int) -> Any:
+    """base_dir のプロジェクトと依存の Cソース から作った共有ライブラリ(なければ None)"""
+    import ctypes
+    import hashlib
+    import glob
+    import shutil
+    import subprocess
+
+    root = _project_root(base_dir)
+    if root is None:
+        return None
+    if root in _PROJECT_C:
+        return _PROJECT_C[root]
+    _PROJECT_C[root] = None
+    dirs = [root] + [d for d in find_packages(root).values() if os.path.abspath(d) != root]
+    units = []
+    for d in dirs:
+        cfg = _config_strings(os.path.join(d, PROJECT_CONFIG))
+        name = (cfg.get("名前") or [os.path.basename(d)])[0]
+        if cfg.get("Cソース") or cfg.get("リンク引数"):
+            units.append((name, d, cfg.get("Cソース", []), _expand_flags(cfg.get("C引数", []), "C引数", name, line),
+                          _expand_flags(cfg.get("リンク引数", []), "リンク引数", name, line)))
+    if not units:
+        return None
+    cc = next((c for c in (os.environ.get("CC", ""), "clang", "cc") if c and shutil.which(c)), None)
+    if cc is None:
+        raise SuruError("Cソースを使うには C コンパイラ(clang)が必要です", line)
+    h = hashlib.sha256(cc.encode())
+    for name, d, srcs, cflags, links in units:
+        h.update(("\0".join([name] + cflags + links)).encode())
+        for src in srcs:
+            path = os.path.join(d, *src.split("/"))
+            try:
+                with open(path, "rb") as f:
+                    h.update(path.encode() + b"\0" + f.read())
+            except OSError:
+                raise SuruError(f"「{name}」のCソース「{src}」が読めません", line) from None
+            for hp in sorted(glob.glob(os.path.join(os.path.dirname(path), "*.h"))):
+                with open(hp, "rb") as f:
+                    h.update(os.path.basename(hp).encode() + b"\0" + f.read())
+    out_dir = os.path.join(kumu_home(), "C", h.hexdigest()[:16])
+    so = os.path.join(out_dir, "libkumu_c.so")
+    if not os.path.exists(so):
+        os.makedirs(out_dir, exist_ok=True)
+        objs, links_all = [], []
+        for name, d, srcs, cflags, links in units:
+            links_all += links
+            for i, src in enumerate(srcs):
+                obj = os.path.join(out_dir, f"{len(objs)}.o")
+                r = subprocess.run([cc, "-O2", "-fPIC", "-c", os.path.join(d, *src.split("/")), "-o", obj] + cflags,
+                                   capture_output=True, text=True)
+                if r.returncode != 0:
+                    raise SuruError(f"「{name}」のCソース「{src}」のコンパイルに失敗しました:\n{r.stdout}{r.stderr}", line)
+                objs.append(obj)
+        tmp = f"{so}.{os.getpid()}.tmp"
+        r = subprocess.run([cc, "-shared", "-o", tmp] + objs + links_all, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise SuruError(f"Cソースの共有ライブラリを作れませんでした:\n{r.stdout}{r.stderr}", line)
+        os.replace(tmp, so)
+    _PROJECT_C[root] = ctypes.CDLL(so, use_errno=True)
+    return _PROJECT_C[root]
+
+
 def _ffi_symbol(ext: Extern, line: int) -> Any:
     import ctypes
 
@@ -5337,6 +5446,9 @@ def _ffi_symbol(ext: Extern, line: int) -> Any:
         lib = _ffi_lib(path, line)
         if hasattr(lib, ext.symbol):
             return getattr(lib, ext.symbol)
+    own = _project_c_lib(_FFI_BASE[0], line)
+    if own is not None and hasattr(own, ext.symbol):
+        return getattr(own, ext.symbol)
     proc = _FFI_LIBS.setdefault("\0プロセス", ctypes.CDLL(None, use_errno=True))  # libc などリンク済みのもの
     if hasattr(proc, ext.symbol):
         return getattr(proc, ext.symbol)
@@ -5891,6 +6003,7 @@ class Interpreter:
 
     def run_program(self, program: list, emit: Any = None, emit_stmt: Any = None) -> list[Any]:
         """解析済みのプログラムを実行する。emit_stmt を渡すと、値ができるたびに (値, 文) で呼ぶ"""
+        _FFI_BASE[0] = self.ctx.base_dir  # Cソース(kumu)を探すプロジェクト
         self.load_program(program, self.globals)
         results = []
         for s in program:
