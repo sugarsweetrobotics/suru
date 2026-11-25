@@ -244,6 +244,17 @@ func unify(a, b Type) {
 	}
 	if ac, ok := a.(*TCon); ok {
 		if bc, ok := b.(*TCon); ok {
+			if (ac.Name == TupleType && bc.Name == "リスト") || (ac.Name == "リスト" && bc.Name == TupleType) {
+				// 要素ごとに型の決まったリスト(「a と b を 受け取って」など)に、同じ型の要素のリストを合わせる
+				tup, elem := ac, bc.Args[0]
+				if ac.Name != TupleType {
+					tup, elem = bc, ac.Args[0]
+				}
+				for _, x := range tup.Args {
+					unify(x, elem)
+				}
+				return
+			}
 			if ac.Name != bc.Name || len(ac.Args) != len(bc.Args) {
 				throwMismatch()
 			}
