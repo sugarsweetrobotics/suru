@@ -7,6 +7,8 @@
 //	suruc prog.suru -o 名前    # 出力の名前
 //	suruc --ll prog.suru       # LLVM IR(prog.ll)だけを出す
 //	suruc -O0 prog.suru        # clang の最適化の強さ(-O0 〜 -O3、既定は -O2)
+//	suruc --検査 prog.suru      # 構文と型だけを調べる(suru --検査 と同じ)
+//	suruc --json prog.suru     # エラーを1行の JSON で出す(suru --json と同じ形)
 package main
 
 import (
@@ -26,7 +28,7 @@ import (
 // version はリリースのときに -ldflags "-X main.version=…" で書きかえる
 var version = "0.5.0"
 
-const usage = "使い方: suruc [--ll] [--検査なし] [-O0|-O1|-O2|-O3] [--対象 基板] プログラム.suru [-o 出力]"
+const usage = "使い方: suruc [--ll] [--検査 | --検査なし] [--json] [-O0|-O1|-O2|-O3] [--対象 基板] プログラム.suru [-o 出力]"
 
 func run(args []string) int {
 	if len(args) >= 1 && (args[0] == "--version" || args[0] == "--版") {
@@ -35,6 +37,8 @@ func run(args []string) int {
 	}
 	llOnly := false
 	check := true
+	checkOnly := false
+	asJSON := false
 	opt := "-O2"
 	out := ""
 	target := ""
@@ -46,6 +50,10 @@ func run(args []string) int {
 			llOnly = true
 		case a == "--検査なし" || a == "--no-check":
 			check = false
+		case a == "--検査" || a == "--check":
+			checkOnly = true
+		case a == "--json" || a == "--JSON":
+			asJSON = true
 		case a == "-O0" || a == "-O1" || a == "-O2" || a == "-O3" || a == "-Os":
 			opt = a
 		case a == "-o":
@@ -81,13 +89,29 @@ func run(args []string) int {
 	abs, _ := filepath.Abs(srcPath)
 	baseDir := filepath.Dir(abs)
 	stem := strings.TrimSuffix(srcPath, filepath.Ext(srcPath))
+	report := func(e *compiler.SuruError) int {
+		if asJSON {
+			fmt.Fprintln(os.Stderr, compiler.ErrorJSON(e, "コンパイル", srcPath))
+		} else {
+			fmt.Fprintln(os.Stderr, compiler.FormatError(e, source, true))
+		}
+		return 1
+	}
+	if checkOnly {
+		if serr := compiler.CheckSource(source, baseDir, srcPath); serr != nil {
+			return report(serr)
+		}
+		if !asJSON {
+			fmt.Println("型の検査で問題は見つかりませんでした")
+		}
+		return 0
+	}
 	if target != "" {
 		return buildMCU(source, abs, stem, out, target, llOnly)
 	}
 	ir, serr := compiler.CompileSource(source, baseDir, abs, check)
 	if serr != nil {
-		fmt.Fprintln(os.Stderr, compiler.FormatError(serr, source, true))
-		return 1
+		return report(serr)
 	}
 	llPath := stem + ".ll"
 	if llOnly && out != "" {

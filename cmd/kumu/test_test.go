@@ -93,4 +93,11 @@ func TestTestAndLint(t *testing.T) {
 	if strings.Contains(out.String(), "組.suru") || strings.Contains(out.String(), "出力/") {
 		t.Errorf("組.suru か 出力/ を点検した: %s", out)
 	}
+	// --json なら1行に1つの JSON
+	out.Reset()
+	errb.Reset()
+	if rc := k.run([]string{"点検", "--json"}); rc != 1 || !strings.HasPrefix(out.String(), `{"file":"`) ||
+		!strings.Contains(out.String(), `"kind":"点検"`) {
+		t.Errorf("点検 --json: rc=%d %s %s", rc, out, errb)
+	}
 }

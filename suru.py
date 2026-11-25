@@ -65,8 +65,41 @@ class SuruError(Exception):
         super().__init__(f"{_file_of(line)}{_where(line)}: {message}" if line else message)
 
 
+def module_error(e: Any, name: str, path: str, line: Any) -> "SuruError":
+    """読み込んだファイルの中のエラー e を、読み込む行(line)のエラーにする。
+    元のエラー(いちばん内側のファイルのもの)は origin に (道, エラー) で残す(--json で使う)"""
+    err = SuruError(f"「{name}{SOURCE_SUFFIX}」の{_where(e.line) if e.line else ''}: {e.message}", line)
+    err.origin = getattr(e, "origin", None) or (getattr(e.line, "src", None) or path, e)
+    return err
+
+
 def _display_width(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+
+
+def error_json(e: "SuruError", kind: str = "実行", path: str = "") -> str:
+    """--json のときのエラーの1行の JSON。kind は e に印(e.kind)があればそちら(構文・型・実行・コンパイル)。
+    点検の知らせ(lib/点検.suru の 知らせJSON化する)と同じ形"""
+    import json
+
+    kind = getattr(e, "kind", None) or kind
+    origin = getattr(e, "origin", None)
+    if origin:  # 読み込んだファイルの中のエラーなら、そのファイルの位置を出す
+        path, e = origin
+    line = e.line
+    src = getattr(line, "src", None)
+    return json.dumps(
+        {
+            "file": src or path or None,
+            "line": int(line) if line else None,
+            "column": e.col or None,
+            "kind": kind,
+            "rule": None,
+            "message": e.message,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def format_error(e: "SuruError", source: str | None = None) -> str:
@@ -3161,7 +3194,7 @@ def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool
             if not isinstance(s, (Define,) + TOP_LEVEL_ONLY):
                 raise SuruError("読み込むファイルには定義だけを書いてください", first_line_of(s))
     except SuruError as e:
-        raise SuruError(f"「{stem}{SOURCE_SUFFIX}」の{_where(e.line) if e.line else ''}: {e.message}", line) from None
+        raise module_error(e, stem, path, line) from None
     finally:
         _POS_SRC = saved_src
     ctx.ctors.update(sub.ctors)
@@ -7041,6 +7074,7 @@ NO_CHECK_FLAGS = ("--検査なし", "--no-check")  # 型の検査をせずに実
 COMPILE_FLAGS = ("--翻訳", "--compile")  # バイナリにコンパイルする(suru_compile.py)
 REPL_FLAGS = ("--対話", "-i")  # ファイルを読んでから対話モードを始める
 LINT_FLAGS = ("--点検", "--lint")  # lib/点検.suru(する で書いた点検)でファイルを調べる
+JSON_FLAGS = ("--json", "--JSON")  # エラーと点検の知らせを1行に1つの JSON で出す
 LINT_SOURCE = "「点検」 を 読み込む\n点検内の点検実行する\n"
 
 
@@ -7121,8 +7155,8 @@ def lint(paths: list[str]) -> int:
     return 0
 
 
-def type_check(source: str, base_dir: str = ".", path: str = "") -> bool:
-    """型を調べる。間違いがあれば表示して False"""
+def type_check(source: str, base_dir: str = ".", path: str = "", as_json: bool = False) -> bool:
+    """型を調べる。間違いがあれば表示して False(as_json なら1行の JSON で)"""
     from suru_check import check
 
     try:
@@ -7130,9 +7164,21 @@ def type_check(source: str, base_dir: str = ".", path: str = "") -> bool:
     except Exception as e:  # suru_check は suru を別のモジュールとして読み込むので、名前で見分ける
         if type(e).__name__ != "SuruError":
             raise
-        print(format_error(e, source), file=sys.stderr)
+        print(error_json(e, "型", path) if as_json else format_error(e, source), file=sys.stderr)
         return False
     return True
+
+
+def _take_json_flag(argv: list[str]) -> tuple[list[str], bool]:
+    """プログラムのファイルの前にある --json を取り除く(後ろの引数はプログラムに渡すので、そのまま)"""
+    out, found, k = argv[:1], False, 1
+    while k < len(argv) and argv[k].startswith("-"):
+        if argv[k] in JSON_FLAGS:
+            found = True
+        else:
+            out.append(argv[k])
+        k += 1
+    return out + argv[k:], found
 
 
 def main(argv: list[str]) -> int:
@@ -7145,16 +7191,24 @@ def main(argv: list[str]) -> int:
 
         return suru_compile.main(argv[:1] + argv[2:])
     if len(argv) >= 2 and argv[1] in LINT_FLAGS:
-        if len(argv) < 3:
-            print("使い方: suru --点検 ファイル.suru …", file=sys.stderr)
+        paths = [a if a not in JSON_FLAGS else "--json" for a in argv[2:]]
+        if not [a for a in paths if a != "--json"]:
+            print("使い方: suru --点検 [--json] ファイル.suru …", file=sys.stderr)
             return 2
-        return lint(argv[2:])
-    if len(argv) >= 3 and argv[1] in CHECK_FLAGS:
-        with open(argv[2], encoding="utf-8") as f:
+        return lint(paths)
+    argv, as_json = _take_json_flag(argv)
+    if len(argv) >= 2 and argv[1] in CHECK_FLAGS:
+        rest = [a for a in argv[2:] if a not in JSON_FLAGS]
+        as_json = as_json or len(rest) < len(argv) - 2
+        if len(rest) != 1:
+            print("使い方: suru --検査 [--json] ファイル.suru", file=sys.stderr)
+            return 2
+        with open(rest[0], encoding="utf-8") as f:
             source = f.read()
-        if not type_check(source, os.path.dirname(os.path.abspath(argv[2]))):
+        if not type_check(source, os.path.dirname(os.path.abspath(rest[0])), rest[0], as_json):
             return 1
-        print("型の検査で問題は見つかりませんでした")
+        if not as_json:
+            print("型の検査で問題は見つかりませんでした")
         return 0
     checking = True
     if len(argv) >= 2 and argv[1] in NO_CHECK_FLAGS:
@@ -7170,21 +7224,24 @@ def main(argv: list[str]) -> int:
         source = f.read()
     PROGRAM_ARGS[:] = argv[2:]
     base_dir = os.path.dirname(os.path.abspath(argv[1]))
+
+    def report(e: Exception, kind: str) -> int:
+        print(error_json(e, kind, argv[1]) if as_json else format_error(e, source), file=sys.stderr)
+        return 1
+
     # 実行の前に必ず型を調べる(間違いがあれば実行しない)
     try:
-        if checking and not type_check(source, base_dir, argv[1]):
+        if checking and not type_check(source, base_dir, argv[1], as_json):
             return 1
     except SuruError as e:  # 構文のエラー
-        print(format_error(e, source), file=sys.stderr)
-        return 1
+        return report(e, "構文")
     interp = Interpreter()
     interp.ctx.base_dir = base_dir
     interp.ctx.path = os.path.abspath(argv[1])
     try:
         interp.run(source, emit=lambda v: print(interp.format(v)))
     except SuruError as e:
-        print(format_error(e, source), file=sys.stderr)
-        return 1
+        return report(e, "実行")
     return 0
 
 

@@ -1119,7 +1119,11 @@ def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check
 
         type_check(source, base_dir, path)
     ctx = S.ParseContext(base_dir=base_dir, path=path)
-    program = S.parse_program(source, ctx)
+    try:
+        program = S.parse_program(source, ctx)
+    except S.SuruError as e:
+        e.kind = "構文"  # --json の「kind」
+        raise
     LINE_BASE.clear()
     base = line_count(source)
     for m in ctx.modules.values():
@@ -1133,7 +1137,9 @@ def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check
     try:
         return Compiler(ctx, source).compile(program, path)
     except CompileError as e:
-        raise S.SuruError(str(e)) from None
+        err = S.SuruError(str(e))
+        err.kind = "コンパイル"
+        raise err from None
 
 
 def find_cc() -> str | None:
@@ -1200,13 +1206,14 @@ def build(ll_path: str, out: str, opt: str = "-O2") -> None:
         raise S.SuruError("clang でのビルドに失敗しました:\n" + r.stderr)
 
 
-USAGE = "使い方: python3 suru_compile.py [--ll] [--検査なし] プログラム.suru [-o 出力]"
+USAGE = "使い方: python3 suru_compile.py [--ll] [--検査なし] [--json] プログラム.suru [-o 出力]"
 
 
 def main(argv: list[str]) -> int:
     args = argv[1:]
     ll_only = "--ll" in args
     check = not any(a in S.NO_CHECK_FLAGS for a in args)
+    as_json = any(a in S.JSON_FLAGS for a in args)
     out = None
     if "-o" in args:
         k = args.index("-o")
@@ -1233,7 +1240,10 @@ def main(argv: list[str]) -> int:
             build(ll_path, out or stem)
             os.remove(ll_path)
     except S.SuruError as e:
-        print(S.format_error(e, source), file=sys.stderr)
+        if as_json:
+            print(S.error_json(e, "コンパイル", src_path), file=sys.stderr)
+        else:
+            print(S.format_error(e, source), file=sys.stderr)
         return 1
     return 0
 

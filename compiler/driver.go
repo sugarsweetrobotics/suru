@@ -28,19 +28,45 @@ func LinkFlags(ir string) []string {
 }
 
 // CompileSource は する のプログラムを LLVM IR の文字列にする。間違いがあれば *SuruError
+// (Kind に 構文・型・コンパイル のどれかの印を付ける)
 func CompileSource(source, baseDir, path string, check bool) (ir string, err *SuruError) {
-	err = try(func() {
-		ctx := NewParseContext(baseDir)
-		ctx.Path = filePath(path)
-		program := ParseProgram(source, ctx)
-		if check {
-			TypeCheck(program, ctx)
+	ctx := NewParseContext(baseDir)
+	ctx.Path = filePath(path)
+	var program []Node
+	if err = tagged("構文", func() { program = ParseProgram(source, ctx) }); err != nil {
+		return
+	}
+	if check {
+		if err = tagged("型", func() { TypeCheck(program, ctx) }); err != nil {
+			return
 		}
+	}
+	err = tagged("コンパイル", func() {
 		checkDefinitions(program, ctx)
 		setLineBase(ctx, source)
 		ir = newCompiler(ctx, source).compile(program, path)
 	})
 	return
+}
+
+// CheckSource は する のプログラムの構文と型だけを調べる(suru --検査 と同じ)。間違いがあれば *SuruError
+func CheckSource(source, baseDir, path string) *SuruError {
+	ctx := NewParseContext(baseDir)
+	ctx.Path = filePath(path)
+	var program []Node
+	if err := tagged("構文", func() { program = ParseProgram(source, ctx) }); err != nil {
+		return err
+	}
+	return tagged("型", func() { TypeCheck(program, ctx) })
+}
+
+// tagged は f を動かして、エラーがあれば kind の印を付けて返す
+func tagged(kind string, f func()) *SuruError {
+	err := try(f)
+	if err != nil && err.Kind == "" {
+		err.Kind = kind
+	}
+	return err
 }
 
 // filePath は解析するファイルの絶対パス(ファイルでなければ "")

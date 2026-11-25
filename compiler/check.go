@@ -685,11 +685,7 @@ func (c *Checker) checkModule(m *Module, line Pos) *TEnv {
 		c.solve(sc)
 	})
 	if err != nil {
-		w := ""
-		if err.Line.Line != 0 {
-			w = where(err.Line)
-		}
-		raise(line, "「"+m.Name+SourceSuffix+"」の"+w+": "+err.Message)
+		panic(moduleError(err, m.Name, m.Path, line))
 	}
 	return sc
 }

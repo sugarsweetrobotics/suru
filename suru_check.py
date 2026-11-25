@@ -26,7 +26,7 @@ from typing import Any
 from suru import (
     BinOp, Block, Call, Chain, Construct, Define, Do, Each, Field, If, KW_KATSU, KW_MATAHA, Lambda,
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
-    PValue, Ref, RESULT, Run, Sequel, Str, SuruError, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
+    PValue, Ref, RESULT, Run, Sequel, Str, SuruError, module_error, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
     HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, Import, Module, MODULE_SEP, SOURCE_SUFFIX, _where, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
     parse_program, collect_runs, _run_key, LIB_PRIMITIVES, GA, UNWRAP_TYPES, _call_name, TUPLE_TYPE,
 )
@@ -765,8 +765,7 @@ class Checker:
                     scope.vars.setdefault(n, v)
                 self.solve(scope)
             except SuruError as e:
-                raise SuruError(f"「{module.name}{SOURCE_SUFFIX}」の{_where(e.line) if e.line else ''}: {e.message}",
-                                line) from None
+                raise module_error(e, module.name, module.path, line) from None
         return scope
 
     @staticmethod
@@ -2385,7 +2384,16 @@ def _t_contains(c, a, line):
 def check(source: str, base_dir: str = ".", path: str = "") -> None:
     """型を調べる。間違いがあれば SuruError を出す。読み込むファイルは base_dir から探す(path は調べるファイル自身)"""
     ctx = ParseContext(base_dir=base_dir, path=path)
-    check_parsed(parse_program(source, ctx), ctx)
+    try:
+        program = parse_program(source, ctx)
+    except SuruError as e:
+        e.kind = "構文"  # --json の「kind」
+        raise
+    try:
+        check_parsed(program, ctx)
+    except SuruError as e:
+        e.kind = "型"
+        raise
 
 
 def check_parsed(program: list, ctx: ParseContext, want: Any = ()) -> "Checker":
