@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 import math
 import os
@@ -210,11 +210,16 @@ KW_IJOU = "以上"  # 「以下の手順です」と「もし 値 が」の場�
 KW_IKA = "以下の手順"  # 「挨拶する とは 以下の手順です」+ 文 + 「以上」
 KW_IKA_IO = "以下の入出力手順"
 IKA_WORDS = {KW_IKA: "手順", KW_IKA_IO: "入出力手順"}
+# 外部の関数のまとまり: 「以下の外部の入出力動作です」+ 1行に1つの関数 + 「以上です」(#174)
+KW_IKA_EXT_IO = "以下の外部の入出力動作"
+KW_IKA_EXT = "以下の外部の関数"
+EXT_BLOCK_WORDS = (KW_IKA_EXT_IO, KW_IKA_EXT)
 
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
     KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA, DESU, KW_HENSU, KW_HENSU_POLITE,
     KW_IMPORT, KW_IMPORT_POLITE, KW_IMPORT_TE, KW_USE, KW_USE_POLITE, KW_IJOU, KW_IKA, KW_IKA_IO,
+    KW_IKA_EXT_IO, KW_IKA_EXT,
 }
 KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU, KW_IJOU}
 CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}
@@ -438,14 +443,22 @@ def join_module_names(tokens: list[Token], modules: set) -> list[Token]:
 
 
 def join_ika(tokens: list[Token]) -> list[Token]:
-    """「以下の手順」「以下 の 手順」「以下の入出力手順」を1つの言葉にする"""
+    """「以下の手順」「以下 の 手順」「以下の入出力手順」を1つの言葉にする。
+    「以下の外部の入出力動作」「以下 の 外部 の 入出力動作」「以下の外部の関数」も"""
     out: list[Token] = []
     i = 0
     while i < len(tokens):
         t = tokens[i]
-        if t.kind == "WORD" and not t.quoted and t.value in IKA_WORDS:
+        if t.kind == "WORD" and not t.quoted and (t.value in IKA_WORDS or t.value in EXT_BLOCK_WORDS):
             out.append(Token("KW", t.value, t.line))
             i += 1
+            continue
+        if (t.kind == "WORD" and not t.quoted and t.value == "以下" and i + 4 < len(tokens) and is_kw(tokens[i + 1], KW_NO)
+                and tokens[i + 2].kind == "WORD" and not tokens[i + 2].quoted and tokens[i + 2].value == "外部"
+                and is_kw(tokens[i + 3], KW_NO) and tokens[i + 4].kind == "WORD" and not tokens[i + 4].quoted
+                and "以下の外部の" + tokens[i + 4].value in EXT_BLOCK_WORDS):
+            out.append(Token("KW", "以下の外部の" + tokens[i + 4].value, t.line))
+            i += 5
             continue
         if (t.kind == "WORD" and not t.quoted and t.value == "以下" and i + 2 < len(tokens) and is_kw(tokens[i + 1], KW_NO)
                 and tokens[i + 2].kind == "WORD" and not tokens[i + 2].quoted
@@ -1320,6 +1333,7 @@ class Node:
 
 def build_layout(lines: list[Line]) -> list[Node]:
     """インデントに従って行を木構造にまとめる"""
+    lines = expand_externs(lines)
     pos = 0
 
     def block(min_indent: int) -> list[Node]:
@@ -1360,6 +1374,12 @@ def opens_ika(ln: Line) -> bool:
     """「… とは 以下の手順です」で終わる行か"""
     toks = nosep(ln.tokens)
     return bool(toks) and toks[-1].kind == "KW" and toks[-1].value in IKA_WORDS
+
+
+def opens_ext_block(ln: Line) -> bool:
+    """「以下の外部の入出力動作です」「以下の外部の関数です」だけの行か"""
+    toks = nosep(ln.tokens)
+    return len(toks) == 1 and toks[0].kind == "KW" and toks[0].value in EXT_BLOCK_WORDS
 
 
 def is_ijou(ln: Line) -> bool:
@@ -1427,6 +1447,203 @@ def _close_one(nodes: list[Node], i: int) -> tuple[Node, int]:
         word = nosep(n.line.tokens)[-1].value
         raise SuruError(f"「{word}です」と「{KW_IJOU}」の間に文がありません", n.line.number)
     return n, i
+
+
+# ---------------------------------------------------------------------------
+# 外部の関数を1行で書く(#173)・外部の関数のまとまり(#174)
+# 字下げの木にする前に、型の宣言の行と定義の行の2行(今までの書き方)に直す
+# ---------------------------------------------------------------------------
+
+EXT_ONE_LINE_EXAMPLE = "「n を 確保する とは 外部の「SDL_malloc」 で 数 を 受け取って 番地 を 返す 入出力動作です」"
+EXT_BLOCK_LINE_HELP = ("1行に1つ、「数 を 確保する は 「SDL_malloc」 で 番地 を 返します」か、"
+                       "名前を付けて「r を 読取する とは 「SDL_RenderReadPixels」（r と 0） で 番地 を 受け取って 番地 を 返します」の形で書きます")
+
+
+def _top_level_indexes(tokens: list[Token], pred) -> list[int]:
+    """括弧の外で pred に合う字句の位置"""
+    depth = 0
+    out = []
+    for i, t in enumerate(tokens):
+        if t.kind == "LP":
+            depth += 1
+        elif t.kind == "RP":
+            depth -= 1
+        elif depth == 0 and pred(t):
+            out.append(i)
+    return out
+
+
+def _top_particles(tokens: list[Token]) -> list[Token]:
+    return [tokens[i] for i in _top_level_indexes(tokens, lambda t: t.kind == "PART")]
+
+
+def _close_paren(tokens: list[Token], k: int) -> int:
+    """tokens[k] の「（」に対応する「）」の次の位置(なければ -1)"""
+    depth = 0
+    for i in range(k, len(tokens)):
+        if tokens[i].kind == "LP":
+            depth += 1
+        elif tokens[i].kind == "RP":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return -1
+
+
+def _ext_name(head: list[Token]) -> Token | None:
+    calls = [head[i] for i in _top_level_indexes(head, lambda t: t.kind == "CALL")]
+    return calls[-1] if calls else None
+
+
+def _io_result(res: list[Token], word: str) -> list[Token]:
+    """まとまり「以下の外部の入出力動作です」の値の型「番地 を 返します」を「番地 を 返す 入出力動作」にする"""
+    line = res[0].line
+    if len(res) >= 2 and res[-2].kind == "PART" and res[-2].value == "を" and is_kw(res[-1], KW_HENSU) or (
+            len(res) >= 2 and res[-2].kind == "PART" and res[-2].value == "を" and is_kw(res[-1], KW_HENSU_POLITE)):
+        res = res[:-2]
+    if not res:
+        raise SuruError("値の型がありません(「番地 を 返します」のように書きます)", line)
+    if res[-1].kind == "WORD" and not res[-1].quoted and res[-1].value in ("動作", "入出力動作"):
+        raise SuruError(f"「{word}です」の中では、値の型に「{res[-1].value}」を書きません(「番地 を 返します」のように書きます)",
+                        res[-1].line)
+    return res + [Token("PART", "を", line), Token("KW", KW_HENSU, line), Token("WORD", "入出力動作", line)]
+
+
+def _typed_extern(ln: Line, head: list[Token], towa: Token, ext: list[Token], typ: list[Token],
+                  word: str | None) -> list[Line]:
+    """「頭 とは 外部の「f」 で 型」を、型の宣言の行と定義の行にする。word はまとまりの言葉(まとまりの外なら None)"""
+    name = _ext_name(head)
+    if name is None:
+        raise SuruError(f"型を後ろに書けるのは関数の定義だけです({EXT_ONE_LINE_EXAMPLE})", head[0].line if head else towa.line)
+    if not typ:
+        raise SuruError(f"「で」の後に型を書きます({EXT_ONE_LINE_EXAMPLE})", towa.line)
+    lam = _top_level_indexes(typ, lambda t: is_kw(t, KW_LAMBDA))
+    args, res = (typ[:lam[0]], typ[lam[0] + 1:]) if lam else ([], typ)
+    want = [t.value for t in _top_particles(head)]
+    got = [t.value for t in _top_particles(args)]
+    if want != got or (args and args[-1].kind != "PART"):
+        order = "・".join(want) if want else "なし"
+        raise SuruError(f"「{name.value}」の型の引数は、定義と同じ助詞を同じ順に書き、最後に「受け取って」を書きます"
+                        f"(定義の助詞: {order})", (typ[0] if typ else towa).line)
+    if not res:
+        raise SuruError(f"「受け取って」の後に値の型を書きます({EXT_ONE_LINE_EXAMPLE})", typ[-1].line)
+    if word == KW_IKA_EXT_IO:
+        res = _io_result(res, word)
+    sig = args + [name, Token("KW", KW_WA, name.line)] + res
+    return [Line(0, sig, ln.number, ln.closed), Line(0, head + [towa] + ext, ln.number, ln.closed)]
+
+
+def _ext_split(after: list[Token]) -> tuple[list[Token], list[Token]] | None:
+    """「「f」（…） で 型」を「「f」（…）」と型に分ける(合わなければ None)"""
+    if len(after) < 2 or after[0].kind != "STR":
+        return None
+    k = 1
+    if after[k].kind == "LP":
+        k = _close_paren(after, k)
+        if k < 0:
+            return None
+    if k >= len(after) or not (after[k].kind == "PART" and after[k].value == "で"):
+        return None
+    return after[:k], after[k + 1:]
+
+
+def _extern_one_line(ln: Line) -> list[Line] | None:
+    """「n を 確保する とは 外部の「SDL_malloc」 で 数 を 受け取って 番地 を 返す 入出力動作です」(#173)"""
+    toks = nosep(ln.tokens)
+    towa = find_top_level(toks, KW_TOWA)
+    if towa is None:
+        return None
+    after = toks[towa + 1:]
+    if not (after and after[0].kind == "WORD" and after[0].value == KW_EXTERN and not after[0].quoted):
+        return None
+    parts = _ext_split(after[1:])
+    if parts is None:
+        return None
+    return _typed_extern(ln, toks[:towa], toks[towa], [after[0]] + parts[0], parts[1], None)
+
+
+def _extern_block_line(ln: Line, word: str) -> list[Line]:
+    """まとまりの中の1行を、型の宣言の行と定義の行にする"""
+    toks = nosep(ln.tokens)
+    towa = find_top_level(toks, KW_TOWA)
+    if towa is not None:
+        # 名前を付けた定義の形: 「r を 読取する とは 「f」（r と 0） で 番地 を 受け取って 番地 を 返します」
+        after = toks[towa + 1:]
+        ext = Token("WORD", KW_EXTERN, toks[towa].line)
+        if after and after[0].kind == "WORD" and after[0].value == KW_EXTERN and not after[0].quoted:
+            ext, after = after[0], after[1:]
+        parts = _ext_split(after)
+        if parts is None:
+            raise SuruError(f"「{word}です」の中には、{EXT_BLOCK_LINE_HELP}", ln.number)
+        return _typed_extern(ln, toks[:towa], toks[towa], [ext] + parts[0], parts[1], word)
+    wa = _top_level_indexes(toks, lambda t: is_kw(t, KW_WA))
+    if not wa:
+        raise SuruError(f"「{word}です」の中には、{EXT_BLOCK_LINE_HELP}", ln.number)
+    before, after = toks[:wa[0]], toks[wa[0] + 1:]
+    name = _ext_name(before)
+    if name is None or len(after) < 3 or after[0].kind != "STR" or not (after[1].kind == "PART" and after[1].value == "で"):
+        if name is not None and len(after) >= 2 and after[0].kind == "STR" and after[1].kind == "LP":
+            raise SuruError("C に渡す引数を並べて書くときは、名前を付けた定義の形で書きます"
+                            "(「r を 読取する とは 「SDL_RenderReadPixels」（r と 0） で 番地 を 受け取って 番地 を 返します」)",
+                            after[1].line)
+        raise SuruError(f"「{word}です」の中には、{EXT_BLOCK_LINE_HELP}", ln.number)
+    res = after[2:]
+    if word == KW_IKA_EXT_IO:
+        res = _io_result(res, word)
+    # 定義の引数の名前は使わないので、「引数1」「引数2」… にする
+    head: list[Token] = []
+    for k, p in enumerate(_top_particles(before[:before.index(name)])):
+        head += [Token("WORD", f"引数{k + 1}", p.line), p]
+    head.append(name)
+    sig = before + [toks[wa[0]]] + res
+    define = head + [Token("KW", KW_TOWA, name.line), Token("WORD", KW_EXTERN, after[0].line), after[0]]
+    return [Line(0, sig, ln.number, ln.closed), Line(0, define, ln.number, ln.closed)]
+
+
+def expand_externs(lines: list[Line]) -> list[Line]:
+    """外部の関数の1行の書き方とまとまりを、型の宣言と定義の2行ずつにする(一番外だけ)"""
+    out: list[Line] = []
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        toks = nosep(ln.tokens)
+        if opens_ext_block(ln):
+            word = toks[0].value
+            if ln.indent:
+                raise SuruError(f"「{word}です」は一番外(字下げなし)に書きます", ln.number)
+            i += 1
+            names: dict[str, int] = {}
+            count = 0
+            deep = i < len(lines) and lines[i].indent > 0
+            while i < len(lines) and not is_ijou(lines[i]):
+                b = lines[i]
+                if deep and b.indent == 0:
+                    break  # 深い行のまとまりの後に、頭と同じ字下げの行: 「以上」を書き忘れた
+                pair = _extern_block_line(b, word)
+                d = nosep(pair[1].tokens)
+                name = d[find_top_level(d, KW_TOWA) - 1].value
+                if name in names:
+                    raise SuruError(f"「{name}」がまとまりの中で2回書かれています({names[name]}行目と{b.number}行目)", b.number)
+                names[name] = b.number
+                out.extend(pair)
+                count += 1
+                i += 1
+            if i >= len(lines) or not is_ijou(lines[i]):
+                raise SuruError(f"「{word}です」を閉じる「{KW_IJOU}」がありません(最後の関数の行の後に「{KW_IJOU}」だけの行を書きます)",
+                                ln.number)
+            if count == 0:
+                raise SuruError(f"「{word}です」と「{KW_IJOU}」の間に関数がありません", ln.number)
+            i += 1
+            continue
+        if ln.indent == 0:
+            pair = _extern_one_line(ln)
+            if pair is not None:
+                out.extend(pair)
+                i += 1
+                continue
+        out.append(ln)
+        i += 1
+    return out
 
 
 def flatten(node: Node) -> list[Token]:
@@ -7099,7 +7316,7 @@ def _ika_open(lines: list[Line]) -> bool:
         if is_ijou(ln):
             if stack:
                 stack.pop()
-        elif opens_ika(ln):
+        elif opens_ika(ln) or opens_ext_block(ln):
             stack.append(("手順", ln.indent))
         elif opens_case(ln):
             stack.append(("場合", ln.indent))

@@ -207,6 +207,7 @@ type LNode struct {
 }
 
 func buildLayout(lines []*Line) []*LNode {
+	lines = expandExterns(lines)
 	pos := 0
 	var block func(minIndent int) []*LNode
 	block = func(minIndent int) []*LNode {
