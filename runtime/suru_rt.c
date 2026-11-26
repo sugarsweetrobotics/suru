@@ -21,18 +21,97 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <time.h>
+#ifdef _WIN32
+/* Windows(MinGW-w64)。pthread は winpthreads、ソケットは Winsock2(-lws2_32)。「Windows」の節 */
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <io.h>
+#include <process.h>
+#include <unistd.h>
+#else
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netdb.h>
-#include <signal.h>
-#include <fcntl.h>
 #include <sys/file.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <time.h>
 #include <unistd.h>
+#endif
+
+/* ------------------------------------------------------------------ */
+/* Windows(MinGW-w64)との違いをうめるもの                              */
+/* ------------------------------------------------------------------ */
+#ifdef _WIN32
+#define flockfile _lock_file
+#define funlockfile _unlock_file
+#define sock_close closesocket
+/* getline(POSIX)と同じ: 1行を *line に読み、長さを返す。終わりなら -1 */
+static ssize_t win_getline(char **line, size_t *cap, FILE *f) {
+    size_t n = 0;
+    int c;
+    if (!*line || *cap < 128) {
+        *cap = 128;
+        *line = realloc(*line, *cap);
+        if (!*line) return -1;
+    }
+    while ((c = fgetc(f)) != EOF) {
+        if (n + 2 > *cap) {
+            *cap *= 2;
+            *line = realloc(*line, *cap);
+            if (!*line) return -1;
+        }
+        (*line)[n++] = (char)c;
+        if (c == '\n') break;
+    }
+    if (n == 0 && c == EOF) return -1;
+    (*line)[n] = 0;
+    return (ssize_t)n;
+}
+#define getline win_getline
+#define pipe(fd) _pipe(fd, 65536, _O_BINARY)
+/* 名前つきの通路(FIFO)は Windows にないので作る前に止める(fifo_new)。flock はそこでしか使わない */
+#define flock(fd, op) 0
+#define LOCK_EX 2
+#define LOCK_UN 8
+/* ソケットの失敗のわけ(Winsock は errno ではなく WSAGetLastError に入れる) */
+static const char *net_strerror(void) {
+    static __thread char m[256];
+    int e = WSAGetLastError();
+    if (!e) return strerror(errno);
+    DWORD k = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, (DWORD)e,
+                             MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), m, sizeof m, NULL);
+    while (k > 0 && (m[k - 1] == '\n' || m[k - 1] == '\r' || m[k - 1] == '.')) m[--k] = 0;
+    if (!k) snprintf(m, sizeof m, "Winsock のエラー %d", e);
+    return m;
+}
+#else
+#define sock_close close
+#define net_strerror() strerror(errno)
+#endif
+
+/* 相手が切れても止まらず、送信のエラーにする(Windows には SIGPIPE がない) */
+static void ignore_sigpipe(void) {
+#ifdef SIGPIPE
+    signal(SIGPIPE, SIG_IGN);
+#endif
+}
+
+/* 使える CPU の数 */
+static long online_cpus(void) {
+#ifdef _WIN32
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return (long)si.dwNumberOfProcessors;
+#else
+    return sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+}
 
 typedef int64_t V;
 
@@ -348,11 +427,19 @@ static char *gc_block_mem(void) {
     if (world_multi) pthread_mutex_lock(&alloc_mu);
     if (gc_chunk_cur == gc_chunk_end) {
         size_t len = 2 * GC_CHUNK;
+#ifdef _WIN32
+        /* 倍の大きさを予約して、そろった所だけを使えるようにする(予約の残りは使わない) */
+        char *p = VirtualAlloc(NULL, len, MEM_RESERVE, PAGE_NOACCESS);
+        if (!p) gc_oom();
+        char *a = (char *)(((uintptr_t)p + GC_CHUNK - 1) & ~(uintptr_t)(GC_CHUNK - 1));
+        if (!VirtualAlloc(a, GC_CHUNK, MEM_COMMIT, PAGE_READWRITE)) gc_oom();
+#else
         char *p = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (p == MAP_FAILED) gc_oom();
         char *a = (char *)(((uintptr_t)p + GC_CHUNK - 1) & ~(uintptr_t)(GC_CHUNK - 1));
         if (a > p) munmap(p, (size_t)(a - p));
         if (a + GC_CHUNK < p + len) munmap(a + GC_CHUNK, (size_t)(p + len - (a + GC_CHUNK)));
+#endif
 #ifdef MADV_HUGEPAGE
         madvise(a, GC_CHUNK, MADV_HUGEPAGE);
 #endif
@@ -2484,7 +2571,44 @@ BI(s_ord) {
 /* --- 通信(「通信」の組み込み)。待受口と接続は1からの番号で表す(インタプリタと同じ) --- */
 
 /* 開いているものだけを持つ(番号は増える一方で、閉じたものは表から除く) */
-typedef struct { int64_t num; int fd; FILE *in; } Sock;
+/* 受け取るための読み口(ソケットから recv でまとめて読み、1文字ずつ・まとめて渡す。
+ * Windows のソケットは FILE にできないので、どの OS でもこれを使う) */
+typedef struct { int fd, pos, len, err; char buf[8192]; } SockIn;
+static int sin_fill(SockIn *r) {
+    if (r->pos < r->len) return 1;
+    ssize_t k;
+    do k = recv(r->fd, r->buf, sizeof r->buf, 0); while (k < 0 && errno == EINTR);
+    if (k <= 0) {
+        if (k < 0) r->err = 1;
+        return 0;
+    }
+    r->pos = 0;
+    r->len = (int)k;
+    return 1;
+}
+static int sin_getc(SockIn *r) { return sin_fill(r) ? (unsigned char)r->buf[r->pos++] : EOF; }
+static size_t sin_read(SockIn *r, char *p, size_t n) {
+    if (!sin_fill(r)) return 0;
+    size_t k = (size_t)(r->len - r->pos);
+    if (k > n) k = n;
+    memcpy(p, r->buf + r->pos, k);
+    r->pos += (int)k;
+    return k;
+}
+/* 送る・受け取るのを待つ時間(0 なら待ち続ける) */
+static int sock_timeout(int fd, double sec) {
+#ifdef _WIN32
+    DWORD ms = (DWORD)(sec * 1000);
+    return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char *)&ms, sizeof ms) < 0 ||
+                   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char *)&ms, sizeof ms) < 0 ? -1 : 0;
+#else
+    struct timeval tv = {(time_t)sec, (suseconds_t)((sec - floor(sec)) * 1e6)};
+    return setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) < 0 ||
+                   setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) < 0 ? -1 : 0;
+#endif
+}
+
+typedef struct { int64_t num; int fd; SockIn *in; } Sock;
 static Sock *socks;
 static int64_t nsocks, capsocks, lastsock;
 
@@ -2520,15 +2644,15 @@ static Sock sock_get2(V v, const char *what, int want_in, int32_t pos) {
         fail(pos, "「%s」は開いている%sではありません", plain(v).s, what);
     }
     if (want_in && !socks[k].in) {
-        int fd2 = dup(socks[k].fd);
-        if (fd2 >= 0) socks[k].in = fdopen(fd2, "rb");
+        socks[k].in = calloc(1, sizeof(SockIn));
+        if (socks[k].in) socks[k].in->fd = socks[k].fd;
     }
     Sock s = socks[k];
     pthread_mutex_unlock(&sock_mu);
     return s;
 }
 static Sock sock_get(V v, const char *what, int32_t pos) { return sock_get2(v, what, 0, pos); }
-__attribute__((noreturn)) static void net_fail(Act *a) { fail(a->pos, "「%s」で通信に失敗しました(%s)", a->name, strerror(errno)); }
+__attribute__((noreturn)) static void net_fail(Act *a) { fail(a->pos, "「%s」で通信に失敗しました(%s)", a->name, net_strerror()); }
 
 static Bytes *need_bytes(V v, const char *what, int32_t pos);
 /* ソケットのアドレス(IPv4 か IPv6) */
@@ -2624,12 +2748,12 @@ static V net_run(Act *a) {
     switch (a->kind) {
     case A_LISTEN: {
         NetAddr ad = bind_addr(a);
-        signal(SIGPIPE, SIG_IGN); /* 相手が切れても止まらず、送信のエラーにする */
+        ignore_sigpipe(); /* 相手が切れても止まらず、送信のエラーにする */
         int fd = socket(ad.ss.ss_family, SOCK_STREAM, 0);
         if (fd < 0) net_fail(a);
         int one = 1;
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-        if (bind(fd, (struct sockaddr *)&ad.ss, ad.len) < 0 || listen(fd, 16) < 0) { int e = errno; close(fd); errno = e; net_fail(a); }
+        if (bind(fd, (struct sockaddr *)&ad.ss, ad.len) < 0 || listen(fd, 16) < 0) { int e = errno; sock_close(fd); errno = e; net_fail(a); }
         return mk_int(sock_add(fd), pos);
     }
     case A_ACCEPT: {
@@ -2642,9 +2766,7 @@ static V net_run(Act *a) {
         world_acquire();
         errno = e;
         if (fd < 0) net_fail(a);
-        struct timeval tv = {5, 0}; /* 何も送ってこない相手で止まらないように(インタプリタの NET_TIMEOUT と同じ) */
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
+        sock_timeout(fd, 5); /* 何も送ってこない相手で止まらないように(インタプリタの NET_TIMEOUT と同じ) */
         return mk_int(sock_add(fd), pos);
     }
     case A_CONNECT: {
@@ -2652,7 +2774,7 @@ static V net_run(Act *a) {
         V v = need_num(a->b, pos);
         int64_t port = IS_INT(v) ? INT_VAL(v) : -1;
         if (port < 0 || port > 65535) fail(pos, "「%s」はポートの番号ではありません", plain(v).s);
-        signal(SIGPIPE, SIG_IGN); /* 相手が切れても止まらず、送信のエラーにする */
+        ignore_sigpipe(); /* 相手が切れても止まらず、送信のエラーにする */
         char hs[256], ps[8];
         if (host->n >= (int64_t)sizeof hs) fail(pos, "「%s」はホストの名前として長すぎます", plain(a->a).s);
         memcpy(hs, host->s, (size_t)host->n);
@@ -2672,7 +2794,7 @@ static V net_run(Act *a) {
                 do c = connect(fd, r->ai_addr, r->ai_addrlen); while (c < 0 && errno == EINTR);
                 if (c == 0) break;
                 e = errno;
-                close(fd);
+                sock_close(fd);
                 fd = -1;
             }
             freeaddrinfo(res);
@@ -2694,14 +2816,14 @@ static V net_run(Act *a) {
             if (want < 0) fail(pos, "「%s」は受信するバイト数ではありません", plain(v).s);
         }
         if (!s.in) net_fail(a);
-        FILE *in = s.in; /* 待つ間は、表(socks)に触らない */
-        clearerr(in);    /* 前の時間切れの印を消して、続きから読む */
+        SockIn *in = s.in; /* 待つ間は、表(socks)に触らない */
+        in->err = 0;       /* 前の時間切れの印を消して、続きから読む */
         Buf b = {0};
         world_release();
         if (a->kind == A_RECVLINE) {
             /* 終わりの改行を含めて1行(長すぎる行は 65536 バイトで切る) */
             int c;
-            while (b.n < 65536 && (c = fgetc(in)) != EOF) {
+            while (b.n < 65536 && (c = sin_getc(in)) != EOF) {
                 char ch = (char)c;
                 buf_add(&b, &ch, 1);
                 if (ch == '\n') break;
@@ -2709,12 +2831,12 @@ static V net_run(Act *a) {
         } else {
             char tmp[4096];
             while ((int64_t)b.n < want) {
-                size_t k = fread(tmp, 1, (size_t)(want - (int64_t)b.n) < sizeof tmp ? (size_t)(want - (int64_t)b.n) : sizeof tmp, in);
+                size_t k = sin_read(in, tmp, (size_t)(want - (int64_t)b.n) < sizeof tmp ? (size_t)(want - (int64_t)b.n) : sizeof tmp);
                 if (k == 0) break;
                 buf_add(&b, tmp, k);
             }
         }
-        int bad = ferror(in), e = errno;
+        int bad = in->err, e = errno;
         world_acquire();
         errno = e;
         if (bad) { free(b.s); net_fail(a); }
@@ -2756,7 +2878,7 @@ static V net_run(Act *a) {
         if (fd < 0) net_fail(a);
         int one = 1;
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
-        if (bind(fd, (struct sockaddr *)&ad.ss, ad.len) < 0) { int e = errno; close(fd); errno = e; net_fail(a); }
+        if (bind(fd, (struct sockaddr *)&ad.ss, ad.len) < 0) { int e = errno; sock_close(fd); errno = e; net_fail(a); }
         return mk_int(sock_add(fd), pos);
     }
     case A_UDP_SEND: { /* バイト列 を 口 から ホスト に ポート で UDPバイト列送信する(a=を, b=から, c=に, d=で) */
@@ -2831,8 +2953,7 @@ static V net_run(Act *a) {
         double sec = IS_INT(v) ? (double)INT_VAL(v) : AS(Flt, v)->d;
         if (!(sec >= 0)) fail(pos, "「%s」は待つ秒数ではありません(0 以上の数です)", plain(v).s);
         int fd = sock_get(a->a, "接続", pos).fd;
-        struct timeval tv = {(time_t)sec, (suseconds_t)((sec - floor(sec)) * 1e6)};
-        if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) < 0 || setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv) < 0) net_fail(a);
+        if (sock_timeout(fd, sec) < 0) net_fail(a);
         return a->a;
     }
     case A_CLOSE: {
@@ -2845,8 +2966,8 @@ static V net_run(Act *a) {
         Sock s = socks[k];
         socks[k] = socks[--nsocks];
         pthread_mutex_unlock(&sock_mu);
-        if (s.in) fclose(s.in);
-        close(s.fd);
+        free(s.in);
+        sock_close(s.fd);
         return a->a;
     }
     }
@@ -3888,7 +4009,7 @@ static int64_t mono_ns(void) {
  * GC が止まってほしいとき(rt_gc_stop)はすぐにやめる(回っている間は「動いている」ので GC を待たせる) */
 static int world_spin_wait(int (*ready)(void *), void *arg) {
     if (!world_multi) return 0;
-    if (world_spin_ok < 0) world_spin_ok = sysconf(_SC_NPROCESSORS_ONLN) > 1;
+    if (world_spin_ok < 0) world_spin_ok = online_cpus() > 1;
     if (!world_spin_ok) return 0;
     int64_t n = __atomic_load_n(&world_spin_ns, __ATOMIC_RELAXED);
     pthread_mutex_unlock(&world_mu);
@@ -4114,7 +4235,7 @@ static int ch_taken(void *a) { SendWait *w = a; return ld(&w->c->taken) >= w->my
 static V pipe_new(int32_t pos) {
     int fd[2];
     if (pipe(fd) != 0) fail(pos, "パイプを作れませんでした(%s)", strerror(errno));
-    signal(SIGPIPE, SIG_IGN); /* 受け取る相手がいなくても止まらず、送信のエラーにする */
+    ignore_sigpipe(); /* 受け取る相手がいなくても止まらず、送信のエラーにする */
     Chan *ch = rt_alloc(sizeof(Chan));
     ch->kind = CH_PIPE;
     ch->rfd = fd[0];
@@ -4124,7 +4245,7 @@ static V pipe_new(int32_t pos) {
 /* 名前つきの通路: 関係ないプログラムどうしで、ファイルの道(FIFO)を通して値を渡す。
  * 開くのは初めて送る・受け取るとき(相手が開くまで待つ) */
 static V fifo_chan(const char *path, int32_t pos) {
-    signal(SIGPIPE, SIG_IGN);
+    ignore_sigpipe();
     Chan *ch = rt_alloc(sizeof(Chan));
     ch->kind = CH_PIPE;
     ch->rfd = ch->wfd = -2;
@@ -4133,16 +4254,25 @@ static V fifo_chan(const char *path, int32_t pos) {
 }
 static V fifo_new(V p, int32_t pos) {
     Str *s = need_str(p, "「名前つき通路作成する」の「を」", pos);
+#ifdef _WIN32
+    fail(pos, "名前つきの通路は Windows ではまだ使えません(『%s』)", s->s);
+#endif
     struct stat st;
     if (stat(s->s, &st) == 0) {
         if (!S_ISFIFO(st.st_mode)) fail(pos, "『%s』はすでにあり、名前つきの通路ではありません", s->s);
-    } else if (mkfifo(s->s, 0600) != 0) {
+    }
+#ifndef _WIN32
+    else if (mkfifo(s->s, 0600) != 0) {
         fail(pos, "名前つきの通路『%s』を作れませんでした(%s)", s->s, strerror(errno));
     }
+#endif
     return fifo_chan(s->s, pos);
 }
 static V fifo_open(V p, int32_t pos) {
     Str *s = need_str(p, "「名前つき通路接続する」の「を」", pos);
+#ifdef _WIN32
+    fail(pos, "名前つきの通路は Windows ではまだ使えません(『%s』)", s->s);
+#endif
     struct stat st;
     if (stat(s->s, &st) != 0) fail(pos, "名前つきの通路『%s』に接続できませんでした(%s)", s->s, strerror(errno));
     if (!S_ISFIFO(st.st_mode)) fail(pos, "『%s』は名前つきの通路ではありません", s->s);
@@ -4327,7 +4457,7 @@ static void need_action(V v, const char *what, int32_t pos) {
 typedef struct { V v; } Box;
 
 static long cpu_count(void) {
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    long n = online_cpus();
     return n < 1 ? 1 : n;
 }
 
@@ -4685,6 +4815,11 @@ static int cb_ret_type(Str *s, int32_t pos) {
 
 /* 空いている入口を取る(なければエラー) */
 static int cb_take(int fam, int32_t pos) {
+#ifdef _WIN32
+    /* 入口(CB_TRAMP)は Linux・macOS の呼び出し規約で引数を受け取るので、Windows の規約に合わない */
+    (void)fam;
+    fail(pos, "呼び戻しの番地は Windows ではまだ使えません");
+#endif
     pthread_mutex_lock(&cb_mu);
     for (int k = 0; k < CB_SLOTS; k++)
         if (!cb_slots[fam][k].used) {
@@ -5189,7 +5324,15 @@ int main(int argc, char **argv) {
     prog_argv = argv;
     source_text = suru_source;
     init_builtins();
+#ifdef _WIN32
+    /* 画面への表示は UTF-8 で(.exe に埋め込む印で、ファイルの道なども UTF-8 で扱う)。ソケットを使えるようにする */
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+#else
     pthread_atfork(world_atfork_prepare, world_atfork_parent, world_atfork_child);
+#endif
     /* 深い再帰のために、大きなスタックのスレッドで動かす */
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -5203,9 +5346,11 @@ int main(int argc, char **argv) {
     } else {
         /* 待っているだけのこのスレッドではシグナルを受けない。プロセスに送られたシグナルは
            プログラムを動かすスレッドに届くので、そこでの受付(sigprocmask)がそのまま効く */
+#ifndef _WIN32
         sigset_t all;
         sigfillset(&all);
         pthread_sigmask(SIG_BLOCK, &all, NULL);
+#endif
         mt_serve();
         pthread_join(th, NULL);
     }
