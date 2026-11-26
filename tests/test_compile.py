@@ -514,3 +514,55 @@ def test_型の名前はファイルごとに分かれる(tmp_path):
                "（5 の 乙内の応答）\n乙内の空応答 を 乙内の乙番号取得する\n（（3 と 「x」 の 甲内の応答） を 甲内の甲状態取得する）\n",
                tmp_path, str(tmp_path))
     assert out == "甲の応答 1\n2\n（番号 は 5 の 応答）\n0\n3\n"
+
+
+# 読み込んだファイルの中の実行時エラーは、本体の呼んだ場所で出す(#154)
+LIB_ERRORS = {
+    "直接呼ぶ": ("「標準」 を 読み込んで 使う\n「a」 を 表示する\n（空 を 最大値にする） を 表示する\n",
+                 "エラー: 3行目 6文字目: 空のリストの最大値はありません(「標準.suru」の"),
+    "関数の値で呼ぶ": ("「標準」 を 読み込んで 使う\nxs とは （1 と 2） と 空\n（xs を 最小値にすること で 写像する） を 表示する\n",
+                     "エラー: 3行目 18文字目: 空のリストの最小値はありません(「標準.suru」の"),
+    "作った動作": ("「標準」 を 読み込んで 使う\n「ファイル」 を 読み込んで 使う\n始めする とは 以下の手順です\n"
+                   "  「始め」 を 表示する\n  s とは 「無い.csv」 を 読込した 結果\n  s を 表示する\n  以上\n始めする\n",
+                   "エラー: 5行目 19文字目: ファイル『無い.csv』を開くのに失敗しました(No such file or directory)(「標準.suru」の"),
+    "自分の関数の中から呼ぶ": ("「標準」 を 読み込んで 使う\nxs を 調べする とは xs を 最大値にする\n（（1 と 2） を 調べする） を 表示する\n"
+                             "（空 を 調べする） を 表示する\n",
+                             "エラー: 2行目 19文字目: 空のリストの最大値はありません(「標準.suru」の"),
+}
+
+
+@pytest.mark.parametrize("name", list(LIB_ERRORS))
+def test_読み込んだファイルの中のエラーは呼んだ場所で出す(name, tmp_path):
+    src, head = LIB_ERRORS[name]
+    r = compiled(src, tmp_path)
+    assert r.returncode == 1
+    assert r.stderr.startswith(head), r.stderr
+    with pytest.raises(suru.SuruError) as e:
+        suru.run(src)
+    assert r.stderr.strip() == suru.format_error(e.value, src)
+
+
+def test_読み込んだファイルの中のエラーを試行で受け止めたあとも呼んだ場所で出す(tmp_path):
+    src = ("「標準」 を 読み込んで 使う\n「ファイル」 を 読み込む\n始めする とは 以下の手順です\n"
+           "  r とは （「無い.txt」 を ファイル内の読込する） を 試行した 結果\n  r を 表示する\n"
+           "  （空 を 最大値にする） を 表示する\n  以上\n始めする\n")
+    r = compiled(src, tmp_path)
+    assert r.returncode == 1
+    assert r.stderr.startswith("エラー: 6行目 8文字目: 空のリストの最大値はありません(「標準.suru」の"), r.stderr
+    with pytest.raises(suru.SuruError) as e:
+        suru.run(src)
+    assert r.stderr.strip() == suru.format_error(e.value, src)
+
+
+def test_自分の読み込んだファイルからライブラリを呼んだ場所で出す(tmp_path):
+    # ライブラリ(同梱の lib/ と依存)でない、自分のファイルの中の呼び出しは、そのファイルの位置で出す
+    (tmp_path / "部品.suru").write_text("「標準」 を 読み込んで 使う\nxs を 調べする とは xs を 最大値にする\n", encoding="utf-8")
+    src = "「部品」 を 読み込む\n（空 を 部品内の調べする） を 表示する\n"
+    r = compiled(src, tmp_path, str(tmp_path))
+    assert r.returncode == 1
+    assert r.stderr.startswith("エラー: 「部品.suru」の2行目 19文字目: 空のリストの最大値はありません(「標準.suru」の"), r.stderr
+    with pytest.raises(suru.SuruError) as e:
+        it = suru.Interpreter()
+        it.ctx.base_dir = str(tmp_path)
+        it.run(src)
+    assert r.stderr.strip() == suru.format_error(e.value, src)

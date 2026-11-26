@@ -96,6 +96,8 @@ declare i64 @rt_do_result(i64)
 declare i64 @rt_std(ptr)
 declare i64 @rt_global_cached(ptr, ptr, i32)
 declare void @rt_top(i64)
+declare i32 @rt_enter(i32)
+declare void @rt_leave(i32)
 declare void @rt_top_unwrap(i64)
 declare void @rt_safepoint()
 @rt_gc_stop = external dso_local global i32
@@ -154,9 +156,14 @@ func setLineBase(ctx *ParseContext, source string) {
 // filesTable は読み込んだファイルの、行の番号に足した数・名前・中身(実行時エラーの表示に使う)
 func (c *Compiler) filesTable() string {
 	mods := loadedModules(c.ctx)
-	var bases, names, srcs []string
+	var bases, names, srcs, libs []string
 	for _, m := range mods {
 		bases = append(bases, fmt.Sprintf("i32 %d", lineBase[m.Path]))
+		lib := 0
+		if IsLibraryFile(m.Path) {
+			lib = 1
+		}
+		libs = append(libs, fmt.Sprintf("i32 %d", lib))
 		names = append(names, "ptr "+c.cstr(pathBase(m.Path)))
 		g := fmt.Sprintf("@fs.%d", c.uid())
 		c.globals = append(c.globals, fmt.Sprintf(`%s = private unnamed_addr constant [%d x i8] c"%s\00"`, g, len(m.Source)+1, irBytes(m.Source)))
@@ -169,8 +176,8 @@ func (c *Compiler) filesTable() string {
 		return "[" + strings.Join(items, ", ") + "]"
 	}
 	n := len(mods)
-	return fmt.Sprintf("@suru_file_base = constant [%d x i32] %s\n@suru_file_name = constant [%d x ptr] %s\n@suru_file_src = constant [%d x ptr] %s\n@suru_nfiles = constant i64 %d",
-		n, arr(bases), n, arr(names), n, arr(srcs), n)
+	return fmt.Sprintf("@suru_file_base = constant [%d x i32] %s\n@suru_file_name = constant [%d x ptr] %s\n@suru_file_src = constant [%d x ptr] %s\n@suru_file_lib = constant [%d x i32] %s\n@suru_nfiles = constant i64 %d",
+		n, arr(bases), n, arr(names), n, arr(srcs), n, arr(libs), n)
 }
 
 func irBytes(data string) string {
@@ -206,6 +213,8 @@ type fnInfo struct {
 	order   []string
 	direct  string
 	wrapper string
+	// lib はライブラリで定義した関数(自分のプログラムから呼ぶときに、呼んだ場所を覚える)
+	lib bool
 }
 
 type binding struct {
@@ -956,7 +965,14 @@ func (c *Compiler) exCall(n *Call, sc *scope, fg *fnGen) string {
 			as = append(as, "i64 "+byPart[p])
 		}
 		as = append(as, fmt.Sprintf("i32 %d", pos))
-		return fg.call("i64", b.info.direct, strings.Join(as, ", "))
+		if !(b.info.lib && pos != 0 && !InLibrary(n.Line)) {
+			return fg.call("i64", b.info.direct, strings.Join(as, ", "))
+		}
+		// 自分のプログラムからライブラリの関数を呼ぶ: その中の実行時エラーは、ここの位置で出す(#154)
+		old := fg.call("i32", "@rt_enter", fmt.Sprintf("i32 %d", pos))
+		r := fg.call("i64", b.info.direct, strings.Join(as, ", "))
+		fg.call("void", "@rt_leave", "i32 "+old)
+		return r
 	}
 	fn := c.varValue(n.Name, sc, fg, n.Line)
 	arr := fg.array(vals)
@@ -1170,7 +1186,7 @@ func (c *Compiler) mainThreadCall(ret, fn string, args []string, fg *fnGen, line
 
 func (c *Compiler) newInfo(name string, params []Param) *fnInfo {
 	k := c.uid()
-	return &fnInfo{name, paramParts(params), fmt.Sprintf("@f.%d", k), fmt.Sprintf("@g.%d", k)}
+	return &fnInfo{name: name, order: paramParts(params), direct: fmt.Sprintf("@f.%d", k), wrapper: fmt.Sprintf("@g.%d", k)}
 }
 
 func (c *Compiler) makeFnValue(info *fnInfo, fg *fnGen, up string) string {
@@ -1526,6 +1542,7 @@ func (c *Compiler) module(program []Node, path string) *scope {
 	for _, d := range defines {
 		if d.IsFunction {
 			info := c.newInfo(d.Name, d.Params)
+			info.lib = InLibrary(d.Line)
 			sc.set(d.Name, &binding{kind: "gfn", g: c.newGlobal("gf"), info: info})
 		} else {
 			sc.set(d.Name, &binding{kind: "gval", g: c.newGlobal("gv")})

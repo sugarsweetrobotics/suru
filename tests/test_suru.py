@@ -1486,9 +1486,9 @@ def test_読み込んだファイルの中の実行時エラーはファイル�
     (tmp_path / "部品.suru").write_text(PARTS, encoding="utf-8")
     with pytest.raises(SuruError) as info:
         _run_in(tmp_path, PARTS_MAIN)
-    assert str(info.value) == "「部品.suru」の2行目 7文字目: 「a」は数値にできません"
+    assert str(info.value) == "「部品.suru」の2行目 7文字目: 「a」は数値にできません"  # 自分のファイルの中はその位置
     assert format_error(info.value, PARTS_MAIN) == PARTS_ERR
-    with pytest.raises(SuruError, match="^「基本.suru」の[0-9]+行目 [0-9]+文字目: 無を取り出しました$"):
+    with pytest.raises(SuruError, match="^1行目 5文字目: 無を取り出しました\\(「基本.suru」の[0-9]+行目 [0-9]+文字目\\)$"):
         _run_in(tmp_path, "無 を 取出する")
 
 

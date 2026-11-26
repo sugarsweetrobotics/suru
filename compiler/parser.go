@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // --- 例外のかわり(Python の raise / try と同じ流れにするため panic を使う) ---
@@ -2806,6 +2807,7 @@ func loadPrelude(ctx *ParseContext, line Pos) *Module {
 	if m, ok := ctx.Modules[path]; ok {
 		return m
 	}
+	libraryFiles.Store(path, true)
 	return loadPath(path, PreludeName+SourceSuffix, ctx, line, true)
 }
 
@@ -3171,25 +3173,66 @@ func loadModule(name string, ctx *ParseContext, line Pos) *Module {
 	if ctx.Path != "" && path == ctx.Path {
 		// 「試験/会話帳.suru」の「「会話帳」 を 読み込む」: 自分自身は飛ばして、依存・プロジェクトのフォルダ・標準の lib を探す
 		if p, ok := packagePath(name, ctx, line); ok {
+			markLibrary(p, ctx, true)
 			return loadPath(p, file, ctx, line, false)
 		}
 		if p, ok := projectFile(file, ctx.BaseDir); ok {
+			markLibrary(p, ctx, false)
 			return loadPath(p, file, ctx, line, false)
 		}
 		if exists(lib) {
+			markLibrary(lib, ctx, true)
 			return loadPath(lib, file, ctx, line, false)
 		}
 		raise(line, "「"+file+"」を読み込むと、自分自身を読み込むことになります(同じ名前の別のファイルなら、置き場所かファイルの名前を変えてください)")
 	}
-	if !exists(path) {
+	searched := !exists(path)
+	if searched {
 		if p, ok := packagePath(name, ctx, line); ok {
 			path = p
 		} else {
 			path = lib
 		}
 	}
+	markLibrary(path, ctx, searched)
 	return loadPath(path, file, ctx, line, false)
 }
+
+// libraryFiles はライブラリのファイル(同梱の lib/ と依存のもの、そこから読み込んだもの)の道。それ以外は自分のプログラム(#154)
+var libraryFiles sync.Map
+
+// markLibrary は同梱の lib/ のファイル、依存(自分のプロジェクトの外)から見つけたファイル、ライブラリから読み込んだファイルを
+// ライブラリとする。自分のプロジェクトのファイルは、組.suru の名前で読み込んでも自分のプログラム
+func markLibrary(path string, ctx *ParseContext, searched bool) {
+	if isLibPath(path) || IsLibraryFile(ctx.Path) || (searched && !inOwnProject(path, ctx.BaseDir)) {
+		libraryFiles.Store(path, true)
+	}
+}
+
+// inOwnProject は path が dir を含むプロジェクト(組.suru のあるフォルダ)の中か
+func inOwnProject(path, dir string) bool {
+	if dir == "" || strings.HasPrefix(dir, embeddedLibPrefix) {
+		return false
+	}
+	d := absPath(dir)
+	for !exists(filepath.Join(d, ProjectConfig)) {
+		parent := filepath.Dir(d)
+		if parent == d {
+			return false
+		}
+		d = parent
+	}
+	return strings.HasPrefix(absPath(path), d+string(filepath.Separator))
+}
+
+// IsLibraryFile は道がライブラリのファイルか
+func IsLibraryFile(path string) bool {
+	_, ok := libraryFiles.Load(path)
+	return ok
+}
+
+// InLibrary はライブラリのファイルの中の位置か
+func InLibrary(p Pos) bool { return p.File != "" && IsLibraryFile(p.File) }
 
 func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Module {
 	stem := splitExt(pathBase(path))
