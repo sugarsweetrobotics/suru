@@ -150,6 +150,10 @@
       "patterns": [
         {
           "name": "keyword.control.suru",
+          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])以下[ 　]*の[ 　]*外部[ 　]*の[ 　]*(?:入出力動作|関数)"
+        },
+        {
+          "name": "keyword.control.suru",
           "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])以下[ 　]*の[ 　]*(?:入出力)?手順"
         },
         {

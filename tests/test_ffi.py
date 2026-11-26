@@ -122,7 +122,7 @@ def test_バイナリでも同じ(libdir):
 
 def test_libmとlibc():
     src = (ROOT / "examples" / "ffi.suru").read_text(encoding="utf-8")
-    assert interpreted(src, str(ROOT / "examples")) == "1\n1024\n5\n6\n"
+    assert interpreted(src, str(ROOT / "examples")) == "1\n1024\n5\n6\n2\n"
 
 
 @needs_cc
