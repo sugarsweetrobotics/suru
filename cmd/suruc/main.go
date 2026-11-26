@@ -9,6 +9,7 @@
 //	suruc -O0 prog.suru        # clang の最適化の強さ(-O0 〜 -O3、既定は -O2)
 //	suruc --検査 prog.suru      # 構文と型だけを調べる(suru --検査 と同じ)
 //	suruc --json prog.suru     # エラーを1行の JSON で出す(suru --json と同じ形)
+//	suruc --展開 prog.suru     # 準クォートを展開したソースを出す
 package main
 
 import (
@@ -28,7 +29,7 @@ import (
 // version はリリースのときに -ldflags "-X main.version=…" で書きかえる
 var version = "0.9.1"
 
-const usage = "使い方: suruc [--ll] [--検査 | --検査なし] [--json] [-O0|-O1|-O2|-O3] [--対象 基板] プログラム.suru [-o 出力]"
+const usage = "使い方: suruc [--ll] [--検査 | --検査なし | --展開] [--json] [-O0|-O1|-O2|-O3] [--対象 基板] プログラム.suru [-o 出力]"
 
 func run(args []string) int {
 	if len(args) >= 1 && (args[0] == "--version" || args[0] == "--版") {
@@ -38,6 +39,7 @@ func run(args []string) int {
 	llOnly := false
 	check := true
 	checkOnly := false
+	expandOnly := false
 	asJSON := false
 	opt := "-O2"
 	out := ""
@@ -54,6 +56,8 @@ func run(args []string) int {
 			checkOnly = true
 		case a == "--json" || a == "--JSON":
 			asJSON = true
+		case a == "--展開" || a == "--expand":
+			expandOnly = true
 		case a == "-O0" || a == "-O1" || a == "-O2" || a == "-O3" || a == "-Os":
 			opt = a
 		case a == "-o":
@@ -96,6 +100,14 @@ func run(args []string) int {
 			fmt.Fprintln(os.Stderr, compiler.FormatError(e, source, true))
 		}
 		return 1
+	}
+	if expandOnly {
+		text, serr := compiler.ExpandSource(source, baseDir, srcPath)
+		if serr != nil {
+			return report(serr)
+		}
+		fmt.Print(text)
+		return 0
 	}
 	if checkOnly {
 		if serr := compiler.CheckSource(source, baseDir, srcPath); serr != nil {
@@ -180,6 +192,7 @@ func main() {
 	// すぐ終わるプログラムなので、ごみ集めは控えめにする
 	debug.SetGCPercent(400)
 	compiler.LibFS = mustSub()
+	native.InstallExpander()
 	if d := os.Getenv("SURU_LIB"); d != "" {
 		compiler.LibDir = d
 	}

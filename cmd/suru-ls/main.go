@@ -26,6 +26,7 @@ import (
 	"unicode/utf16"
 
 	suru "github.com/suru-lang/suru"
+	"github.com/suru-lang/suru/cmd/internal/native"
 	"github.com/suru-lang/suru/compiler"
 )
 
@@ -575,6 +576,7 @@ func setupLib() {
 	if err == nil {
 		compiler.LibFS = sub
 	}
+	native.InstallExpander()
 	if d := os.Getenv("SURU_LIB"); d != "" {
 		compiler.LibDir = d
 		return
