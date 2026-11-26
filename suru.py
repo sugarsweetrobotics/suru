@@ -840,6 +840,8 @@ class Line:
     # 準クォート「以下は【道】です … 以上です」の中身(字下げを除いた文字列)。tokens の最後が QUASI の字句
     quasi: str | None = None
     quasi_end: int = 0  # 準クォートの「以上」の行の番号
+    # 導出「会員 は 【JSON】 と 【表】 を 導出する」の【】の名前(tokens は DERIVE の字句1つで、値は型の名前)
+    derive: list[str] | None = None
 
 
 # --- 準クォート(#192): 「以下は【道】です」+ 中身 + 「以上です」。中身はライブラリの「道展開する」で する に展開する ---
@@ -849,6 +851,11 @@ _QUASI_EXPR = re.compile(r"^(.*?[^ \t　])[ \t　]*とは[ \t　]*以下[ \t　]
 _QUASI_END = re.compile(r"^以上[ \t　]*(?:です)?[ \t　]*。?[ \t　]*(?:#.*)?$")
 QUASI_SUFFIX = "展開する"  # 【道】の展開の関数は「道展開する」
 QUASI_MAX_DEPTH = 20  # 展開したコードの中の準クォートを展開する深さの上限
+# 導出(#192): 「会員 は 【JSON】 と 【表】 を 導出する」。【JSON】の導出の関数は「JSON導出する」
+DERIVE_SUFFIX = "導出する"
+DERIVE_LIB = "導出"  # 導出の関数が受け取る型の記述(型記述・形記述・欄記述・型式)を定義した lib のファイル
+_DERIVE = re.compile(r"^([^ \t　【】「」『』()（）#]+)[ \t　]*は[ \t　]*(【[^【】 \t　]+】(?:[ \t　]*と[ \t　]*【[^【】 \t　]+】)*)"
+                     r"[ \t　]*を[ \t　]*導出(?:する|します)[ \t　]*。?[ \t　]*(?:#.*)?$")
 
 
 def _indent_of(raw: str) -> tuple[int, int]:
@@ -976,6 +983,12 @@ def split_lines(source: str, at: int | None = None) -> list[Line]:
                 indent += INDENT_WIDTH[c]
             else:
                 break
+        derive = _DERIVE.match(raw.strip())
+        if derive is not None:
+            names = re.findall(r"【([^【】]+)】", derive.group(2))
+            lines.append(Line(indent, [Token("DERIVE", derive.group(1), number)], Pos(number), derive=names))
+            k += 1
+            continue
         head = _quasi_header(raw)
         if head is not None:
             name, before = head
@@ -3461,7 +3474,8 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         if line is not None:
             prelude = Import(load_prelude(ctx, line), line, True, auto=True)
     if _has_quasi(nodes):
-        nodes = expand_quasi(nodes, [i.module for i in imports.values() if isinstance(i, Import)], cache={"ctx": ctx})
+        nodes = expand_quasi(nodes, [i.module for i in imports.values() if isinstance(i, Import)],
+                             cache={"ctx": ctx, "nodes": nodes})
     test_import = None
     first_test = next((n.line.number for n in nodes if n.line.tokens and is_test_head(nosep(n.line.tokens)[0])), None)
     if first_test is not None:
@@ -3690,20 +3704,22 @@ def expand_source(source: str, base_dir: str, path: str) -> str:
 
 
 def _has_quasi(nodes: list) -> bool:
-    return any(n.line.quasi is not None or _has_quasi(n.children) for n in nodes)
+    return any(n.line.quasi is not None or n.line.derive is not None or _has_quasi(n.children) for n in nodes)
 
 
-def find_expander(name: str, modules: list, line: int) -> tuple:
-    """【name】の展開の関数「name展開する」を、読み込んだファイルから探す。(ファイル, 関数の名前)"""
-    fname = name + QUASI_SUFFIX
+def find_expander(name: str, modules: list, line: int, derive: bool = False) -> tuple:
+    """【name】の展開の関数「name展開する」(derive なら導出の関数「name導出する」)を、読み込んだファイルから探す。
+    (ファイル, 関数の名前)"""
+    fname = name + (DERIVE_SUFFIX if derive else QUASI_SUFFIX)
+    kind, arg = ("導出", "型記述") if derive else ("展開", "文字列")
     found = [m for m in modules
              if fname not in m.private and any(isinstance(d, Define) and d.name == fname for d in m.program)]
     if not found:
-        raise SuruError(f"【{name}】の展開の関数「{fname}」が、読み込んだファイルにありません"
-                        f"(「文字列 を {fname} は 文字列 の 成否」を定義したファイルを読み込んでください)", line)
+        raise SuruError(f"【{name}】の{kind}の関数「{fname}」が、読み込んだファイルにありません"
+                        f"(「{arg} を {fname} は 文字列 の 成否」を定義したファイルを読み込んでください)", line)
     if len(found) > 1:
         names = "と".join(f"「{m.name}」" for m in found)
-        raise SuruError(f"【{name}】の展開の関数「{fname}」が{names}の両方にあります", line)
+        raise SuruError(f"【{name}】の{kind}の関数「{fname}」が{names}の両方にあります", line)
     return found[0], fname
 
 
@@ -3721,6 +3737,109 @@ def run_expander(name: str, body: str, modules: list, line: int, cache: dict) ->
     except SuruError as e:
         raise SuruError(f"【{name}】の展開の関数「{fname}」が止まりました: {e.message}", line) from None
     return quasi_result(name, fname, v, line)
+
+
+def run_deriver(tname: str, name: str, desc: Record, modules: list, line: int, cache: dict) -> str:
+    """「tname は 【name】 を 導出する」: 型の記述 desc を導出の関数に渡し、返した する のソースを返す"""
+    module, fname = find_expander(name, modules, line, derive=True)
+    it = cache.get("interp")
+    if it is None:
+        it = cache["interp"] = Interpreter()
+        if "ctx" in cache:
+            it.ctx = cache["ctx"].copy()
+    try:
+        env = it.load_module(module)
+        v = it.perform(it.call(env.vars[fname], {WO: desc}, line))
+    except SuruError as e:
+        raise SuruError(f"【{name}】の導出の関数「{fname}」が止まりました: {e.message}", line) from None
+    if isinstance(v, Record) and v.type_name == "成否" and len(v.values) == 1 and isinstance(v.values[0], str):
+        if v.ctor == "成功":
+            return v.values[0]
+        if v.ctor == "失敗":
+            raise SuruError(f"【{name}】で「{tname}」を導出できません: {v.values[0]}", line)
+    raise SuruError(f"【{name}】の導出の関数「{fname}」は「文字列 の 成否」を返してください", line)
+
+
+def _type_text(t: Any) -> str:
+    """型の書き方(lib/導出.suru の 型式文にする と同じ)"""
+    if isinstance(t, TypeVarName):
+        return t.name
+    if isinstance(t, TypeName):
+        if not t.args:
+            return t.name
+        if len(t.args) == 1:
+            a = t.args[0]
+            inner = _type_text(a)
+            return (f"（{inner}）" if isinstance(a, TypeName) and a.args else inner) + f" の {t.name}"
+        return "（" + " と ".join(_type_text(a) for a in t.args) + f"） の {t.name}"
+    ps = " ".join(f"{_type_text(pt)} {p}" for p, pt in t.params)
+    return f"（{ps} 受け取って {_type_text(t.result)} を 返すこと）"
+
+
+def _type_form(t: Any) -> Record:
+    """型を 型式 の値にする(lib/導出.suru)"""
+    if isinstance(t, TypeVarName):
+        return Record("名型", "型式", ("型式名", "型式引数"), (t.name, ()))
+    if isinstance(t, TypeName):
+        return Record("名型", "型式", ("型式名", "型式引数"), (t.name, tuple(_type_form(a) for a in t.args)))
+    return Record("他型", "型式", ("型式文",), (_type_text(t),))
+
+
+def _type_vars_of(t: Any, out: list) -> None:
+    if isinstance(t, TypeVarName):
+        if t.name not in out:
+            out.append(t.name)
+    elif isinstance(t, TypeName):
+        for a in t.args:
+            _type_vars_of(a, out)
+    elif isinstance(t, TypeFun):
+        for _, pt in t.params:
+            _type_vars_of(pt, out)
+        _type_vars_of(t.result, out)
+
+
+def type_description(tname: str, scopes: list, line: int, ctx: "ParseContext | None" = None) -> Record:
+    """「tname は 【X】 を 導出する」の tname の型の記述(型記述 の値)。型は同じファイルで定義したもの"""
+    global _CTX
+    tds = [d for nodes in scopes for n in nodes if n.line.quasi is None and n.line.derive is None
+           for d in [try_parse_typedef(n)] if d is not None]
+    td = next((d for d in tds if d.name == tname), None)
+    if td is None:
+        raise SuruError(f"「{tname}」の型の定義がこのファイルにありません(導出できるのは同じファイルで定義した型です)", line)
+    if td.field_types is None and any(fs for _, fs in td.ctors):
+        raise SuruError(f"「{tname}」のフィールドに型が書かれていないので導出できません"
+                        f"(「{tname} とは 番号 は 数 で 名前 は 文字列 の 組」のように書きます)", line)
+    # 型の名前を確かめるために、このファイルの型を(まだ集めていないので)ここで集める
+    saved = _CTX
+    _CTX = (ctx or ParseContext()).copy()
+    for d in tds:
+        _CTX.types.setdefault(d.name, [c for c, _ in d.ctors])
+    try:
+        types = {f: parse_type_all(toks, td.line) for f, toks in (td.field_types or {}).items()}
+    finally:
+        _CTX = saved
+    tvars: list = []
+    ctors = []
+    for cname, fields in td.ctors:
+        fs = []
+        for f in fields:
+            _type_vars_of(types[f], tvars)
+            fs.append(Record("欄記述", "欄記述", ("欄名", "欄型"), (f, _type_form(types[f]))))
+        ctors.append(Record("形記述", "形記述", ("形名", "欄群"), (cname, tuple(fs))))
+    return Record("型記述", "型記述", ("型名", "型引数", "形群"), (tname, tuple(tvars), tuple(ctors)))
+
+
+def description_source(r: Any) -> str:
+    """型の記述の値を、する の式のソースにする(Go 版が導出の関数を動かすプログラムに書く。ここでは試験で比べる)"""
+    if isinstance(r, str):
+        return "「" + r + "」"
+    if isinstance(r, tuple):
+        if not r:
+            return "空"
+        if len(r) == 1:
+            return "（" + description_source(r[0]) + " を 空 に 挿入する）"
+        return "（" + " と ".join(description_source(x) for x in r) + "）"
+    return "（" + " で ".join(f"{f} は {description_source(v)}" for f, v in zip(r.fields, r.values)) + f" の {r.ctor}）"
 
 
 def quasi_result(name: str, fname: str, v: Any, line: int) -> str:
@@ -3743,6 +3862,9 @@ def expand_quasi(nodes: list, modules: list, depth: int = 0, cache: dict | None 
     cache = {} if cache is None else cache
     out: list = []
     for n in nodes:
+        if n.line.derive is not None:
+            out.extend(_expand_derive(n, nodes, modules, depth, cache, top))
+            continue
         q = n.line.quasi
         if q is None:
             n.children = expand_quasi(n.children, modules, depth, cache, False)
@@ -3777,6 +3899,28 @@ def expand_quasi(nodes: list, modules: list, depth: int = 0, cache: dict | None 
             raise SuruError(f"【{name}】の展開の関数が空のコードを返しました(式の場所には式が要ります)", line)
         out.append(n)
     return out
+
+
+def _expand_derive(n: Node, scope: list, modules: list, depth: int, cache: dict, top: bool) -> list:
+    """「会員 は 【JSON】 と 【表】 を 導出する」を、導出の関数が返した定義にする"""
+    tname, line = n.line.tokens[0].value, n.line.number
+    names = n.line.derive
+    label = "】 と 【".join(names)
+    if not top or n.line.indent:
+        raise SuruError(f"「{tname} は 【{label}】 を 導出する」は一番外(字下げなし)にだけ書けます", line)
+    if depth >= QUASI_MAX_DEPTH:
+        raise SuruError(f"【{names[0]}】の展開が深すぎます(展開したコードの中の準クォートが{QUASI_MAX_DEPTH}回続きました)", line)
+    desc = type_description(tname, [scope, cache.get("nodes", [])], line, cache.get("ctx"))
+    srcs = [run_deriver(tname, x, desc, modules, line, cache) for x in names]
+    src = "\n".join(x.rstrip("\n") for x in srcs if x.strip())
+    if depth == 0 and _QUASI_RECORD is not None and cache.get("ctx") is not None and cache["ctx"] is _QUASI_RECORD[0]:
+        _QUASI_RECORD[1].append((int(line), int(line), src, None))
+    made = build_layout(split_lines(src, int(line))) if src.strip() else []
+    made = expand_quasi(made, modules, depth + 1, cache, True)
+    for m in made:
+        if import_target(m) is not None:
+            raise SuruError(f"【{names[0]}】の導出したコードには、読み込みの文を書けません", line)
+    return made
 
 
 def _reindent(nodes: list, base: int) -> list:

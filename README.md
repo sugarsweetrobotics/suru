@@ -1466,6 +1466,20 @@ z とは 以下の【式】です
 5. **Seeing the result.** `suru --展開 prog.suru` and `suruc --展開 prog.suru` (also `--expand`) print the program with every quasi-quote replaced by its expansion.
 6. **【 and 】 are reserved.** Outside strings, `【` and `】` can only be used in a quasi-quote header. 点検 (`lib/字句.suru` and `lib/構文.suru`) reads the header without expanding it: the file that defines `X展開する` counts as used, and so do names written in the block.
 
+### Deriving
+
+```suru
+「写」 を 読み込む
+
+会員 とは 番号 は 数 で 名前 は 文字列 で 好物 は 文字列 の リスト の 組
+会員 は 【記述】 と 【数え】 を 導出する
+```
+
+1. **Functions made from the shape of a type.** `会員 は 【記述】 と 【数え】 を 導出する` hands a description of `会員` to the functions `記述導出する` and `数え導出する`, and puts the definitions they return in place of the line. This is the fourth stage of the plan for deriving and quasi-quotes (#192). Libraries will use it to make, for example, JSON conversion (【JSON】) and row conversion for the O/R mapper (【表】) without runtime reflection.
+2. **The deriver receives a type description.** `X導出する` has the type `型記述 を X導出する は 文字列 の 成否` and must be defined in a file the program reads. The types come from `lib/導出.suru` (`「導出」 を 読み込んで 使う`): `型記述` (type name, type parameters 甲・乙 …, forms), `形記述` (form name and fields), `欄記述` (field name and type) and `型式` (a type: `名型` with a name and arguments, such as `数`, `数 の リスト`, `甲` or the type itself, or `他型` with the written text, such as a function type). `型式文にする` gives the written text (`数 の リスト`).
+3. **Only typed records in the same file.** The type must be defined in the same file, and its fields must have types (`番号 は 数 で … の 組`; forms without fields, like `赤 か 青`, need none). The line must be at the top level. Several derivers can be joined with `と`, and `導出します` also works.
+4. **Same as quasi-quotes.** Deriving runs while the program is read, like quasi-quotes: the derived code is type checked, its errors point at the deriving line, it may contain quasi-quotes and deriving lines but not `読み込む`, and `suru --展開` / `suruc --展開` show it. `suruc`, `kumu` and the language server compile the deriver into a small program and keep it in the cache folder. 点検 counts the file that defines `X導出する` as used.
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)

@@ -1159,7 +1159,17 @@ type Line struct {
 	HasQuasi bool
 	Quasi    string
 	QuasiEnd int
+	// Derive は導出「会員 は 【JSON】 と 【表】 を 導出する」の【】の名前。Tokens は DERIVE の字句1つで、値は型の名前
+	Derive []string
 }
+
+// 導出(#192): 【JSON】の導出の関数は「JSON導出する」
+const deriveSuffix = "導出する"
+
+var (
+	deriveLine = regexp.MustCompile(`^([^ \t　【】「」『』()（）#]+)[ \t　]*は[ \t　]*(【[^【】 \t　]+】(?:[ \t　]*と[ \t　]*【[^【】 \t　]+】)*)[ \t　]*を[ \t　]*導出(?:する|します)[ \t　]*。?[ \t　]*(?:#.*)?$`)
+	deriveName = regexp.MustCompile(`【([^【】]+)】`)
+)
 
 // --- 準クォート(#192): 「以下は【道】です」+ 中身 + 「以上です」。中身はライブラリの「道展開する」で する に展開する ---
 
@@ -1348,6 +1358,16 @@ func splitSourceLines(source string) ([]*Line, error) {
 				break
 			}
 			indent += w
+		}
+		if m := deriveLine.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
+			var names []string
+			for _, x := range deriveName.FindAllStringSubmatch(m[2], -1) {
+				names = append(names, x[1])
+			}
+			p := Pos{number, 0, curPosFile}
+			lines = append(lines, &Line{Indent: indent, Tokens: []*Token{{Kind: "DERIVE", S: m[1], Line: p}}, Number: p, Derive: names})
+			k++
+			continue
 		}
 		if name, before, isExpr, ok := quasiHeader(raw); ok {
 			body, end, err := quasiBlock(raws, k, indent, name)
