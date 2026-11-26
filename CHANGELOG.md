@@ -6,10 +6,16 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 
 ## Unreleased
 
+### New
+
+1. **The external function block can start with 「以下は」.** `以下は外部の関数です` / `以下は外部の入出力動作です` (and `以下 は 外部 の …`) read like the start of a sentence, and are now the documented form. The 0.9.0 spelling `以下の外部の…` keeps working with the same meaning. Programs that use `以下は外部の…` need this release (#186).
+
 ### Improved
 
-1. **The bundled `lib/` writes its C functions in the new way.** The two-line external definitions are now one-line definitions or `以下の外部の入出力動作です` … `以上です` blocks. Nothing changes for programs that use the library.
+1. **The bundled `lib/` writes its C functions in the new way.** The two-line external definitions are now one-line definitions or `以下は外部の入出力動作です` … `以上です` blocks. Nothing changes for programs that use the library.
 2. **The test runner that `kumu 試験` writes leaves a blank line between definitions,** so `suru --点検` on it no longer reports 「定義の間の空行」.
+
+The next VS Code extension highlights `以下は外部の入出力動作` and `以下は外部の関数` too.
 
 ## 0.9.0
 

@@ -69,7 +69,7 @@ func cat(parts ...[]*Token) []*Token {
 	return out
 }
 
-// ioResult はまとまり「以下の外部の入出力動作です」の値の型「番地 を 返します」を「番地 を 返す 入出力動作」にする
+// ioResult はまとまり「以下は外部の入出力動作です」の値の型「番地 を 返します」を「番地 を 返す 入出力動作」にする
 func ioResult(res []*Token, word string) []*Token {
 	line := res[0].Line
 	if n := len(res); n >= 2 && isPartS(res[n-2], "を") && (isKw(res[n-1], KwHensu) || isKw(res[n-1], KwHensuPolite)) {
@@ -123,7 +123,7 @@ func typedExtern(ln *Line, head []*Token, towa *Token, ext, typ []*Token, word s
 	if len(res) == 0 {
 		raise(typ[len(typ)-1].Line, "「受け取って」の後に値の型を書きます("+extOneLineExample+")")
 	}
-	if word == KwIkaExtIO {
+	if extIOWords[word] {
 		res = ioResult(res, word)
 	}
 	sig := cat(args, []*Token{name, tok("KW", KwWa, name.Line)}, res)
@@ -210,7 +210,7 @@ func externBlockLine(ln *Line, word string) []*Line {
 		raise(ln.Number, "「"+word+"です」の中には、"+extBlockLineHelp)
 	}
 	res := after[2:]
-	if word == KwIkaExtIO {
+	if extIOWords[word] {
 		res = ioResult(res, word)
 	}
 	// 定義の引数の名前は使わないので、「引数1」「引数2」… にする
@@ -230,7 +230,7 @@ func externBlockLine(ln *Line, word string) []*Line {
 	return []*Line{{0, sig, ln.Number, ln.Closed}, {0, def, ln.Number, ln.Closed}}
 }
 
-// opensExtBlock は「以下の外部の入出力動作です」「以下の外部の関数です」だけの行か
+// opensExtBlock は「以下は外部の入出力動作です」「以下は外部の関数です」(「以下の外部の…」も)だけの行か
 func opensExtBlock(ln *Line) bool {
 	ts := nosep(ln.Tokens)
 	return len(ts) == 1 && ts[0].Kind == "KW" && extBlockWords[ts[0].S]

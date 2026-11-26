@@ -1389,12 +1389,12 @@ When many external functions are written as a type declaration plus a definition
 x を y で 累乗する とは 外部の「pow」 で 小数 を 小数 で 受け取って 小数 を 返します
 s を 字数計測する とは 外部の「strlen」 で 文字列 を 受け取って 整数 を 返す 入出力動作です
 
-以下の外部の関数です
+以下は外部の関数です
   小数 を 余弦にする は 「cos」 で 小数 を 返します
   x を y で 逆累乗する とは 「pow」（y と x） で 小数 を 小数 で 受け取って 小数 を 返します
 以上です
 
-以下の外部の入出力動作です
+以下は外部の入出力動作です
   文字列 を 文字列 で 比較する は 「strcmp」 で 整数 を 返します
   文字列 を 一行出力する は 「puts」 で 整数 を 返します
 以上です
@@ -1402,15 +1402,16 @@ s を 字数計測する とは 外部の「strlen」 で 文字列 を 受け�
 
 1. **The type goes after the definition.** `n を 確保する とは 外部の「SDL_malloc」 で 数 を 受け取って 番地 を 返す 入出力動作です` means the same as the two lines `数 を 確保する は 番地 を 返す 入出力動作` and `n を 確保する とは 外部の「SDL_malloc」`. The type starts at the `で` after `外部の「…」` (and the C argument list `（…）`, if any), in the same shape as a function type: `type particle … 受け取って type を 返す`. With no arguments, `受け取って` is left out (`低終了する とは 外部の「SDL_Quit」 で 無 を 返す 入出力動作です`). The ending decorations are the same as in type declarations, so `… を 返します` also works.
 2. **The type's particles are the definition's, in the same order.** Otherwise it is the error 「「累乗する」の型の引数は、定義と同じ助詞を同じ順に書き、最後に「受け取って」を書きます(定義の助詞: を・で)」 ("write the same particles as the definition, in the same order, then 受け取って"). This form is only for definitions whose body is `外部の「…」` (an ordinary body is an expression, where `で` would clash with an argument).
-3. **Between `以下の外部の入出力動作です` and `以上です`, write one function per line.** Every function in it returns an action, so lines don't repeat `入出力動作` (writing it is an error). Functions that are not actions (like `cos`) go in `以下の外部の関数です`. `以下 の 外部 の 入出力動作` (without です) and `以上` also work. The block is only allowed at the outermost level.
+3. **Between `以下は外部の入出力動作です` and `以上です`, write one function per line.** Every function in it returns an action, so lines don't repeat `入出力動作` (writing it is an error). Functions that are not actions (like `cos`) go in `以下は外部の関数です`. `以下 は 外部 の 入出力動作` (without です) and `以上` also work. The block is only allowed at the outermost level.
 4. **Lines are written like type declarations.** As in `数 を 確保する は 「SDL_malloc」 で 番地 を 返します`, the C name and `で` come after the declaration's 「は」. Arguments go to C in declaration order. To reorder the arguments passed to C or add constants, write the line as a definition with names: `r を 読取する とは 「SDL_RenderReadPixels」（r と 0） で 番地 を 受け取って 番地 を 返します`.
-5. **Lines are deeper than the header, or at the same indent.** The same as `以下の手順です`. Comment lines and blank lines are allowed inside. A missing `以上`, an empty block, a line in neither shape, and the same name twice are errors. In the punctuation style it is `以下の外部の入出力動作です。文字列を字数計測するは、「strlen」で整数を返します。以上です。`.
-6. **Everything reads them the same way.** Before building the indentation tree, they are turned into the two lines (declaration and definition). The interpreter, the Python and Go compilers, the lexer and parser written in する (`lib/字句.suru`, `lib/構文.suru`), the linter, the REPL (which reads until 「以上」) and the VS Code highlighting all do the same. The libm functions in `lib/算術.suru` are written with `以下の外部の関数です`.
+5. **Lines are deeper than the header, or at the same indent.** The same as `以下の手順です`. Comment lines and blank lines are allowed inside. A missing `以上`, an empty block, a line in neither shape, and the same name twice are errors. In the punctuation style it is `以下は外部の入出力動作です。文字列を字数計測するは、「strlen」で整数を返します。以上です。`.
+6. **Everything reads them the same way.** Before building the indentation tree, they are turned into the two lines (declaration and definition). The interpreter, the Python and Go compilers, the lexer and parser written in する (`lib/字句.suru`, `lib/構文.suru`), the linter, the REPL (which reads until 「以上」) and the VS Code highlighting all do the same. The libm functions in `lib/算術.suru` are written with `以下は外部の関数です`.
+7. **The header starts with 「以下は」.** The header begins a sentence, so it reads `以下は外部の関数です` / `以下は外部の入出力動作です`, while `以下の手順です` stays as it is because it comes after `とは` in the middle of a sentence. The 0.9.0 spelling `以下の外部の関数です` / `以下の外部の入出力動作です` (and `以下 の 外部 の …`) still works with the same meaning. Error messages quote the header as you wrote it.
 
 ### Blank lines between definitions (lint)
 
 1. **The linter reports a function definition followed by another function's definition with no blank line.** This is the new rule 「定義の間の空行」 (#175). At the outermost level, a type declaration together with all definitions of that function (including case-by-case definitions) is one group. When a group starts on the line right after the previous group, the first line of the later group gets 「「解放する」の定義は、前の「確保する」の定義とのあいだに空行を入れると、どこからが新しい定義か読みやすくなります」 ("a blank line between this definition of 「解放する」 and the previous definition of 「確保する」 makes it easier to see where the new definition starts").
-2. **Only when at least one of the groups is two or more lines.** A run of one-line definitions (external functions written on one line, or `x を 二倍する とは x * 2`) reads like a table and is not reported. A `以下の外部の入出力動作です … 以上です` block is one group.
+2. **Only when at least one of the groups is two or more lines.** A run of one-line definitions (external functions written on one line, or `x を 二倍する とは x * 2`) reads like a table and is not reported. A `以下は外部の入出力動作です … 以上です` block is one group.
 3. **Comments directly above a group belong to it.** The blank line goes above the comments. Value, type and trait definitions, loads, and expression statements are not groups and are not checked. As with other rules, `# 点検しない: 定義の間の空行` silences it.
 
 ## License

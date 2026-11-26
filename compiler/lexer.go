@@ -50,9 +50,12 @@ const (
 	KwIjou  = "以上"
 	KwIka   = "以下の手順" // 「挨拶する とは 以下の手順です」+ 文 + 「以上」
 	KwIkaIO = "以下の入出力手順"
-	// 外部の関数のまとまり: 「以下の外部の入出力動作です」+ 1行に1つの関数 + 「以上です」(#174)
-	KwIkaExtIO = "以下の外部の入出力動作"
-	KwIkaExt   = "以下の外部の関数"
+	// 外部の関数のまとまり: 「以下は外部の入出力動作です」+ 1行に1つの関数 + 「以上です」(#174)。
+	// 文の頭なので「以下は」と書きます。「以下の外部の…」も同じ意味で書けます(0.9.0 の書き方)
+	KwIkaExtIO   = "以下は外部の入出力動作"
+	KwIkaExt     = "以下は外部の関数"
+	KwIkaExtIONo = "以下の外部の入出力動作"
+	KwIkaExtNo   = "以下の外部の関数"
 
 	WO        = "を"
 	GA        = "が"
@@ -95,11 +98,12 @@ var keywords = setOf(
 	KwTo, KwTowa, KwNo, KwGa, KwIf, KwThen, KwElse, KwLambda, KwReturn, KwProviso,
 	KwKa, KwWa, KwToiu, KwKumi, KwSeishitsu, KwSorekara, KwKatsu, KwMataha, Desu, KwHensu, KwHensuPolite,
 	KwImport, KwImportPolit, KwImportTe, KwUse, KwUsePolite, KwIjou, KwIka, KwIkaIO,
-	KwIkaExtIO, KwIkaExt,
+	KwIkaExtIO, KwIkaExt, KwIkaExtIONo, KwIkaExtNo,
 )
 var kanjiKeywords = setOf(KwKumi, KwSeishitsu, KwIjou)
 var ikaWords = setOf(KwIka, KwIkaIO)
-var extBlockWords = setOf(KwIkaExtIO, KwIkaExt)
+var extBlockWords = setOf(KwIkaExtIO, KwIkaExt, KwIkaExtIONo, KwIkaExtNo)
+var extIOWords = setOf(KwIkaExtIO, KwIkaExtIONo)
 var continuationKeywords = setOf(KwThen, KwElse)
 var particles = []string{"より", "から", "を", "に", "で", "へ"}
 var particleSet = setOf(particles...)
@@ -558,7 +562,7 @@ func tokenizeLine(text string, line int) ([]*Token, error) {
 }
 
 // joinIka は「以下の手順」「以下 の 手順」「以下の入出力手順」を1つの言葉にする。
-// 「以下の外部の入出力動作」「以下 の 外部 の 入出力動作」「以下の外部の関数」も
+// 「以下は外部の入出力動作」「以下 は 外部 の 入出力動作」「以下は外部の関数」も(「以下の外部の…」も)
 func joinIka(tokens []*Token) []*Token {
 	var out []*Token
 	for i := 0; i < len(tokens); i++ {
@@ -567,11 +571,12 @@ func joinIka(tokens []*Token) []*Token {
 			out = append(out, tok("KW", t.S, t.Line))
 			continue
 		}
-		if t.Kind == "WORD" && !t.Quoted && t.S == "以下" && i+4 < len(tokens) && isKw(tokens[i+1], KwNo) &&
+		if t.Kind == "WORD" && !t.Quoted && t.S == "以下" && i+4 < len(tokens) &&
+			(isKw(tokens[i+1], KwNo) || isKw(tokens[i+1], KwWa)) &&
 			tokens[i+2].Kind == "WORD" && !tokens[i+2].Quoted && tokens[i+2].S == "外部" &&
 			isKw(tokens[i+3], KwNo) && tokens[i+4].Kind == "WORD" && !tokens[i+4].Quoted &&
-			extBlockWords["以下の外部の"+tokens[i+4].S] {
-			out = append(out, tok("KW", "以下の外部の"+tokens[i+4].S, t.Line))
+			extBlockWords["以下"+tokens[i+1].S+"外部の"+tokens[i+4].S] {
+			out = append(out, tok("KW", "以下"+tokens[i+1].S+"外部の"+tokens[i+4].S, t.Line))
 			i += 4
 			continue
 		}
