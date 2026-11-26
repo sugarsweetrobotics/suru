@@ -4,6 +4,26 @@
 
 Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
 
+## 0.9.0
+
+### Changes that need edits when moving from 0.8
+
+1. **New lint rule 「定義の間の空行」 (blank line between definitions).** `suru --点検` and `kumu 点検` report a function definition of two or more lines that is followed on the very next line by another function's definition. Add a blank line, or write `# 点検しない: 定義の間の空行` on that line (#175).
+2. **`以下の外部の入出力動作` and `以下の外部の関数` are read as one word.** `以下 の 外部 の 入出力動作` also works (#174).
+
+### New
+
+1. **External functions with their type on one line.** Writing the type after the definition, as in `n を 確保する とは 外部の「SDL_malloc」 で 数 を 受け取って 番地 を 返す 入出力動作です`, names the function only once (#173).
+2. **A block of external functions.** Between `以下の外部の入出力動作です` and `以上です`, write one function per line, as in `数 を 確保する は 「SDL_malloc」 で 番地 を 返します`. Functions that are not actions go in `以下の外部の関数です` (#174).
+3. **The lint rule 「定義の間の空行」** (#175).
+
+### Improved
+
+1. **The libm functions in `lib/算術.suru` are written with `以下の外部の関数です`, and the definitions in `lib/` are separated by blank lines.**
+2. **The parser written in する (`lib/構文.suru`) reads `外部の「f」（a と 0）`, which lists the arguments passed to C.**
+
+The VS Code extension 0.9.0 highlights `以下の外部の入出力動作` and `以下の外部の関数`.
+
 ## 0.8.0
 
 ### New
