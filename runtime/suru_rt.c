@@ -2731,12 +2731,12 @@ static V multicast(Act *a, int join) {
         memset(&m, 0, sizeof m);
         m.imr_multiaddr = a4;
         m.imr_interface.s_addr = htonl(INADDR_ANY);
-        r = setsockopt(fd, IPPROTO_IP, join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP, &m, sizeof m);
+        r = setsockopt(fd, IPPROTO_IP, join ? IP_ADD_MEMBERSHIP : IP_DROP_MEMBERSHIP, (const void *)&m, sizeof m);
     } else if (inet_pton(AF_INET6, hs, &a6) == 1 && IN6_IS_ADDR_MULTICAST(&a6)) {
         struct ipv6_mreq m;
         memset(&m, 0, sizeof m);
         m.ipv6mr_multiaddr = a6;
-        r = setsockopt(fd, IPPROTO_IPV6, join ? IPV6_JOIN_GROUP : IPV6_LEAVE_GROUP, &m, sizeof m);
+        r = setsockopt(fd, IPPROTO_IPV6, join ? IPV6_JOIN_GROUP : IPV6_LEAVE_GROUP, (const void *)&m, sizeof m);
     } else {
         fail(pos, "「%s」はマルチキャストのアドレスではありません(IPv4 は 224.0.0.0〜239.255.255.255、IPv6 は ff で始まる)", hs);
     }
@@ -2752,7 +2752,7 @@ static V net_run(Act *a) {
         int fd = socket(ad.ss.ss_family, SOCK_STREAM, 0);
         if (fd < 0) net_fail(a);
         int one = 1;
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const void *)&one, sizeof one);
         if (bind(fd, (struct sockaddr *)&ad.ss, ad.len) < 0 || listen(fd, 16) < 0) { int e = errno; sock_close(fd); errno = e; net_fail(a); }
         return mk_int(sock_add(fd), pos);
     }
@@ -2877,7 +2877,7 @@ static V net_run(Act *a) {
         int fd = socket(ad.ss.ss_family, SOCK_DGRAM, 0);
         if (fd < 0) net_fail(a);
         int one = 1;
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const void *)&one, sizeof one);
         if (bind(fd, (struct sockaddr *)&ad.ss, ad.len) < 0) { int e = errno; sock_close(fd); errno = e; net_fail(a); }
         return mk_int(sock_add(fd), pos);
     }
@@ -2943,7 +2943,7 @@ static V net_run(Act *a) {
     case A_BROADCAST: { /* 口 を ブロードキャスト許可する */
         int fd = sock_get(a->a, "UDPの口", pos).fd;
         int one = 1;
-        if (setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &one, sizeof one) < 0) net_fail(a);
+        if (setsockopt(fd, SOL_SOCKET, SO_BROADCAST, (const void *)&one, sizeof one) < 0) net_fail(a);
         return a->a;
     }
     case A_MC_JOIN: case A_MC_LEAVE:
