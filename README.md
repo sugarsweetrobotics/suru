@@ -1414,6 +1414,38 @@ s を 字数計測する とは 外部の「strlen」 で 文字列 を 受け�
 2. **Only when at least one of the groups is two or more lines.** A run of one-line definitions (external functions written on one line, or `x を 二倍する とは x * 2`) reads like a table and is not reported. A `以下は外部の入出力動作です … 以上です` block is one group.
 3. **Comments directly above a group belong to it.** The blank line goes above the comments. Value, type and trait definitions, loads, and expression statements are not groups and are not checked. As with other rules, `# 点検しない: 定義の間の空行` silences it.
 
+### Field types in records
+
+```suru
+会員 とは 番号 は 数 で 名前 は 文字列 で 年齢 は 数 の 組
+木 とは 値 は 甲 で 左 は 木 で 右 は 木 の 節 か 葉
+
+（1 と 「花子」 と 20 の 会員） の 名前 を 表示する
+（1 と 葉 と 葉 の 節） の 値 を 表示する
+```
+
+1. **A record definition can give each field a type.** `会員 とは 番号 は 数 で 名前 は 文字列 で 年齢 は 数 の 組` has the same shape as building a record by field name (`横 は 3 で 縦 は 4 の 点`): `field は type`, separated by `で`. Types are written as in type declarations (`数`, `数 の リスト`, `（数 を 受け取って 数 を 返すこと）`, other record types, including ones defined later in the file). This is the first stage of the plan for deriving and quasi-quotes (#192): deriving needs to know the field types.
+2. **All fields or none.** Within one type, either every field has a type or none does (forms without fields, like `葉`, do not count). The old form `番号 と 名前 の 組` keeps inferring field types as before. Fields with the same name in different forms of one type must be given the same type.
+3. **Values are checked against the written types.** `（「1」 と 「花子」 と 20 の 会員）` is an error: 「「会員」の「番号」は数ですが、文字列が渡されています」. In error messages and type declarations such a type is just its name (`会員`).
+4. **甲・乙 … are the type's parameters.** In `木` above, `値 は 甲` makes `木` take one type parameter, so the type is written `数 の 木`. Type parameters are ordered by where 甲・乙 … first appear in the field types (not by field order as in inferred records). A field whose type is the type itself without parameters (`左 は 木`) has the same parameters as the value it is in.
+5. **The same everywhere.** The interpreter, both compilers (Python and Go `suruc`), the language server, and the する-written parser `lib/構文.suru` (used by 点検) read this form.
+
+### Field types in records
+
+```suru
+会員 とは 番号 は 数 で 名前 は 文字列 で 年齢 は 数 の 組
+木 とは 値 は 甲 で 左 は 木 で 右 は 木 の 節 か 葉
+
+（1 と 「花子」 と 20 の 会員） の 名前 を 表示する
+（1 と 葉 と 葉 の 節） の 値 を 表示する
+```
+
+1. **A record definition can give each field a type.** `会員 とは 番号 は 数 で 名前 は 文字列 で 年齢 は 数 の 組` has the same shape as building a record by field name (`横 は 3 で 縦 は 4 の 点`): `field は type`, separated by `で`. Types are written as in type declarations (`数`, `数 の リスト`, `（数 を 受け取って 数 を 返すこと）`, other record types, including ones defined later in the file). This is the first stage of the plan for deriving and quasi-quotes (#192): deriving needs to know the field types.
+2. **All fields or none.** Within one type, either every field has a type or none does (forms without fields, like `葉`, do not count). The old form `番号 と 名前 の 組` keeps inferring field types as before. Fields with the same name in different forms of one type must be given the same type.
+3. **Values are checked against the written types.** `（「1」 と 「花子」 と 20 の 会員）` is an error: 「「会員」の「番号」は数ですが、文字列が渡されています」. In error messages and type declarations such a type is just its name (`会員`).
+4. **甲・乙 … are the type's parameters.** In `木` above, `値 は 甲` makes `木` take one type parameter, so the type is written `数 の 木`. Type parameters are numbered by the order 甲・乙 … first appear in the field types (not by field order as in inferred records). A field whose type is the type itself without parameters (`左 は 木`) has the same parameters as the value it is in.
+5. **The same everywhere.** The interpreter, both compilers (Python and Go `suruc`), the language server, and the する-written parser `lib/構文.suru` (used by 点検) read this form.
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)

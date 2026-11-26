@@ -147,6 +147,33 @@ type ParseContext struct {
 	Qualify string
 	// Path は解析しているファイルの絶対パス(自分と同じ名前のファイルを読み込むときに飛ばす。分からなければ "")
 	Path string
+	// FieldTypes はフィールドの型を書いた型 → フィールドの型(「番号 は 数 で … の 組」)
+	FieldTypes map[string][]FieldTypeDecl
+}
+
+// resolveFieldTypes はフィールドの型を書いた型の、型の字句を読む(型の定義をすべて集めてから。後ろで定義する型も書ける)
+func (c *ParseContext) resolveFieldTypes(tds []*TypeDef) {
+	for _, td := range tds {
+		if td.FieldTypes == nil {
+			continue
+		}
+		if c.FieldTypes == nil {
+			c.FieldTypes = map[string][]FieldTypeDecl{}
+		}
+		var out []FieldTypeDecl
+		for _, ft := range td.FieldTypes {
+			out = append(out, FieldTypeDecl{ft.Name, parseTypeAll(ft.Toks, td.Line)})
+		}
+		c.FieldTypes[td.Name] = out
+	}
+}
+
+func copyFieldTypes(m map[string][]FieldTypeDecl) map[string][]FieldTypeDecl {
+	out := map[string][]FieldTypeDecl{}
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 func NewParseContext(baseDir string) *ParseContext {
@@ -2339,6 +2366,9 @@ func tryParseTypedef(node *LNode) *TypeDef {
 	name := checkName(tokens[0])
 	line := tokens[0].Line
 	var ctors []Ctor
+	typed := 0 // フィールドの型を書いたか(0: まだフィールドがない、1: 書いた、-1: 書いていない)
+	var fieldTypes []FieldTypeToks
+	mixed := "フィールドの型は、型のすべてのフィールドに書くか、どれにも書かないかにしてください"
 	for _, alt := range splitTopLevel(body, KwKa) {
 		if len(alt) == 0 {
 			raise(line, "「か」の前後に形を書いてください")
@@ -2361,6 +2391,48 @@ func tryParseTypedef(node *LNode) *TypeDef {
 			cname = checkName(last)
 		}
 		var fields []string
+		if findTopLevel(alt[:len(alt)-2], KwWa) >= 0 {
+			// 「番号 は 数 で 名前 は 文字列 の 会員」: フィールドごとに型を書く
+			if typed < 0 {
+				raise(last.Line, mixed)
+			}
+			typed = 1
+			for _, part := range splitTypedFields(alt[:len(alt)-2], last.Line) {
+				if len(part) < 3 || !isKw(part[1], KwWa) {
+					l := last.Line
+					if len(part) > 0 {
+						l = part[0].Line
+					}
+					raise(l, "型を書くフィールドは「番号 は 数 で 名前 は 文字列 の 組」のように"+
+						"「フィールド名 は 型」を「で」で区切って書いてください")
+				}
+				f := checkName(part[0])
+				if contains(fields, f) {
+					raise(part[0].Line, "フィールド名「"+f+"」が2回書かれています")
+				}
+				fields = append(fields, f)
+				found := false
+				for _, ft := range fieldTypes {
+					if ft.Name == f {
+						found = true
+						if !sameTokenValues(ft.Toks, part[2:]) {
+							raise(part[0].Line, "フィールド「"+f+"」の型が形ごとに違います(同じ名前のフィールドは同じ型にしてください)")
+						}
+					}
+				}
+				if !found {
+					fieldTypes = append(fieldTypes, FieldTypeToks{f, part[2:]})
+				}
+			}
+			ctors = append(ctors, Ctor{cname, fields})
+			continue
+		}
+		if len(alt) > 2 {
+			if typed > 0 {
+				raise(last.Line, mixed)
+			}
+			typed = -1
+		}
 		for i, t := range alt[:len(alt)-2] {
 			if i%2 == 1 {
 				if !isKw(t, KwTo) {
@@ -2379,7 +2451,48 @@ func tryParseTypedef(node *LNode) *TypeDef {
 		}
 		ctors = append(ctors, Ctor{cname, fields})
 	}
-	return &TypeDef{name, ctors, line}
+	td := &TypeDef{Name: name, Ctors: ctors, Line: line}
+	if typed > 0 {
+		td.FieldTypes = fieldTypes
+	}
+	return td
+}
+
+// splitTypedFields は「番号 は 数 で 名前 は 文字列」を「で」(括弧の外)で分ける
+func splitTypedFields(tokens []*Token, line Pos) [][]*Token {
+	out := [][]*Token{{}}
+	depth := 0
+	for _, t := range tokens {
+		if t.Kind == "LP" {
+			depth++
+		} else if t.Kind == "RP" {
+			depth--
+		}
+		if depth == 0 && t.Kind == "PART" && t.S == "で" {
+			if len(out[len(out)-1]) == 0 {
+				raise(t.Line, "「で」の前にフィールドを書いてください")
+			}
+			out = append(out, []*Token{})
+		} else {
+			out[len(out)-1] = append(out[len(out)-1], t)
+		}
+	}
+	if len(out[len(out)-1]) == 0 {
+		raise(line, "「で」の後にフィールドを書いてください")
+	}
+	return out
+}
+
+func sameTokenValues(a, b []*Token) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].S != b[i].S {
+			return false
+		}
+	}
+	return true
 }
 
 func functionDefine(stmt Node, what string, line Pos) *Define {
@@ -2577,14 +2690,17 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 		joinInNodes(nodes, setOf(modNames...))
 	}
 	qualifyTypeNames(nodes, ctx)
+	var tds []*TypeDef
 	for _, n := range nodes {
 		if td := tryParseTypedef(n); td != nil {
 			ctx.add(td)
+			tds = append(tds, td)
 		}
 	}
 	saved := curCtx
 	curCtx = ctx
 	defer func() { curCtx = saved }()
+	ctx.resolveFieldTypes(tds)
 	var statements []Node
 	for _, n := range nodes {
 		if imp, ok := imports[n]; ok {
@@ -3284,7 +3400,7 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 	if ctx.Order != nil {
 		*ctx.Order = append(*ctx.Order, path)
 	}
-	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Path: path, Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude, Order: ctx.Order}
+	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Path: path, Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude, Order: ctx.Order, FieldTypes: copyFieldTypes(ctx.FieldTypes)}
 	if !isLibPath(path) {
 		sub.Qualify = stem + ModuleSep
 	}
@@ -3305,6 +3421,14 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 	}
 	ctx.Ctors.Update(sub.Ctors)
 	ctx.Types.Update(sub.Types)
+	if len(sub.FieldTypes) > 0 {
+		if ctx.FieldTypes == nil {
+			ctx.FieldTypes = map[string][]FieldTypeDecl{}
+		}
+		for k, v := range sub.FieldTypes {
+			ctx.FieldTypes[k] = v
+		}
+	}
 	m := &Module{stem, path, program, privateNames(program), source}
 	delete(ctx.Loading, path)
 	ctx.Modules[path] = m

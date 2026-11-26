@@ -223,7 +223,11 @@ def dump(n) -> str:
     if isinstance(n, S.Do):
         return ("順続" if n.sequel else "順") + lst(n.statements) + at()
     if isinstance(n, S.TypeDef):
-        return f"型定({n.name}" + "".join(f" {c}[{' '.join(fs)}]" for c, fs in n.ctors) + f"){at()}"
+        def ctor(c: str, fs: list) -> str:
+            if n.field_types is None or not fs:
+                return f" {c}[{' '.join(fs)}]"
+            return f" {c}[" + " ".join(f"{f}:{'・'.join(t.value for t in n.field_types[f])}" for f in fs) + "]"
+        return f"型定({n.name}" + "".join(ctor(c, fs) for c, fs in n.ctors) + f"){at()}"
     if isinstance(n, S.TypeSig):
         params = "" if n.params is None else "".join(f" {p}={dump(t)}" for p, t in n.params)
         return f"宣({n.name} {'値' if n.params is None else '関'}{params} -> {dump(n.result)}){at()}"
@@ -399,6 +403,15 @@ def test_例とライブラリの行の構文木が同じ(dumper, path):
 # 手で書いたプログラム(文の書き方の組み合わせ)
 PROGRAMS = [
     """\
+会員 とは 番号 は 数 で 名前 は 文字列 で 年齢 は 数 の 組
+図形 とは 半径 は 数 の 円 か 幅 は 数 で 高 は 数 の 長方形 か 点図形
+木 とは 値 は 甲 で 左 は 木 で 右 は 木 の 節 か 葉
+箱 とは 中身 は 甲 の リスト で 名札 は 文字列 の 組
+線 とは 始め は 位置 で 終わり は 位置 の 組
+位置 とは 横 は 数 で 縦 は 数 の 組
+（1 と 「花子」 と 20 の 会員） の 名前 を 表示する
+""",
+    """\
 図形 とは 半径 の 円 か 幅 と 高 の 長方形
 信号 とは 赤 か 黄 か 青
 （半径 の 円） を 面積にする とは 半径 * 半径 * 3
@@ -546,6 +559,11 @@ BAD_PROGRAMS = [
     "点 とは 横 と と 縦 の 組\n",
     "数 を 何かする は\n",
     "x を 三倍しない とは x\n",
+    "点 とは 横 は 数 で 縦 の 組\n",
+    "点 とは 横 は 数 の 円 か 幅 と 高 の 長方形\n",
+    "点 とは 横 は 数 の 甲点 か 横 は 文字列 の 乙点\n",
+    "点 とは 横 は 数 で 横 は 数 の 組\n",
+    "点 とは 横 は 数 で の 組\n",
     "a b を 何かする とは a\n",
     "f とは 「a」 を 読み込む\n",
     "x とは 1 +\n",

@@ -169,21 +169,47 @@ type fieldKey struct{ T, F string }
 
 var selfType = &TCon{Name: "\x00自身"}
 
+// tvarKey はフィールドの型を書いた型の、型の引数(甲・乙 …)の印
+const tvarKey = "\x00"
+
 type Shapes struct {
 	keys      map[string][]fieldKey
 	keyOrder  []string
 	ph        map[fieldKey]*TVar
 	phOrder   []fieldKey
 	recursive map[fieldKey]Type
+	// declared はフィールドの型を書いた型(「番号 は 数 で … の 組」)のフィールドの型の書き方。
+	// この型の引数はフィールドではなく、書いた 甲・乙 …(出てきた順)で、keys には {型名, tvarKey + 甲} を置く
+	declared     map[fieldKey]Node
+	declaredVars map[string][]string
 }
 
 func newShapes(ctx *ParseContext) *Shapes {
-	s := &Shapes{keys: map[string][]fieldKey{}, ph: map[fieldKey]*TVar{}, recursive: map[fieldKey]Type{}}
+	s := &Shapes{keys: map[string][]fieldKey{}, ph: map[fieldKey]*TVar{}, recursive: map[fieldKey]Type{},
+		declared: map[fieldKey]Node{}, declaredVars: map[string][]string{}}
 	for _, c := range ctx.Ctors.Keys() {
 		info, _ := ctx.Ctors.Get(c)
 		ks, ok := s.keys[info.Type]
 		if !ok {
 			s.keyOrder = append(s.keyOrder, info.Type)
+		}
+		if fts, has := ctx.FieldTypes[info.Type]; has {
+			if !ok {
+				var vs []string
+				for _, ft := range fts {
+					vs = typeVarNamesOf(ft.Type, vs)
+				}
+				s.declaredVars[info.Type] = vs
+				ks = []fieldKey{}
+				for _, v := range vs {
+					ks = append(ks, fieldKey{info.Type, tvarKey + v})
+				}
+				for _, ft := range fts {
+					s.declared[fieldKey{info.Type, ft.Name}] = ft.Type
+				}
+				s.keys[info.Type] = ks
+			}
+			continue
 		}
 		for _, f := range info.Fields {
 			k := fieldKey{info.Type, f}
@@ -206,6 +232,26 @@ func newShapes(ctx *ParseContext) *Shapes {
 		}
 	}
 	return s
+}
+
+// typeVarNamesOf は型の書き方 te の中の 甲・乙 … を、出てきた順に out に足す
+func typeVarNamesOf(te Node, out []string) []string {
+	switch x := te.(type) {
+	case *TypeVarName:
+		if !contains(out, x.Name) {
+			out = append(out, x.Name)
+		}
+	case *TypeFun:
+		for _, p := range x.Params {
+			out = typeVarNamesOf(p.Type, out)
+		}
+		out = typeVarNamesOf(x.Result, out)
+	case *TypeName:
+		for _, a := range x.Args {
+			out = typeVarNamesOf(a, out)
+		}
+	}
+	return out
 }
 
 func (s *Shapes) params(tname string) []fieldKey {
@@ -238,7 +284,7 @@ func indexKey(ks []fieldKey, k fieldKey) int {
 
 func (s *Shapes) findRecursion(v *TVar, t Type) bool {
 	for _, n := range typeNodes(t, nil) {
-		if !s.isUser(n) {
+		if _, decl := s.declaredVars[n.Name]; !s.isUser(n) || decl {
 			continue
 		}
 		ps := s.params(n.Name)
@@ -1122,6 +1168,7 @@ func (c *Checker) collectSigs(program []Node, defs []*Define) map[string]*TypeSi
 type tvarMap struct {
 	m     map[string]*TVar
 	order []string
+	bound map[string]Type // 決まった型にする 甲・乙 …(フィールドの型を書いた型の、型の引数)
 }
 
 func (t *tvarMap) get(name string) *TVar {
@@ -1148,20 +1195,31 @@ func (c *Checker) declaredType(sg *TypeSig) (Type, *tvarMap) {
 }
 
 func (c *Checker) typeOf(te Node, tvars *tvarMap, line Pos) Type {
+	return c.typeOfOwn(te, tvars, line, "", nil)
+}
+
+// typeOfOwn は型の書き方から型を作る。ownName・own はフィールドの型の中の、その型自身(型名とその型の値の型)
+func (c *Checker) typeOfOwn(te Node, tvars *tvarMap, line Pos, ownName string, own Type) Type {
 	switch x := te.(type) {
 	case *TypeVarName:
+		if b, ok := tvars.bound[x.Name]; ok {
+			return b
+		}
 		return tvars.get(x.Name)
 	case *TypeFun:
 		var ps []TParam
 		for _, p := range x.Params {
-			ps = append(ps, TParam{p.Part, c.typeOf(p.Type, tvars, line)})
+			ps = append(ps, TParam{p.Part, c.typeOfOwn(p.Type, tvars, line, ownName, own)})
 		}
-		return &TFun{Params: ps, Result: c.typeOf(x.Result, tvars, line), Real: true}
+		return &TFun{Params: ps, Result: c.typeOfOwn(x.Result, tvars, line, ownName, own), Real: true}
 	}
 	tn := te.(*TypeName)
+	if own != nil && tn.Name == ownName && len(tn.Args) == 0 {
+		return own // 「左 は 木」: 同じ型の引数の、その型自身
+	}
 	var args []Type
 	for _, a := range tn.Args {
-		args = append(args, c.typeOf(a, tvars, line))
+		args = append(args, c.typeOfOwn(a, tvars, line, ownName, own))
 	}
 	if tn.Name == TupleType {
 		return &TCon{Name: TupleType, Args: args}
@@ -1189,6 +1247,13 @@ func (c *Checker) typeOf(te Node, tvars *tvarMap, line Pos) Type {
 		}
 	}
 	if len(args) > len(keys) {
+		if vs, ok := c.shapes.declaredVars[tn.Name]; ok {
+			names := joinDot(vs)
+			if len(vs) == 0 {
+				names = "甲・乙 …"
+			}
+			c.fail(line, fmt.Sprintf("「%s」がとる型の引数は%d個です(フィールドの型に書いた%s)", tn.Name, len(keys), names))
+		}
 		var fs []string
 		for _, k := range keys {
 			fs = append(fs, k.F)
@@ -1201,7 +1266,7 @@ func (c *Checker) typeOf(te Node, tvars *tvarMap, line Pos) Type {
 		}
 		k := keys[i]
 		c.unifyOr(c.fieldType(inst, k, nil), a, line, func(sa, sb string) string {
-			return "「" + tn.Name + "」の「" + k.F + "」は" + sa + "なので、" + sb + "にはできません"
+			return "「" + tn.Name + "」の「" + strings.TrimLeft(k.F, tvarKey) + "」は" + sa + "なので、" + sb + "にはできません"
 		})
 	}
 	return inst
@@ -1991,6 +2056,13 @@ func (c *Checker) fieldType(t *TCon, key fieldKey, seen map[fieldKey]bool) Type 
 	ps := sh.params(key.T)
 	if i := indexKey(ps, key); i >= 0 {
 		return t.Args[i]
+	}
+	if te, ok := sh.declared[key]; ok {
+		tvars := &tvarMap{m: map[string]*TVar{}, bound: map[string]Type{}}
+		for i, v := range sh.declaredVars[key.T] {
+			tvars.bound[v] = t.Args[i]
+		}
+		return c.typeOfOwn(te, tvars, c.line, key.T, t)
 	}
 	tmpl := sh.recursive[key]
 	mapping := map[*TVar]Type{}
