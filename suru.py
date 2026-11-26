@@ -1093,6 +1093,8 @@ class TypeDef:
     name: str
     ctors: list  # [(形の名前, [フィールド名])]
     line: int
+    # 「番号 は 数 で 名前 は 文字列 の 組」と型を書いたとき: フィールド名 → 型の字句(書かなければ None)
+    field_types: dict | None = None
 
 
 @dataclass
@@ -1320,6 +1322,8 @@ class ParseContext:
                  modules: dict | None = None, path: str = ""):
         self.ctors: dict[str, tuple[str, list]] = dict(ctors or {})  # 形 → (型, フィールド名)
         self.types: dict[str, list] = dict(types or {})  # 型 → [形]
+        # フィールドの型を書いた型 → {フィールド名: 型の書き方(TypeName など)}(「番号 は 数 で … の 組」)
+        self.field_types: dict[str, dict] = {}
         self.base_dir = base_dir  # 「「数学」 を 読み込む」で探すフォルダ
         self.modules: dict[str, Any] = dict(modules or {})  # 読み込んだファイル(絶対パス → Module。読み込み中は None)
         self.packages: dict[str, str] | None = None  # プロジェクトの依存(名前 → フォルダ)。None なら初めて読み込むときに探す
@@ -1332,7 +1336,15 @@ class ParseContext:
         c = ParseContext(self.ctors, self.types, self.base_dir, self.modules)
         c.packages = self.packages
         c.path = self.path
+        c.field_types = dict(self.field_types)
         return c
+
+    def resolve_field_types(self, tds: list) -> None:
+        """フィールドの型を書いた型の、型の字句を読む(型の定義をすべて集めてから。後ろで定義する型も書ける)"""
+        for td in tds:
+            if td.field_types is None:
+                continue
+            self.field_types[td.name] = {f: parse_type_all(toks, td.line) for f, toks in td.field_types.items()}
 
     def add(self, td: TypeDef) -> None:
         if td.name in self.types or td.name in BUILTIN_TYPES:
@@ -3098,6 +3110,8 @@ def try_parse_typedef(node: Node) -> TypeDef | None:
     name = _check_name(tokens[0])
     line = tokens[0].line
     ctors = []
+    typed: bool | None = None  # フィールドの型を書いたか(まだフィールドがなければ None)
+    field_types: dict = {}
     for alt in split_top_level(body, KW_KA):
         if not alt:
             raise SuruError("「か」の前後に形を書いてください", line)
@@ -3116,6 +3130,30 @@ def try_parse_typedef(node: Node) -> TypeDef | None:
         else:
             cname = _check_name(last)
         fields: list[str] = []
+        if find_top_level(alt[:-2], KW_WA) is not None:
+            # 「番号 は 数 で 名前 は 文字列 の 会員」: フィールドごとに型を書く
+            typed = True if typed is None else typed
+            if not typed:
+                raise SuruError("フィールドの型は、型のすべてのフィールドに書くか、どれにも書かないかにしてください", last.line)
+            for part in _split_typed_fields(alt[:-2], last.line):
+                if len(part) < 3 or not is_kw(part[1], KW_WA):
+                    raise SuruError("型を書くフィールドは「番号 は 数 で 名前 は 文字列 の 組」のように"
+                                    "「フィールド名 は 型」を「で」で区切って書いてください", part[0].line if part else last.line)
+                f = _check_name(part[0])
+                if f in fields:
+                    raise SuruError(f"フィールド名「{f}」が2回書かれています", part[0].line)
+                fields.append(f)
+                prev = field_types.get(f)
+                if prev is not None and [t.value for t in prev] != [t.value for t in part[2:]]:
+                    raise SuruError(f"フィールド「{f}」の型が形ごとに違います(同じ名前のフィールドは同じ型にしてください)",
+                                    part[0].line)
+                field_types[f] = part[2:]
+            ctors.append((cname, fields))
+            continue
+        if alt[:-2]:
+            typed = False if typed is None else typed
+            if typed:
+                raise SuruError("フィールドの型は、型のすべてのフィールドに書くか、どれにも書かないかにしてください", last.line)
         for i, t in enumerate(alt[:-2]):
             if i % 2 == 1:
                 if not is_kw(t, KW_TO):
@@ -3128,7 +3166,27 @@ def try_parse_typedef(node: Node) -> TypeDef | None:
         if len(alt[:-2]) % 2 == 0:
             raise SuruError("「と」の後にフィールド名が必要です", last.line)
         ctors.append((cname, fields))
-    return TypeDef(name, ctors, line)
+    return TypeDef(name, ctors, line, field_types if typed else None)
+
+
+def _split_typed_fields(tokens: list[Token], line: int) -> list[list[Token]]:
+    """「番号 は 数 で 名前 は 文字列」を「で」(括弧の外)で分ける"""
+    out: list[list[Token]] = [[]]
+    depth = 0
+    for t in tokens:
+        if t.kind == "LP":
+            depth += 1
+        elif t.kind == "RP":
+            depth -= 1
+        if depth == 0 and t.kind == "PART" and t.value == "で":
+            if not out[-1]:
+                raise SuruError("「で」の前にフィールドを書いてください", t.line)
+            out.append([])
+        else:
+            out[-1].append(t)
+    if not out[-1]:
+        raise SuruError("「で」の後にフィールドを書いてください", line)
+    return out
 
 
 def _function_define(stmt: Any, what: str, line: int) -> Define:
@@ -3321,12 +3379,15 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         _join_in_nodes(nodes, modules)
     _qualify_type_names(nodes, ctx)
     # 「3 と 4 の 点」を読むために、型の定義を先に集める(定義の順番は自由)
+    tds = []
     for n in nodes:
         td = try_parse_typedef(n)
         if td is not None:
             ctx.add(td)
+            tds.append(td)
     saved, _CTX = _CTX, ctx
     try:
+        ctx.resolve_field_types(tds)
         statements = [imports[id(n)] if id(n) in imports else parse_statement(n) for n in nodes]
         if prelude is not None:
             statements.insert(0, prelude)
@@ -3765,6 +3826,7 @@ def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool
         raise SuruError(f"ファイル「{name}{'' if name.endswith(SOURCE_SUFFIX) else SOURCE_SUFFIX}」が見つかりません", line) from None
     ctx.modules[path] = None
     sub = ParseContext(ctx.ctors, ctx.types, os.path.dirname(path), path=path)
+    sub.field_types = dict(ctx.field_types)
     sub.modules = ctx.modules
     sub.packages = ctx.packages
     sub.in_prelude = prelude
@@ -3783,6 +3845,7 @@ def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool
         _POS_SRC = saved_src
     ctx.ctors.update(sub.ctors)
     ctx.types.update(sub.types)
+    ctx.field_types.update(sub.field_types)
     module = Module(stem, path, program, private_names(program), source)
     ctx.modules[path] = module
     return module

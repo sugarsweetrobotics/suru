@@ -182,6 +182,20 @@ type TypeDef struct {
 	Name  string
 	Ctors []Ctor
 	Line  Pos
+	// FieldTypes は「番号 は 数 で 名前 は 文字列 の 組」と型を書いたときのフィールドの型の字句(書いた順)。書かなければ nil
+	FieldTypes []FieldTypeToks
+}
+
+// FieldTypeToks はフィールドの名前と、その型の字句
+type FieldTypeToks struct {
+	Name string
+	Toks []*Token
+}
+
+// FieldTypeDecl はフィールドの名前と、その型の書き方(TypeName など)
+type FieldTypeDecl struct {
+	Name string
+	Type Node
 }
 type Construct struct {
 	Ctor  string
