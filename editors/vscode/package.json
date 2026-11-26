@@ -2,7 +2,7 @@
   "name": "suru",
   "displayName": "する",
   "description": "日本語の関数型プログラミング言語「する」の色分け・書きながらの型の検査・型のホバー・定義へ移動・補完・名前の変更・実行・kumu(プロジェクトの実行・試験・点検)",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "suru-lang",
   "license": "GPL-3.0-or-later",
   "repository": {

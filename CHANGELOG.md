@@ -1,0 +1,37 @@
+# Changelog
+
+[日本語](CHANGELOG_jp.md)
+
+Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
+
+## 0.7.0
+
+### Changes that need edits when moving from 0.6
+
+1. **`以上` is a reserved word.** `以上` can no longer be used as a name, and `以下の手順` / `以下の入出力手順` are read as one word (#161, #162).
+2. **Indentation ends a nested case analysis.** A line back at the indent of the outer cases ends the inner `もし 値 が`. Before, the inner one took the outer cases after it (`2 ならば …`, `そうでなければ …`) as its own, so a program that relied on that reading now means something else (#162).
+3. **Undefined names are type errors.** Typos in branches or functions that never run are reported by `suru --検査`, `suruc` and `kumu 作る` before running. A program that ran before because the typo was never reached now fails the check (#149).
+4. **A sentence in a procedure whose value is a list of actions is an error.** `xs の それぞれ を 表示する` in a procedure did nothing; write `（xs の それぞれ を 表示する） を 実行する` (#151).
+5. **A procedure local that holds an action cannot go into a record.** `番号 とは n を 番号作成する` (without 「した 結果」) followed by `番号 の 数値` is an error at the definition. Write `n を 番号作成した 結果`, or write the action directly in the record if you mean to store it (#168).
+6. **`整列する` sorts numbers or strings only.** It is now a builtin stable merge sort. Elements must be all numbers or all strings; other element types are type errors (#153).
+7. **Runtime errors inside libraries are shown at the caller's position.** The line and column in the message and in `--json` point to your program, with the library position in parentheses. Tools that read these positions see different numbers (#154).
+8. **New lint rule 「値の再定義」.** `suru --点検` and `kumu 点検` report the second definition of the same value (#155).
+
+### New
+
+1. **`X とは 以下の手順です` … `以上`** for procedures, and `以上` to close a nested `もし 値 が` on one line (#161, #162).
+2. **`基準整列する`** sorts by a key, and `整列する` sorts strings (#153).
+3. **`kumu 試験` shows the line of a failed check**, and `kumu 新規` writes `試験/例.suru`. The new builtin `呼出場所取得する` (「標準」) returns the caller's position (#155).
+
+### Improved
+
+1. **Hints on errors**: close names for typos, missing `読み込んで 使う`, spaces around operators (#149); 「それぞれ」 with an anonymous function, a call in 「もし 値 が」, indented 「ただし」, a constructor used as a function (#155).
+2. **`a と b を 受け取って`**: a and b may have different types, so folds with a different accumulator type work (#150).
+3. **Deep recursion in the interpreter** runs about 200,000 levels, and stops with a Suru error instead of a Python traceback (#152).
+4. **`整列する` is O(n log n)** in the interpreter and compiled code (#153).
+5. **The type checker sees names opened by a loaded file**, as running does (#149).
+6. **`最大値にする` / `最小値にする` of an empty list** explain the error (#154).
+
+### Fixed
+
+1. **「プロセス」 and 「ファイル」 can be loaded together** (and so can http and 「プロセス」). Both declared C `fread` with different types, so compiling failed. When two files declare the same C function with different types, the error now also shows where the other declaration is (#120).

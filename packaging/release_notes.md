@@ -1,3 +1,5 @@
+変更点と、前の版から直す必要があるものは [CHANGELOG_jp.md](https://github.com/__REPO__/blob/main/CHANGELOG_jp.md)([English](https://github.com/__REPO__/blob/main/CHANGELOG.md))にあります。
+
 ## 入れ方
 
 - **pip**: `pip install suru-lang`(`suru` コマンドが入ります。Python 3.10 以降)
