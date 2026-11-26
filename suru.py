@@ -207,7 +207,13 @@ KEYWORDS = {
     KW_IMPORT, KW_IMPORT_POLITE, KW_IMPORT_TE, KW_USE, KW_USE_POLITE, KW_IJOU, KW_IKA, KW_IKA_IO,
 }
 KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU, KW_IJOU}
-CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}  # 行頭に来たら前の文の続きとみなす
+CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}
+# 書き方を案内するエラー(#155)
+EACH_LAMBDA_MESSAGE = ("「それぞれ」の後には「…する」で終わる関数の名前を書きます"
+                       "(無名関数を使うときは「xs を （x を 受け取って … を 返すこと） で 写像する」と書きます)")
+MATCH_CALL_MESSAGE = ("「もし 値 が」の場合分けで値に呼び出しを書くときは、括弧で囲んでください"
+                      "(「もし （s を JSON解析する） が」のように書きます)")
+PROVISO_INDENT_MESSAGE = "「ただし」は、付け足す定義の行と同じ字下げで書いてください(字下げした行は前の行の続きとして読みます)"  # 行頭に来たら前の文の続きとみなす
 
 # 引数を区別する格助詞。長いものから順に照合する(「より」「から」を先に)
 PARTICLES = ("より", "から", "を", "に", "で", "へ")
@@ -1581,6 +1587,8 @@ class ExprParser:
                 raise SuruError("対応する「(」のない「)」があります", tok.line)
             if is_kw(tok, KW_IJOU):
                 raise SuruError(f"対応する「もし 値 が」の場合分けか「以下の手順です」のない「{KW_IJOU}」があります", tok.line)
+            if is_kw(tok, KW_PROVISO) and self.sep_indent(self.pos) >= 0:
+                raise SuruError(PROVISO_INDENT_MESSAGE, tok.line)  # 字下げした行の頭の「ただし」
             raise SuruError(f"余分な「{tok.value}」があります", tok.line)
         return expr
 
@@ -1596,6 +1604,8 @@ class ExprParser:
             cond = self.expr()
             tok = self.next()
             if not is_kw(tok, KW_THEN):
+                if is_kw(tok, KW_GA) and isinstance(cond, Call):
+                    raise SuruError(MATCH_CALL_MESSAGE, tok.line)
                 raise SuruError("「もし」の後に「ならば」が必要です", tok.line)
             then = self.expr()
             tok = self.next()
@@ -1703,6 +1713,8 @@ class ExprParser:
                 # 助詞の付かない値
                 if args or has_piped:
                     line = part.line if part else self.last_line()
+                    if isinstance(value, Lambda) and any(isinstance(v, Each) for v in args.values()):
+                        raise SuruError(EACH_LAMBDA_MESSAGE, line)
                     raise SuruError("値の後に助詞(を・に・で・から・へ・より)か「…する」が必要です", line)
                 return value
             tok = self.peek()
@@ -3438,6 +3450,7 @@ class Function:
     params: list  # [(助詞, パターン)]
     body: Any
     closure: Env
+    lib: bool = field(default=False, compare=False)  # ライブラリで定義した関数(#154)
 
     def slots(self) -> list[tuple[str, bool]]:
         return [(p, True) for p, _ in self.params]
@@ -4212,6 +4225,7 @@ STD_PRIMITIVES = [
     Builtin("失敗する", [(WO, True)], lambda it, a, line: _fail_action(a[WO], line)),
     # 環境(lib/環境.suru が使う)
     Builtin("引数取得する", [], lambda it, a, line: Action("引数取得する", lambda it2: tuple(PROGRAM_ARGS))),
+    Builtin("呼出場所取得する", [], lambda it, a, line: Pure(_call_site())),
     Builtin("終了する", [(WO, True)], lambda it, a, line: _exit_action(a[WO], line)),
     # ビット演算(整数を2の補数の並びとして扱う)
     Builtin("ビット積にする", [(WO, True), ("で", True)], lambda it, a, line: _bit_op("ビット積にする", a, line, lambda x, y: x & y)),
@@ -6650,7 +6664,7 @@ class Interpreter:
                 raise SuruError(f"性質「{decl.name}」の中で「{fname}」が2回書かれています", decl.line)
             if fname in self.shared.vars or fname in env.vars:
                 raise SuruError(f"「{fname}」は既に使われている名前なので、性質の関数にできません", decl.line)
-            default = Function(fname, d.params, d.body, env) if d else None
+            default = Function(fname, d.params, d.body, env, in_library(d.line)) if d else None
             methods[fname] = (params, default)
         self.traits[decl.name] = methods
         for fname, (params, _) in methods.items():
@@ -6678,7 +6692,7 @@ class Interpreter:
                 raise SuruError(
                     f"「{d.name}」の助詞が性質「{impl.trait}」での宣言と違います(使う助詞: {'・'.join(want)})", d.line
                 )
-            fns[d.name] = Function(d.name, d.params, d.body, env)
+            fns[d.name] = Function(d.name, d.params, d.body, env, in_library(d.line))
         for fname, (_, default) in trait.items():
             if fname not in fns and default is None:
                 raise SuruError(f"「{impl.type_name}」は性質「{impl.trait}」の「{fname}」を定義していません", impl.line)
@@ -6756,7 +6770,7 @@ class Interpreter:
         if isinstance(d.body, Extern):
             env.vars[d.name] = extern_builtin(d)
         elif d.is_function:
-            env.vars[d.name] = Function(d.name, d.params, d.body, env)
+            env.vars[d.name] = Function(d.name, d.params, d.body, env, in_library(d.line))
         else:
             env.vars[d.name] = Lazy(d.body, env)
 
@@ -6900,7 +6914,7 @@ class Interpreter:
             args = {p: self.eval(a, env) for p, a in node.args.items()}
             return self.partial(fn, args, node.line)
         if isinstance(node, Lambda):
-            return Function("無名関数", node.params, node.body, env)
+            return Function("無名関数", node.params, node.body, env, in_library(node.line))
         if isinstance(node, Block):
             local = Env(env)
             for s in node.statements:
@@ -6968,7 +6982,7 @@ class Interpreter:
             return fn.fn(self, args, line)
         if isinstance(fn, TraitMethod):
             return self.dispatch(fn, args, line)
-        if is_user_pos(line) and _is_lib_fn(fn):
+        if fn.lib and is_user_pos(line):
             # 自分のプログラムからライブラリの関数を呼ぶ: その中の実行時エラーは、ここの位置で出す(#154)
             old, _CALL.pos = call_pos(), line
             try:
@@ -6990,9 +7004,10 @@ class Interpreter:
         return result
 
 
-def _is_lib_fn(fn: Function) -> bool:
-    """ライブラリで定義した関数か"""
-    return in_library(getattr(fn.body, "line", None))
+def _call_site() -> str:
+    """「呼出場所取得する」: 自分のプログラムからライブラリの関数を呼んでいる場所(「「計算.suru」の6行目 3文字目」。なければ空)"""
+    p = call_pos()
+    return f"{_file_of(p)}{_where(p)}" if p else ""
 
 
 def run(source: str) -> list[Any]:

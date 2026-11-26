@@ -3722,6 +3722,19 @@ BI(m_errno) { return mk_act_pos(A_ERRNO, "エラー番号取得する", 0, 0, po
 static int prog_argc;
 static char **prog_argv;
 BI(m_args) { return mk_act_pos(A_ARGS, "引数取得する", 0, 0, pos); }
+/* 呼出場所取得する: 自分のプログラムからライブラリの関数を呼んでいる場所(「「計算.suru」の6行目 3文字目」。なければ空) */
+BI(m_call_site) {
+    if (!call_pos) return mk_pure(mk_str("", 0));
+    int line = call_pos & 0xfffff, col = (call_pos >> 20) & 0x7ff;
+    const char *fname, *ftext;
+    line = local_line(line, &fname, &ftext);
+    char buf[256];
+    int n = 0;
+    if (fname) n = snprintf(buf, sizeof buf, "「%s」の", fname);
+    if (col) n += snprintf(buf + n, sizeof buf - n, "%d行目 %d文字目", line, col);
+    else n += snprintf(buf + n, sizeof buf - n, "%d行目", line);
+    return mk_pure(mk_str(buf, n));
+}
 BI(m_exit) {
     V n = need_num(a[0], pos);
     if (!IS_INT(n) || INT_VAL(n) < 0 || INT_VAL(n) > 255) fail(pos, "「%s」は終了コードではありません(0 から 255 までの整数です)", plain(n).s);
@@ -4823,6 +4836,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"エラー番号取得する", 0, NULL, NULL, m_errno},
     {"失敗する", 1, P1_WO, NULL, m_fail},
     {"引数取得する", 0, NULL, NULL, m_args},
+    {"呼出場所取得する", 0, NULL, NULL, m_call_site},
     {"終了する", 1, P1_WO, NULL, m_exit},
     {"ビット積にする", 2, P2_WO_DE, NULL, m_band},
     {"ビット和にする", 2, P2_WO_DE, NULL, m_bor},

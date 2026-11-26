@@ -45,6 +45,16 @@ func (a Args) Get(p string) (Node, bool) {
 
 func (a Args) Has(p string) bool { _, ok := a.Get(p); return ok }
 
+// hasEach は引数に「xs の それぞれ」があるか
+func (a Args) hasEach() bool {
+	for _, x := range a {
+		if _, ok := x.Value.(*Each); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (a Args) Parts() []string {
 	out := make([]string, len(a))
 	for i, x := range a {

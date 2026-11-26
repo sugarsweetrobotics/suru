@@ -137,7 +137,7 @@ def test_試験ライブラリ(tmp_path):
     r = run_suru(src)
     assert r.returncode == 1
     assert r.stdout == "通った\n"
-    assert "等しくありません: 期待は い / 実際は あ" in r.stderr
+    assert "7行目 15文字目: 等しくありません: 期待は い / 実際は あ" in r.stderr  # 確かめた行(#155)
     if shutil.which("clang"):
         import suru_compile
         exe = tmp_path / "t"

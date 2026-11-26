@@ -295,6 +295,7 @@ func init() {
 	}
 	simple("エラー番号取得する", nil, act(NUM))
 	simple("引数取得する", nil, act(lst(STR)))
+	simple("呼出場所取得する", nil, act(STR))
 	prim("終了する", []partReq{req(WO)}, func() Type {
 		return &TFun{Params: []TParam{{WO, NUM}}, Result: act(newTVar())}
 	}, func(c *Checker, a typedArgs, line Pos) Type {

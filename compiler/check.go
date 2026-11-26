@@ -1744,8 +1744,29 @@ func (c *Checker) callType(name string, args typedArgs, line Pos, env *TEnv) Typ
 
 // unknownName は、どこにも定義のない名前のエラーにする(打ち間違いを動かす前に知らせる #149)
 func (c *Checker) unknownName(name string, env *TEnv, line Pos) {
-	c.checkHidden(name, env, line)
+	ctor := c.ctorHint(name)
+	if m, ok := env.hiddenIn(name); ok {
+		if ctor != "" {
+			ctor = "。" + ctor
+		}
+		c.fail(line, "「"+name+"」は定義されていません(「"+m+"」で非公開とされています)"+ctor)
+	}
+	if ctor != "" {
+		c.fail(line, "「"+name+"」は定義されていません("+ctor+")")
+	}
 	c.fail(line, "「"+displayName(name)+"」は定義されていません"+c.unknownHint(name, env))
+}
+
+// ctorHint は形の名前に「にする」を付けて関数として使ったときの案内(#155)
+func (c *Checker) ctorHint(name string) string {
+	if base, ok := strings.CutSuffix(name, "にする"); ok {
+		for _, k := range c.ctx.Ctors.keys {
+			if k == base || ShortTypeName(k) == base {
+				return "「" + base + "」は形の名前で、関数ではありません。関数として渡すときは「（x を 受け取って x の " + base + " を 返すこと）」と書きます"
+			}
+		}
+	}
+	return ""
 }
 
 // unknownHint は定義のない名前のエラーに付ける案内(演算子の詰め書き・読み込み忘れ・近い名前)
