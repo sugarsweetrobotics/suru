@@ -66,7 +66,7 @@ func testNames(program []compiler.Node) []string {
 func runnerSource(importPath, module string, names []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# kumu 試験 が作ったファイルです\n「%s」 を 読み込む\n「標準」 を 読み込む\n", importPath)
-	b.WriteString("m を 結果無視する とは m を （x を 受け取って （0 を 結果にする） を 返すこと） で 連鎖する\n")
+	b.WriteString("m を 結果無視する とは m を （x を 受け取って （0 を 結果にする） を 返すこと） で 連鎖する\n\n")
 	b.WriteString("引数 を 試験選択する とは\n")
 	for i, n := range names {
 		kw := "もし"
@@ -75,7 +75,7 @@ func runnerSource(importPath, module string, names []string) string {
 		}
 		fmt.Fprintf(&b, "  %s 引数 の 先頭 = 「%d」 ならば （%s内の%s） を 結果無視する\n", kw, i+1, module, n)
 	}
-	b.WriteString("  そうでなければ 0 を 結果にする\n標準内の引数取得してから 試験選択する\n")
+	b.WriteString("  そうでなければ 0 を 結果にする\n\n標準内の引数取得してから 試験選択する\n")
 	return b.String()
 }
 
