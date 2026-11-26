@@ -255,7 +255,7 @@ func buildLayout(lines []*Line) []*LNode {
 // opensIka は「… とは 以下の手順です」で終わる行か
 func opensIka(ln *Line) bool {
 	ts := nosep(ln.Tokens)
-	return len(ts) > 0 && ts[len(ts)-1].Kind == "KW" && ikaWords[ts[len(ts)-1].S]
+	return len(ts) > 0 && ts[len(ts)-1].Kind == "KW" && (ikaWords[ts[len(ts)-1].S] || isTestHead(ts[len(ts)-1]) && len(ts) == 1)
 }
 
 // ikaClosedDeep は「以下の手順です」の行で、深い行の「以上」で既に閉じているか(その後の続きの行は式の続き)
@@ -308,7 +308,7 @@ func closeOne(nodes []*LNode, i int) (*LNode, int) {
 	if !opensIka(n.Line) {
 		return n, i
 	}
-	if j := ijouBeforeContinuation(n); j >= 0 {
+	if j := ijouBeforeContinuation(n); j >= 0 && !isTestHead(nosep(n.Line.Tokens)[0]) {
 		// 「もし … ならば 以下の手順です」+ 深い行 + 「以上」の後に「そうでなければ …」(#190):
 		// 手順の文を DO の字句にして行に入れ、続きの行を深い行として残す
 		body, rest := n.Children[:j], n.Children[j+1:]
@@ -1730,7 +1730,7 @@ func combineClauses(group []*Define) *Define {
 	for _, p := range order {
 		params = append(params, Param{Part: p, Name: slot[p]})
 	}
-	return &Define{name, params, body, true, first.Line}
+	return &Define{name, params, body, true, first.Line, "", nil}
 }
 
 func mergeClauses(statements []Node) []Node {
@@ -1833,11 +1833,104 @@ func withChildren(tokens []*Token, children []*LNode) []*Token {
 	return out
 }
 
+// parseTestBlock は「以下は「二倍」の試験です」+ 手順の文 + 「以上です」(#193)。引数のない手順の定義にする
+func parseTestBlock(node *LNode, tokens []*Token) Node {
+	head := tokens[0]
+	if len(tokens) != 1 || !isTestHead(head) {
+		for _, t := range tokens {
+			if isTestHead(t) {
+				raise(t.Line, "「"+t.S+"です」は1行に、それだけを書きます(手順の文は次の行から書き、最後に「"+KwIjou+"です」)")
+			}
+		}
+	}
+	if node.Line.Indent != 0 {
+		raise(head.Line, "「"+head.S+"です」は一番外(字下げなし)に書いてください")
+	}
+	name := testHeadName(head)
+	if strings.TrimSpace(name) == "" {
+		raise(head.Line, "試験の名前を「」の中に書いてください(「以下は「二倍」の試験です」)")
+	}
+	do := parseDo(node.Children, node.Line.Number)
+	return &Define{testPrefix + name, nil, do, true, node.Line.Number, name, nil}
+}
+
+// parseExample は「例えば （2 を 二倍する） は 4 です」(#193)。実際 = 期待 を確かめる、引数のない定義にする
+func parseExample(node *LNode) Node {
+	tokens := nosep(flatten(node))
+	word := tokens[0]
+	usage := "「" + KwExample + " （2 を 二倍する） は 4 です」のように、「" + KwExample + " 式 は 期待する値」と書きます"
+	if node.Line.Indent != 0 {
+		raise(word.Line, "「"+KwExample+"」の例は一番外(字下げなし)に、定義のすぐ下に書いてください")
+	}
+	rest := tokens[1:]
+	wa := findTopLevel(rest, KwWa)
+	if wa <= 0 || wa == len(rest)-1 {
+		raise(word.Line, usage)
+	}
+	actual := newExprParser(rest[:wa]).parseAll()
+	expected := newExprParser(rest[wa+1:]).parseAll()
+	body := &BinOp{"==", actual, expected, word.Line}
+	return &Define{fmt.Sprintf("%s%d", examplePrefix, node.Line.Number.Line), nil, body, true, node.Line.Number, "例", []Node{actual, expected}}
+}
+
+// IsTestDefine は試験のまとまりか例の定義か
+func IsTestDefine(n Node) bool {
+	d, ok := n.(*Define)
+	return ok && d.Test != ""
+}
+
+// DropTests は試験のまとまりと例、それらのために読み込んだ「試験」を除く(通常のビルドと、読み込んだファイル)
+func DropTests(program []Node) []Node {
+	var out []Node
+	for _, s := range program {
+		if imp, ok := s.(*Import); (ok && imp.Test) || IsTestDefine(s) {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// nameExamples は例の名前を、すぐ上の定義の名前から決める(「二倍するの例」)。同じ名前の試験のまとまりが2つあればエラー
+func nameExamples(statements []Node) {
+	prev := ""
+	seen := map[string]Pos{}
+	for _, s := range statements {
+		d, ok := s.(*Define)
+		if !ok {
+			continue
+		}
+		switch {
+		case d.Example != nil:
+			if prev != "" {
+				d.Test = prev + "の例"
+			} else {
+				d.Test = "例"
+			}
+		case d.Test != "":
+			if p, dup := seen[d.Test]; dup {
+				raise(d.Line, fmt.Sprintf("「%s」の試験は%d行目にもあります(試験の名前は1つずつ違うものにしてください)", d.Test, p.Line))
+			}
+			seen[d.Test] = d.Line
+		default:
+			prev = d.Name
+		}
+	}
+}
+
 func parseStatement(node *LNode) Node {
 	raw := node.Line.Tokens
 	tokens := nosep(raw)
 	if len(tokens) == 1 && isKw(tokens[0], KwIjou) {
 		raise(tokens[0].Line, "対応する「以下の手順です」のない「"+KwIjou+"」があります")
+	}
+	for _, t := range tokens {
+		if isTestHead(t) {
+			return parseTestBlock(node, tokens)
+		}
+	}
+	if tokens[0].Kind == "WORD" && !tokens[0].Quoted && tokens[0].S == KwExample {
+		return parseExample(node)
 	}
 	if isKw(tokens[0], KwSorekara) {
 		rest := raw[indexOf(raw, tokens[0])+1:]
@@ -1907,13 +2000,13 @@ func parseStatement(node *LNode) Node {
 		// 「挨拶する とは 以下の手順です」+ 文 + 「以上」(文は closeIjou が深い行にまとめた)
 		d := parseDo(node.Children, node.Line.Number)
 		d.(*Do).IO = afterT[0].S == KwIkaIO
-		return &Define{name, params, d, isFunction, node.Line.Number}
+		return &Define{name, params, d, isFunction, node.Line.Number, "", nil}
 	}
 	if len(afterT) == 1 && afterT[0].Kind == "WORD" && (afterT[0].S == Tejun || afterT[0].S == TejunIO) && !afterT[0].Quoted && len(node.Children) > 0 {
 		// 「挨拶する とは 手順」+ 深い行(「入出力手順」なら動作だけ)
 		d := parseDo(node.Children, node.Line.Number)
 		d.(*Do).IO = afterT[0].S == TejunIO
-		return &Define{name, params, d, isFunction, node.Line.Number}
+		return &Define{name, params, d, isFunction, node.Line.Number, "", nil}
 	}
 	if len(afterT) == 2 && afterT[0].Kind == "WORD" && afterT[0].S == KwExtern && !afterT[0].Quoted &&
 		afterT[1].Kind == "STR" && len(node.Children) == 0 {
@@ -1925,7 +2018,7 @@ func parseStatement(node *LNode) Node {
 		if strings.HasPrefix(sym, "rt_") || strings.HasPrefix(sym, "suru_") {
 			raise(afterT[1].Line, "「"+sym+"」は「する」の実行時が使う名前なので、外部の関数にできません")
 		}
-		return &Define{name, params, &Extern{Symbol: sym, Line: afterT[1].Line}, isFunction, node.Line.Number}
+		return &Define{name, params, &Extern{Symbol: sym, Line: afterT[1].Line}, isFunction, node.Line.Number, "", nil}
 	}
 	if len(afterT) >= 5 && afterT[0].Kind == "WORD" && afterT[0].S == KwExtern && !afterT[0].Quoted &&
 		afterT[1].Kind == "STR" && afterT[2].Kind == "LP" && afterT[len(afterT)-1].Kind == "RP" && len(node.Children) == 0 {
@@ -1937,12 +2030,12 @@ func parseStatement(node *LNode) Node {
 		if strings.HasPrefix(sym, "rt_") || strings.HasPrefix(sym, "suru_") {
 			raise(afterT[1].Line, "「"+sym+"」は「する」の実行時が使う名前なので、外部の関数にできません")
 		}
-		return &Define{name, params, &Extern{Symbol: sym, Line: afterT[1].Line, CArgs: parseExternArgs(afterT[2 : len(afterT)-1])}, isFunction, node.Line.Number}
+		return &Define{name, params, &Extern{Symbol: sym, Line: afterT[1].Line, CArgs: parseExternArgs(afterT[2 : len(afterT)-1])}, isFunction, node.Line.Number, "", nil}
 	}
 	if len(afterT) == 4 && afterT[0].Kind == "WORD" && afterT[0].S == KwExtern && !afterT[0].Quoted &&
 		afterT[1].Kind == "LP" && afterT[2].Kind == "WORD" && afterT[3].Kind == "RP" && len(node.Children) == 0 {
 		// 「x を f で 呼ぶ とは 外部の（f）」: 引数 f の番地にある C の関数を呼ぶ
-		return &Define{name, params, &Extern{Line: afterT[2].Line, Pointer: afterT[2].S}, isFunction, node.Line.Number}
+		return &Define{name, params, &Extern{Line: afterT[2].Line, Pointer: afterT[2].S}, isFunction, node.Line.Number, "", nil}
 	}
 	var body Node
 	if len(afterT) > 0 {
@@ -1953,7 +2046,7 @@ func parseStatement(node *LNode) Node {
 		}
 		body = parseBlock(node.Children)
 	}
-	return &Define{name, params, body, isFunction, node.Line.Number}
+	return &Define{name, params, body, isFunction, node.Line.Number, "", nil}
 }
 
 func isTypeWord(t *Token) bool {
@@ -2615,7 +2708,7 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 			continue
 		}
 		if name, open, ok := importTarget(n); ok {
-			imp := &Import{loadModule(name, ctx, n.Line.Number), n.Line.Number, open}
+			imp := &Import{loadModule(name, ctx, n.Line.Number), n.Line.Number, open, false}
 			imports[n] = imp
 			modNames = append(modNames, imp.Module.Name)
 		}
@@ -2623,8 +2716,25 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 	var prelude *Import
 	if !ctx.InPrelude && !hasPreludeImport(imports) {
 		if line, ok := preludeLine(nodes); ok {
-			prelude = &Import{loadPrelude(ctx, line), line, true}
+			prelude = &Import{loadPrelude(ctx, line), line, true, false}
 			modNames = append(modNames, PreludeName)
+		}
+	}
+	var testImport *Import
+	for _, n := range nodes {
+		if ts := nosep(n.Line.Tokens); len(ts) > 0 && isTestHead(ts[0]) {
+			// 試験のまとまりの中では「試験」の名前(一致確認する など)を前置きなしで使える(#193)
+			opened := false
+			for _, imp := range imports {
+				if i, ok := imp.(*Import); ok && i.Open && i.Module.Name == TestLib && isLibPath(i.Module.Path) {
+					opened = true
+				}
+			}
+			if !opened && !(splitExt(pathBase(ctx.Path)) == TestLib && isLibPath(ctx.Path)) {
+				testImport = &Import{loadModule(TestLib, ctx, n.Line.Number), n.Line.Number, true, true}
+				modNames = append(modNames, testImport.Module.Name)
+			}
+			break
 		}
 	}
 	if len(modNames) > 0 {
@@ -2647,9 +2757,13 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 			statements = append(statements, parseStatement(n))
 		}
 	}
+	if testImport != nil {
+		statements = append([]Node{testImport}, statements...)
+	}
 	if prelude != nil {
 		statements = append([]Node{prelude}, statements...)
 	}
+	nameExamples(statements)
 	checkOpenImports(statements)
 	attachExterns(statements)
 	statements = attachProvisos(statements)
@@ -3346,7 +3460,7 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 	savedFile := curPosFile
 	curPosFile = path
 	err := try(func() {
-		program = ParseProgram(source, sub)
+		program = DropTests(ParseProgram(source, sub)) // 読み込んだファイルの試験と例は使わない(#193)
 		for _, s := range program {
 			if _, ok := s.(*Define); !ok && !isTopLevelOnly(s) {
 				raise(firstLineOf(s), "読み込むファイルには定義だけを書いてください")

@@ -186,6 +186,7 @@ func CompileSmall(source, baseDir, path string, target SmallTarget) (ir string, 
 		if e := typeCheck(program, ctx, true, func(c *Checker) { uses = c.uses }); e != nil {
 			panic(e)
 		}
+		program = DropTests(program) // 試験のまとまりと例は捨てる(#193)
 		checkDefinitions(program, ctx)
 		c := &small{ctx: ctx, target: target, defTypes: map[defKey]Type{}, strs: map[string]string{},
 			decls: map[string]string{}, modules: map[string]*sscope{}}

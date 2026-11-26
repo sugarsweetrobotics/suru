@@ -44,6 +44,7 @@ func CompileSource(source, baseDir, path string, check bool) (ir string, err *Su
 			return
 		}
 	}
+	program = DropTests(program) // 試験のまとまりと例は通常のビルドでは捨てる(#193)
 	err = tagged("コンパイル", func() {
 		checkDefinitions(program, ctx)
 		setLineBase(ctx, source)

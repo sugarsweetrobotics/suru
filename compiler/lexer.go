@@ -368,6 +368,29 @@ func numBool(b bool) NumVal               { return NumVal{Kind: NBool, B: b} }
 func numEmpty() NumVal                    { return NumVal{Kind: NEmpty} }
 func tok(kind, s string, line Pos) *Token { return &Token{Kind: kind, S: s, Line: line} }
 
+// 同じファイルの試験(#193): 「以下は「二倍」の試験です」+ 手順の文 + 「以上です」。通常のビルドでは捨てる
+const (
+	testHeadOpen  = "以下は「"
+	testHeadClose = "」の試験"
+	// TestLib は、試験のまとまりがあれば読み込んで使うファイル(書かなくてよい)
+	TestLib = "試験"
+	// KwExample は例の頭: 「例えば （2 を 二倍する） は 4 です」。すぐ上の定義の例で、試験のときに確かめる
+	KwExample     = "例えば"
+	testPrefix    = "《試験》" // 試験のまとまりの、中だけで使う名前の頭(書いて呼べない名前にする)
+	examplePrefix = "《例》"
+)
+
+// testHead は試験のまとまりの頭の言葉(「以下は「二倍」の試験」)
+func testHead(name string) string { return testHeadOpen + name + testHeadClose }
+
+func isTestHead(t *Token) bool {
+	return t != nil && t.Kind == "KW" && strings.HasPrefix(t.S, testHeadOpen) && strings.HasSuffix(t.S, testHeadClose)
+}
+
+func testHeadName(t *Token) string {
+	return strings.TrimSuffix(strings.TrimPrefix(t.S, testHeadOpen), testHeadClose)
+}
+
 func classify(word string, line Pos, quoted bool) ([]*Token, error) {
 	if quoted {
 		call, err := classifyCall(word, line)
@@ -567,6 +590,20 @@ func joinIka(tokens []*Token) []*Token {
 	var out []*Token
 	for i := 0; i < len(tokens); i++ {
 		t := tokens[i]
+		// 「以下は「二倍」の試験です」「以下 は 「二倍」 の 試験 です」(#193)
+		if t.Kind == "WORD" && !t.Quoted && t.S == "以下は" && i+2 < len(tokens) && tokens[i+1].Kind == "STR" &&
+			tokens[i+2].Kind == "WORD" && !tokens[i+2].Quoted && (tokens[i+2].S == "の試験" || tokens[i+2].S == "の試験です") {
+			out = append(out, tok("KW", testHead(tokens[i+1].S), t.Line))
+			i += 2
+			continue
+		}
+		if t.Kind == "WORD" && !t.Quoted && t.S == "以下" && i+4 < len(tokens) && isKw(tokens[i+1], KwWa) &&
+			tokens[i+2].Kind == "STR" && (isKw(tokens[i+3], KwNo) || isPart(tokens[i+3], KwNo)) &&
+			tokens[i+4].Kind == "WORD" && !tokens[i+4].Quoted && tokens[i+4].S == "試験" {
+			out = append(out, tok("KW", testHead(tokens[i+2].S), t.Line))
+			i += 4
+			continue
+		}
 		if t.Kind == "WORD" && !t.Quoted && (ikaWords[t.S] || extBlockWords[t.S]) {
 			out = append(out, tok("KW", t.S, t.Line))
 			continue

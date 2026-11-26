@@ -1,0 +1,50 @@
+# 「する」本体の試験: PR のたびと main への push で動きます(#193)。
+#   1. Go 版: go vet と go test
+#   2. Python 版: pytest(全部)。Go 版と同じ IR とエラーを出すかも、ここで確かめます
+#   3. する で書いた試験: suru --試験 lib/(試験のまとまり・例)
+name: 試験
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go 版
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: |
+          test -z "$(gofmt -l compiler cmd)" || { gofmt -l compiler cmd; echo "gofmt で整えてください"; exit 1; }
+          go vet ./...
+          go test ./...
+
+  python:
+    name: Python 版と する の試験
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: pytest
+        run: |
+          pip install pytest
+          python3 -m pytest -q --durations=10 tests/
+      - name: する で書いた試験
+        run: python3 suru.py --試験 lib/

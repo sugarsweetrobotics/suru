@@ -706,7 +706,7 @@ func (c *Checker) checkModule(m *Module, line Pos) *TEnv {
 }
 
 func renamed(d *Define, name string) *Define {
-	return &Define{name, d.Params, d.Body, d.IsFunction, d.Line}
+	return &Define{name, d.Params, d.Body, d.IsFunction, d.Line, d.Test, d.Example}
 }
 
 func (c *Checker) inst(v any, line Pos, name string) Type {

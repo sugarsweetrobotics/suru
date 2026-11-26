@@ -1196,7 +1196,7 @@ def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check
         type_check(source, base_dir, path)
     ctx = S.ParseContext(base_dir=base_dir, path=path)
     try:
-        program = S.parse_program(source, ctx)
+        program = S.drop_tests(S.parse_program(source, ctx))  # 試験のまとまりと例は通常のビルドでは捨てる(#193)
     except S.SuruError as e:
         e.kind = "構文"  # --json の「kind」
         raise

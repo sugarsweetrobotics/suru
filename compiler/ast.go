@@ -136,6 +136,10 @@ type Define struct {
 	Body       Node
 	IsFunction bool
 	Line       Pos
+	// Test は試験のまとまりか例なら試験の名前(「二倍」「二倍するの例」)。名前で呼べず、通常のビルドでは捨てる(#193)
+	Test string
+	// Example は例なら [実際の式, 期待の式]
+	Example []Node
 }
 type Block struct{ Statements []Node }
 type Sig struct {
@@ -279,6 +283,8 @@ type Import struct {
 	Module *Module
 	Line   Pos
 	Open   bool
+	// Test は試験のまとまりのために自動で読み込んだ「試験」(通常のビルドでは捨てる)
+	Test bool
 }
 
 // ExternLib は「外部の「m」 を 読み込む」
