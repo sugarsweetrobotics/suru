@@ -20,10 +20,10 @@ python3 -m pytest tests               # テスト
 |---|---|---|
 | pip | `pip install suru-lang` | `suru` |
 | Homebrew(macOS・Linux) | `brew install suru-lang/suru/suru` | `suru`・`suruc`・`suru-ls`・`kumu` |
-| バイナリ | [GitHub Releases](https://github.com/suru-lang/suru/releases) の `suru-版-OS-CPU.tar.gz` | `suruc`・`suru-ls`・`kumu` |
+| バイナリ | [GitHub Releases](https://github.com/suru-lang/suru/releases) の `suru-版-OS-CPU.tar.gz`(Windows は `.zip`) | `suruc`・`suru-ls`・`kumu` |
 | VS Code | 拡張機能ビューで「する」を検索 | 拡張(`suru-ls` を同梱) |
 
-バイナリを作る(`suru --翻訳`、`suruc`)には、どの方法でも手元に clang が要ります。macOS では `xcode-select --install`、Ubuntu などでは `sudo apt install clang` で入ります。Windows 用は `suru-ls` だけです(作ったプログラムの実行時ライブラリが POSIX 向けなので、WSL を使ってください)。
+バイナリを作る(`suru --翻訳`、`suruc`)には、どの方法でも手元に clang が要ります。macOS では `xcode-select --install`、Ubuntu などでは `sudo apt install clang` で入ります。Windows では MSYS2 の UCRT64 のシェルで、`pacman -S mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-lld` で clang と lld を入れます(「Windows 向けのプログラムを作る」)。
 
 ### pip で入れる
 
@@ -877,7 +877,7 @@ c を （p を 受け取って p の 横 を 表示する を 返すこと） �
 
 3. **タグは2種類。** `v0.1.0` の形のタグで本体(PyPI・GitHub Releases・Homebrew)を、`vscode-v0.4.0` の形のタグで VS Code 拡張を出します。拡張の版は本体と別に上げます。タグと `suru.py`・Go 版(`cmd/suruc`・`cmd/suru-ls`・`cmd/kumu`)の版が違えば、`packaging/check_version.py` が止めます。Go 版のバイナリの版は、ビルドのときに `-X main.version=…` でタグの版にします。
 
-4. **Windows 用は言語サーバーだけ。** 実行時ライブラリ(`runtime/suru_rt.c`)が POSIX(pthread・ソケット・シグナルなど)を使うので、Windows では `suruc` で作ったプログラムが動きません。Windows には VS Code 拡張のための `suru-ls` だけを配ります。
+4. **Windows にも同じ3つを配る。** `suruc.exe`・`suru-ls.exe`・`kumu.exe` を amd64 と arm64 の `.zip` に固めます。リリースの流れは公開の前に、windows-latest で MSYS2 の clang と lld を使って amd64 のものを動かし、`suruc` と `kumu` で小さなプログラムを作って動かします。Windows でまだ使えないものは「Windows の標準ライブラリ」にあります。
 
 5. **Homebrew はソースからビルドする。** formula(`packaging/homebrew/make_formula.py` が作る)は、タグのソースから Go で `suruc`・`suru-ls`・`kumu` を作り、Python 版の `suru` を libexec に置いてラッパーで動かします。clang は入れず、caveats で案内します(macOS では Xcode のコマンドラインツールに入っているので)。
 

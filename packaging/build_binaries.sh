@@ -6,8 +6,8 @@
 #
 #   packaging/build_binaries.sh 0.1.0 dist/
 #
-# Linux と macOS は suruc・suru-ls・kumu、Windows は suru-ls だけです
-# (コンパイルしたプログラムが使う実行時ライブラリが POSIX 向けなので、Windows では suruc は動きません)。
+# どの OS も suruc・suru-ls・kumu です。Linux・macOS は .tar.gz、Windows は .exe を .zip に固めます
+# (Windows の suruc・kumu は MSYS2 の clang でプログラムを作ります。README の「Windows 向けのプログラムを作る」)。
 # 最後に SHA256SUMS を書きます。
 set -eu
 version=$1
@@ -26,12 +26,10 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 wi
   dir=$work/$name
   mkdir -p "$dir"
   exe=""
-  cmds="suruc suru-ls kumu"
   if [ "$goos" = windows ]; then
     exe=.exe
-    cmds="suru-ls"
   fi
-  for cmd in $cmds; do
+  for cmd in suruc suru-ls kumu; do
     (cd "$root" && CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -trimpath -ldflags="$ldflags" -o "$dir/$cmd$exe" "./cmd/$cmd")
   done
   cp "$root/LICENSE" "$dir/LICENSE"

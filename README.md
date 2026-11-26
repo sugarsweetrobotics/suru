@@ -22,10 +22,10 @@ python3 -m pytest tests               # tests
 |---|---|---|
 | pip | `pip install suru-lang` | `suru` |
 | Homebrew (macOS, Linux) | `brew install suru-lang/suru/suru` | `suru`, `suruc`, `suru-ls`, `kumu` |
-| Binaries | `suru-VERSION-OS-CPU.tar.gz` from [GitHub Releases](https://github.com/suru-lang/suru/releases) | `suruc`, `suru-ls`, `kumu` |
+| Binaries | `suru-VERSION-OS-CPU.tar.gz` (`.zip` for Windows) from [GitHub Releases](https://github.com/suru-lang/suru/releases) | `suruc`, `suru-ls`, `kumu` |
 | VS Code | Search for 「する」 in the Extensions view | The extension (bundles `suru-ls`) |
 
-Building binaries (`suru --翻訳`, `suruc`) needs clang on your machine, whichever method you use. On macOS install it with `xcode-select --install`; on Ubuntu and similar, with `sudo apt install clang`. For Windows only `suru-ls` is provided (the runtime library of compiled programs targets POSIX, so please use WSL).
+Building binaries (`suru --翻訳`, `suruc`) needs clang on your machine, whichever method you use. On macOS install it with `xcode-select --install`; on Ubuntu and similar, with `sudo apt install clang`. On Windows, use the MSYS2 UCRT64 shell and install clang and lld with `pacman -S mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-lld` (see "Building programs for Windows").
 
 ### Installing with pip
 
@@ -885,7 +885,7 @@ c を （p を 受け取って p の 横 を 表示する を 返すこと） �
 
 3. **Two kinds of tags.** Tags like `v0.1.0` release the main package (PyPI, GitHub Releases, Homebrew), and tags like `vscode-v0.4.0` release the VS Code extension. The extension's version is raised separately from the main one. If the tag doesn't match the version in `suru.py` and the Go programs (`cmd/suruc`, `cmd/suru-ls`, `cmd/kumu`), `packaging/check_version.py` stops the release. The version of the Go binaries is set to the tag's at build time with `-X main.version=…`.
 
-4. **Only the language server is built for Windows.** The runtime library (`runtime/suru_rt.c`) uses POSIX (pthreads, sockets, signals and so on), so programs built with `suruc` don't run on Windows. For Windows only `suru-ls`, for the VS Code extension, is distributed.
+4. **Windows gets the same three programs.** `suruc.exe`, `suru-ls.exe` and `kumu.exe` are packed in a `.zip` for amd64 and arm64. The release workflow runs the amd64 ones on windows-latest with MSYS2's clang and lld, building and running a small program with `suruc` and `kumu`, before publishing. What doesn't work on Windows yet is in "Standard library on Windows".
 
 5. **Homebrew builds from source.** The formula (made by `packaging/homebrew/make_formula.py`) builds `suruc`, `suru-ls` and `kumu` with Go from the tag's source, and puts the Python `suru` in libexec, run through a wrapper. It doesn't install clang; the caveats explain it (on macOS it comes with the Xcode command line tools).
 
