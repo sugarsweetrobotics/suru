@@ -5339,26 +5339,36 @@ int uname(char *buf) {
     return 0;
 }
 
-/* ファイル: realpath(ないファイルなら NULL)。区切りは Windows の「\」のまま */
+/* ファイル: realpath(ないファイルなら NULL)。シンボリックリンクも解き(GetFinalPathNameByHandleW)、
+   区切りは「/」にする(する のプログラムは「/」で道をつなぐので、前の部分と比べられるように) */
 char *realpath(const char *path, char *resolved) {
     wchar_t *w = win_wide(path);
-    DWORD n = GetFullPathNameW(w, 0, NULL, NULL);
-    wchar_t *full = malloc(sizeof(wchar_t) * (n + 1));
-    char *r = NULL;
-    if (n && GetFullPathNameW(w, n + 1, full, NULL)) {
-        if (GetFileAttributesW(full) == INVALID_FILE_ATTRIBUTES) win_errno();
-        else {
-            char *s = win_utf8(full);
-            if (resolved) {
-                snprintf(resolved, 4096, "%s", s);
-                free(s);
-                r = resolved;
-            } else r = s;
-        }
-    } else win_errno();
-    free(full);
+    HANDLE h = CreateFileW(w, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
     free(w);
-    return r;
+    if (h == INVALID_HANDLE_VALUE) {
+        win_errno();
+        return NULL;
+    }
+    wchar_t buf[32768];
+    DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    CloseHandle(h);
+    if (n == 0 || n >= 32768) {
+        win_errno();
+        return NULL;
+    }
+    wchar_t *p = buf;
+    if (wcsncmp(p, L"\\\\?\\UNC\\", 8) == 0) { /* \\?\UNC\server\share → \\server\share */
+        p += 6;
+        p[0] = L'\\';
+    } else if (wcsncmp(p, L"\\\\?\\", 4) == 0) p += 4; /* \\?\C:\… → C:\… */
+    for (wchar_t *q = p; *q; q++)
+        if (*q == L'\\') *q = L'/';
+    char *s = win_utf8(p);
+    if (!resolved) return s;
+    snprintf(resolved, 4096, "%s", s);
+    free(s);
+    return resolved;
 }
 
 /* 時間: localtime_r。Linux と同じ並び(9 つの int の後、40 バイト目に UTC からの秒の差)で書く */
