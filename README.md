@@ -1480,6 +1480,24 @@ z とは 以下の【式】です
 3. **Only typed records in the same file.** The type must be defined in the same file, and its fields must have types (`番号 は 数 で … の 組`; forms without fields, like `赤 か 青`, need none). The line must be at the top level. Several derivers can be joined with `と`, and `導出します` also works.
 4. **Same as quasi-quotes.** Deriving runs while the program is read, like quasi-quotes: the derived code is type checked, its errors point at the deriving line, it may contain quasi-quotes and deriving lines but not `読み込む`, and `suru --展開` / `suruc --展開` show it. `suruc`, `kumu` and the language server compile the deriver into a small program and keep it in the cache folder. 点検 counts the file that defines `X導出する` as used.
 
+### Deriving JSON
+
+```suru
+「JSON」 を 読み込んで 使う
+
+会員 とは 番号 は 数 で 名前 は 文字列 で 好物 は 文字列 の リスト の 組
+会員 は 【JSON】 を 導出する
+
+m とは （番号 は 1 で 名前 は 「花子」 で 好物 は （「茶」 と 「餅」） の 会員）
+m を 会員JSON化して JSON文字列にして 表示する
+（m を 会員JSON化する） を 会員JSON復元して 表示する
+```
+
+1. **【JSON】 makes the conversion to and from JSON.** `会員 は 【JSON】 を 導出する` (with `「JSON」 を 読み込んで 使う` or `「JSON」 を 読み込む`) defines `会員 を 会員JSON化する は JSON` and `JSON を 会員JSON復元する は （会員 と 文字列） の 成否`. This is the fifth stage of the plan for deriving and quasi-quotes (#192), and the first deriver in the standard library (`JSON導出する` in `lib/JSON.suru`).
+2. **The JSON shape.** A record (one form) becomes an object with one item per field: `{"番号":1,"名前":"花子","好物":["茶","餅"]}`. A type with several forms adds a `形` item with the form's name: `{"形":"長方形","幅":2,"高":3}`, and `{"形":"点"}` for a form without fields.
+3. **Field types.** `数`, `文字列`, `真偽`, `JSON` (kept as it is), `X の リスト`, and other types that also derive 【JSON】 (their `…JSON化する` and `…JSON復元する` are used). Other field types, and types with parameters (甲・乙 …), are errors when deriving.
+4. **Failures name the field.** `会員JSON復元する` returns `失敗` with a message such as 「番号が数ではありません」 or 「「形」が三角の形はありません」. The helpers it uses, `JSON数復元する`, `JSON文字列復元する`, `JSON真偽復元する` and `JSONリスト復元する`, can also be used by hand.
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)
