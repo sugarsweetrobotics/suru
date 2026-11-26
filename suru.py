@@ -5500,6 +5500,7 @@ class _Net:
 
     def read(self, v: Any, line: int, how: Any) -> Any:
         """読み込み用で読む。時間切れになった読み込み用はもう読めないので、次は作り直す"""
+        sys.stdout.flush()  # 待つ前に、それまでの表示を出しておく(コンパイルしたものと同じ)
         try:
             return how(self.reader(v, line))
         except TimeoutError:
@@ -5574,6 +5575,7 @@ def _connect(net: _Net, a: dict, line: int) -> int:
 
 
 def _accept(net: _Net, a: dict, line: int) -> int:
+    sys.stdout.flush()  # 待つ前に、それまでの表示を出しておく(コンパイルしたものと同じ)
     conn, _ = net.get(a["から"], "待受口", line).accept()
     conn.settimeout(NET_TIMEOUT)  # 何も送ってこない相手で止まらないように
     return net.add(conn)
@@ -5663,6 +5665,7 @@ def _udp_send(net: _Net, a: dict, line: int) -> int:
 
 def _udp_recv(net: _Net, a: dict, line: int) -> Record:
     """「口 から UDPバイト列受信する」: 次の便りを1つ丸ごと(中身はバイト列)。送り主の IP アドレスとポートも"""
+    sys.stdout.flush()  # 待つ前に、それまでの表示を出しておく(コンパイルしたものと同じ)
     data, addr = net.get(a["から"], "UDPの口", line).recvfrom(65536)
     return Record("UDP便", "UDP便", ("中身", "送り主", "ポート"), (data, addr[0], addr[1]))
 

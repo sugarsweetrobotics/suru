@@ -15,6 +15,10 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 5. **Tests in the same file, and examples.** A `以下は「二倍」の試験です … 以上です` block at the top level is a test that can use the file's private names, and `例えば （2 を 二倍する） は 4 です` under a definition is an example. Both are always type checked, are dropped in a normal run or build, and are ignored when the file is imported (#193).
 6. **`suru --試験 ファイルかフォルダ [名前]` runs tests.** It runs the test blocks, the examples and the top-level `…試験する` procedures of the files, and reports like `kumu 試験`. Words that are not paths select tests by part of their name (#193).
 
+### Fixed
+
+1. **The interpreter shows what it printed before it waits.** Like a compiled program, it now flushes standard output before waiting for a connection (`接続受付する`) or for data from a connection, so a server whose output goes to a pipe shows `ポート 9000 で待っています` right away (#195).
+
 ## 0.9.1
 
 ### New
