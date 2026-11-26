@@ -210,16 +210,20 @@ KW_IJOU = "以上"  # 「以下の手順です」と「もし 値 が」の場�
 KW_IKA = "以下の手順"  # 「挨拶する とは 以下の手順です」+ 文 + 「以上」
 KW_IKA_IO = "以下の入出力手順"
 IKA_WORDS = {KW_IKA: "手順", KW_IKA_IO: "入出力手順"}
-# 外部の関数のまとまり: 「以下の外部の入出力動作です」+ 1行に1つの関数 + 「以上です」(#174)
-KW_IKA_EXT_IO = "以下の外部の入出力動作"
-KW_IKA_EXT = "以下の外部の関数"
-EXT_BLOCK_WORDS = (KW_IKA_EXT_IO, KW_IKA_EXT)
+# 外部の関数のまとまり: 「以下は外部の入出力動作です」+ 1行に1つの関数 + 「以上です」(#174)。
+# 文の頭なので「以下は」と書きます。「以下の外部の…」も同じ意味で書けます(0.9.0 の書き方)
+KW_IKA_EXT_IO = "以下は外部の入出力動作"
+KW_IKA_EXT = "以下は外部の関数"
+KW_IKA_EXT_IO_NO = "以下の外部の入出力動作"
+KW_IKA_EXT_NO = "以下の外部の関数"
+EXT_IO_WORDS = (KW_IKA_EXT_IO, KW_IKA_EXT_IO_NO)
+EXT_BLOCK_WORDS = (KW_IKA_EXT_IO, KW_IKA_EXT, KW_IKA_EXT_IO_NO, KW_IKA_EXT_NO)
 
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
     KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA, DESU, KW_HENSU, KW_HENSU_POLITE,
     KW_IMPORT, KW_IMPORT_POLITE, KW_IMPORT_TE, KW_USE, KW_USE_POLITE, KW_IJOU, KW_IKA, KW_IKA_IO,
-    KW_IKA_EXT_IO, KW_IKA_EXT,
+    KW_IKA_EXT_IO, KW_IKA_EXT, KW_IKA_EXT_IO_NO, KW_IKA_EXT_NO,
 }
 KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU, KW_IJOU}
 CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}
@@ -444,7 +448,7 @@ def join_module_names(tokens: list[Token], modules: set) -> list[Token]:
 
 def join_ika(tokens: list[Token]) -> list[Token]:
     """「以下の手順」「以下 の 手順」「以下の入出力手順」を1つの言葉にする。
-    「以下の外部の入出力動作」「以下 の 外部 の 入出力動作」「以下の外部の関数」も"""
+    「以下は外部の入出力動作」「以下 は 外部 の 入出力動作」「以下は外部の関数」も(「以下の外部の…」も)"""
     out: list[Token] = []
     i = 0
     while i < len(tokens):
@@ -453,11 +457,12 @@ def join_ika(tokens: list[Token]) -> list[Token]:
             out.append(Token("KW", t.value, t.line))
             i += 1
             continue
-        if (t.kind == "WORD" and not t.quoted and t.value == "以下" and i + 4 < len(tokens) and is_kw(tokens[i + 1], KW_NO)
+        if (t.kind == "WORD" and not t.quoted and t.value == "以下" and i + 4 < len(tokens)
+                and (is_kw(tokens[i + 1], KW_NO) or is_kw(tokens[i + 1], KW_WA))
                 and tokens[i + 2].kind == "WORD" and not tokens[i + 2].quoted and tokens[i + 2].value == "外部"
                 and is_kw(tokens[i + 3], KW_NO) and tokens[i + 4].kind == "WORD" and not tokens[i + 4].quoted
-                and "以下の外部の" + tokens[i + 4].value in EXT_BLOCK_WORDS):
-            out.append(Token("KW", "以下の外部の" + tokens[i + 4].value, t.line))
+                and f"以下{tokens[i + 1].value}外部の{tokens[i + 4].value}" in EXT_BLOCK_WORDS):
+            out.append(Token("KW", f"以下{tokens[i + 1].value}外部の{tokens[i + 4].value}", t.line))
             i += 5
             continue
         if (t.kind == "WORD" and not t.quoted and t.value == "以下" and i + 2 < len(tokens) and is_kw(tokens[i + 1], KW_NO)
@@ -1377,7 +1382,7 @@ def opens_ika(ln: Line) -> bool:
 
 
 def opens_ext_block(ln: Line) -> bool:
-    """「以下の外部の入出力動作です」「以下の外部の関数です」だけの行か"""
+    """「以下は外部の入出力動作です」「以下は外部の関数です」(「以下の外部の…」も)だけの行か"""
     toks = nosep(ln.tokens)
     return len(toks) == 1 and toks[0].kind == "KW" and toks[0].value in EXT_BLOCK_WORDS
 
@@ -1496,7 +1501,7 @@ def _ext_name(head: list[Token]) -> Token | None:
 
 
 def _io_result(res: list[Token], word: str) -> list[Token]:
-    """まとまり「以下の外部の入出力動作です」の値の型「番地 を 返します」を「番地 を 返す 入出力動作」にする"""
+    """まとまり「以下は外部の入出力動作です」の値の型「番地 を 返します」を「番地 を 返す 入出力動作」にする"""
     line = res[0].line
     if len(res) >= 2 and res[-2].kind == "PART" and res[-2].value == "を" and is_kw(res[-1], KW_HENSU) or (
             len(res) >= 2 and res[-2].kind == "PART" and res[-2].value == "を" and is_kw(res[-1], KW_HENSU_POLITE)):
@@ -1527,7 +1532,7 @@ def _typed_extern(ln: Line, head: list[Token], towa: Token, ext: list[Token], ty
                         f"(定義の助詞: {order})", (typ[0] if typ else towa).line)
     if not res:
         raise SuruError(f"「受け取って」の後に値の型を書きます({EXT_ONE_LINE_EXAMPLE})", typ[-1].line)
-    if word == KW_IKA_EXT_IO:
+    if word in EXT_IO_WORDS:
         res = _io_result(res, word)
     sig = args + [name, Token("KW", KW_WA, name.line)] + res
     return [Line(0, sig, ln.number, ln.closed), Line(0, head + [towa] + ext, ln.number, ln.closed)]
@@ -1588,7 +1593,7 @@ def _extern_block_line(ln: Line, word: str) -> list[Line]:
                             after[1].line)
         raise SuruError(f"「{word}です」の中には、{EXT_BLOCK_LINE_HELP}", ln.number)
     res = after[2:]
-    if word == KW_IKA_EXT_IO:
+    if word in EXT_IO_WORDS:
         res = _io_result(res, word)
     # 定義の引数の名前は使わないので、「引数1」「引数2」… にする
     head: list[Token] = []

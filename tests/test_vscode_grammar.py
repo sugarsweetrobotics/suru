@@ -46,4 +46,4 @@ def test_builtins_and_keywords_are_highlighted():
         assert w in text, w
     # 「以下の手順」は「以下 の 手順」とも書けるので、間の空白を許す形で入っている
     assert "以下[ 　]*の[ 　]*(?:入出力)?手順" in text
-    assert "以下[ 　]*の[ 　]*外部[ 　]*の[ 　]*(?:入出力動作|関数)" in text
+    assert "以下[ 　]*[のは][ 　]*外部[ 　]*の[ 　]*(?:入出力動作|関数)" in text
