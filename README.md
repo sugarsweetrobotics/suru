@@ -584,6 +584,7 @@ x を y で 累乗する とは 外部の「pow」
 | 組み込みの上書き (built-in override) | An outermost definition with the same name as a built-in function (`加算する` and so on) or a function in a file loaded with `読み込んで 使う` |
 | 型の宣言なし (missing type declaration) | An outermost function in a library (a file without expression sentences at the outermost level) without a type declaration such as `数 を 三倍する は 数`. The declaration may be anywhere in the file |
 | 書き方の混在 (mixed styles) | One file has both punctuation-style and spaced-style sentences. Reported once, at the first sentence of the less common style |
+| 値の再定義 (value redefined) | The same value name is defined twice at the outermost level (the later definition is used). Functions are not checked, since they can be defined case by case |
 
 2. **Silencing reports.** Writing `# 点検しない` ("don't lint") at the end of a line, or on a comment-only line just before it, silences all reports for that line; `# 点検しない: RULE RULE` silences only those rules.
 3. **It shows up in the editor too.** The language server `suru-ls` (VS Code extension) lints when a file is opened and saved, and shows the reports as warnings. A quick fix adds `# 点検しない: RULE` (clang is required). For an unsaved file, pass its contents as `suru --点検 --代わり CONTENTS_FILE REAL_PATH` to check them as the file at the real path.
@@ -1339,6 +1340,13 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 2. **Libraries are the bundled `lib/` files and dependencies.** Files of dependencies in 組.lock, and files those load, are libraries. Your own files (the main file and files of your project, including ones loaded by the project name from `試験/`) are your program, and an error inside them is shown at its own position as before. In `kumu 試験`, an error inside a library is shown at the line of the test file.
 3. **The place is the innermost call from your program.** It is the call from your program into a library function that is still running, including calls through function values (`xs を 最大値にすること で 写像する`). An action made by a library function (such as `ファイル内の読込する`) uses the place where that function was called, even when the action is carried out later. The 「(ここで実行時エラー)」 line of the trace of `試行する` and `試算する` and `--json` (`line` and `column`) also use this place, and the reason of the failure (理由) stays the message alone.
 4. **`最大値にする` and `最小値にする` of an empty list explain the error.** They give 「空のリストの最大値はありません」 ("an empty list has no maximum") instead of 「「空」は「最大値にする」のどの定義にも当てはまりません」.
+
+### Small inconveniences (#155)
+
+1. **Errors show how to write it.** `xs の それぞれ を （x を 受け取って … を 返すこと）` explains that 「それぞれ」 takes a function name ending in 「する」 and suggests `xs を （…） で 写像する`. `もし s を JSON解析する が` explains that a call in 「もし 値 が」 needs parentheses (`もし （s を JSON解析する） が`). An indented 「ただし」 explains that it goes at the same indent as the definition it adds to. Using a constructor name as a function (`xs の それぞれ を JSON数にする`) explains that 「JSON数」 is a constructor and suggests `（x を 受け取って x の JSON数 を 返すこと）`. The interpreter and `suruc` give the same messages.
+2. **The linter reports values defined twice.** The new rule 「値の再定義」 reports the second definition of `x とは 3` / `x とは 4` (the later one is used). Functions are not reported, since they can be defined case by case.
+3. **`kumu 試験` shows the line of the failed check.** A failed `一致確認する`, `確認する` or `不合格にする` writes the place in the test file first, as in `「計算.suru」の6行目 3文字目: 等しくありません: 期待は 7 / 実際は 6`. The place is the one from "Errors inside libraries", which the new built-in `呼出場所取得する` (in 「標準」, an action) returns as a string (empty when there is none).
+4. **`kumu 新規` makes an example test.** It writes `試験/例.suru` with one test (not for microcontroller targets, which can't run tests), so `kumu 試験` works right after creating a project.
 
 ## License
 

@@ -215,6 +215,18 @@ func configTemplate(name, target string) string {
 
 const entryTemplate = "「こんにちは」 を 表示する\n"
 
+// testTemplate は 試験/例.suru の雛形(kumu 試験 で動かす。#155)
+const testTemplate = `「試験」 を 読み込んで 使う
+
+# 「…試験する」で終わる名前の手順が、1つの試験です。kumu 試験 で動かします
+# プロジェクトのファイルは、組.suru の名前で読み込めます(「計算」 を 読み込む → 計算内の二倍する)
+足し算試験する は 真偽 の 動作
+足し算試験する とは 以下の手順です
+  1 + 2 を 3 に 一致確認する
+  1 < 2 を 確認する
+  以上です
+`
+
 // mcuEntryTemplate はマイコン向けの雛形(基板の LED を点滅させ、シリアルに挨拶する)
 const mcuEntryTemplate = `「マイコン」 を 読み込んで 使う
 
@@ -258,6 +270,13 @@ func CreateProject(dir, name string, fresh bool, target string) error {
 		{ConfigName, configTemplate(name, target)},
 		{"本体" + compiler.SourceSuffix, entry},
 		{".gitignore", gitignoreTemplate},
+	}
+	if fresh && target == "" {
+		// マイコン向けは試験を動かせないので作らない
+		if err := os.MkdirAll(filepath.Join(dir, TestDir), 0o755); err != nil {
+			return err
+		}
+		files = append(files, struct{ name, body string }{filepath.Join(TestDir, "例"+compiler.SourceSuffix), testTemplate})
 	}
 	for _, f := range files {
 		path := filepath.Join(dir, f.name)

@@ -618,6 +618,15 @@ func (p *ExprParser) lastLine() Pos {
 	return p.tokens[k].Line
 }
 
+// 書き方を案内するエラー(#155)
+const (
+	eachLambdaMessage = "「それぞれ」の後には「…する」で終わる関数の名前を書きます" +
+		"(無名関数を使うときは「xs を （x を 受け取って … を 返すこと） で 写像する」と書きます)"
+	matchCallMessage = "「もし 値 が」の場合分けで値に呼び出しを書くときは、括弧で囲んでください" +
+		"(「もし （s を JSON解析する） が」のように書きます)"
+	provisoIndentMessage = "「ただし」は、付け足す定義の行と同じ字下げで書いてください(字下げした行は前の行の続きとして読みます)"
+)
+
 func (p *ExprParser) parseAll() Node {
 	e := p.expr()
 	if t := p.peek0(); t != nil {
@@ -626,6 +635,9 @@ func (p *ExprParser) parseAll() Node {
 		}
 		if isKw(t, KwIjou) {
 			raise(t.Line, "対応する「もし 値 が」の場合分けか「以下の手順です」のない「"+KwIjou+"」があります")
+		}
+		if isKw(t, KwProviso) && p.sepIndent(p.pos) >= 0 {
+			raise(t.Line, provisoIndentMessage) // 字下げした行の頭の「ただし」
 		}
 		raise(t.Line, "余分な「"+t.Value()+"」があります")
 	}
@@ -643,6 +655,9 @@ func (p *ExprParser) expr() Node {
 		cond := p.expr()
 		t := p.next()
 		if !isKw(t, KwThen) {
+			if _, ok := cond.(*Call); ok && isKw(t, KwGa) {
+				raise(t.Line, matchCallMessage)
+			}
 			raise(t.Line, "「もし」の後に「ならば」が必要です")
 		}
 		then := p.expr()
@@ -775,6 +790,9 @@ func (p *ExprParser) pipeline(piped Node, hasPiped bool) Node {
 				line := p.lastLine()
 				if part != nil {
 					line = part.Line
+				}
+				if _, ok := value.(*Lambda); ok && args.hasEach() {
+					raise(line, eachLambdaMessage)
 				}
 				raise(line, "値の後に助詞(を・に・で・から・へ・より)か「…する」が必要です")
 			}

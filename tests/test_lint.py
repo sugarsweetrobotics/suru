@@ -255,6 +255,18 @@ def test_局所の名前を名前するで呼ぶのは使用(kind, tmp_path):
     assert r.stdout == "local.suru:4:3: 未使用の定義: 「他」は定義されていますが、使われていません\n", r.stderr
 
 @pytest.mark.parametrize("kind", KINDS)
+def test_値の再定義(kind, tmp_path):
+    # #155: 同じ名前の値を2回定義したら2回目を知らせる。場合ごとに定義する関数と、ただし の局所の定義は知らせない
+    (tmp_path / "again.suru").write_text(
+        "x とは 3\nx とは 4\nx を 表示する\n"
+        "0 を 数える とは 0\nn を 数える とは n\n（1 を 数える） を 表示する\n"
+        "a を 甲する とは y\nただし y とは a\nb を 乙する とは y\nただし y とは b\n"
+        "（1 を 甲する） + （2 を 乙する） を 表示する\n", encoding="utf-8")
+    r = run_lint(kind, tmp_path, "again.suru")
+    assert r.stdout == "again.suru:2:1: 値の再定義: 「x」は前にも定義しています(後の定義が使われます)\n", r.stderr
+
+
+@pytest.mark.parametrize("kind", KINDS)
 def test_構文木の規則(kind, tmp_path):
     (tmp_path / "型.suru").write_text(TYPES, encoding="utf-8")
     (tmp_path / "syntax.suru").write_text(SYNTAX, encoding="utf-8")

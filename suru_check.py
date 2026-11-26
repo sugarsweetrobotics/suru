@@ -29,7 +29,7 @@ from suru import (
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
     PValue, Ref, RESULT, Run, Sequel, Str, SuruError, module_error, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
     HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, Import, Module, MODULE_SEP, SOURCE_SUFFIX, _where, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
-    parse_program, collect_runs, _run_key, LIB_PRIMITIVES, GA, UNWRAP_TYPES, _call_name, TUPLE_TYPE, PRELUDE_PATH,
+    parse_program, collect_runs, _run_key, LIB_PRIMITIVES, GA, UNWRAP_TYPES, _call_name, TUPLE_TYPE, PRELUDE_PATH, short_type_name,
 )
 
 # ---------------------------------------------------------------------------
@@ -1340,8 +1340,21 @@ class Checker:
 
     def unknown_name(self, name: str, env: TEnv, line: Any) -> SuruError:
         """どこにも定義のない名前のエラー(打ち間違いを動かす前に知らせる #149)"""
+        ctor = self.ctor_hint(name)
+        m = env.hidden_in(name)
+        if m is not None:
+            raise self.err(f"「{name}」は定義されていません(「{m}」で非公開とされています){'。' + ctor if ctor else ''}", line)
+        if ctor:
+            raise self.err(f"「{name}」は定義されていません({ctor})", line)
         self.check_hidden(name, env, line)
         return self.err(f"「{display_name(name)}」は定義されていません{unknown_hint(name, env, self)}", line)
+
+    def ctor_hint(self, name: str) -> str:
+        """形の名前に「にする」を付けて関数として使ったときの案内(#155)"""
+        base = name.removesuffix("にする")
+        if base != name and any(c == base or short_type_name(c) == base for c in self.ctx.ctors):
+            return f"「{base}」は形の名前で、関数ではありません。関数として渡すときは「（x を 受け取って x の {base} を 返すこと）」と書きます"
+        return ""
 
     def check_hidden(self, name: str, env: TEnv, line: Any) -> None:
         """読み込んだファイルの非公開の名前を使っていれば「定義されていません」にする
@@ -2213,6 +2226,7 @@ for _t, _v in [("符号付き8", NUM), ("符号付き16", NUM), ("符号付き32
     _simple(_t + "書込する", [(WO, _v), ("へ", ADDR), ("で", NUM)], act(NUM))
 _simple("エラー番号取得する", [], act(NUM))
 _simple("引数取得する", [], act(lst(STR)))
+_simple("呼出場所取得する", [], act(STR))
 
 
 @prim("終了する", {WO: True}, lambda: TFun([(WO, NUM)], act(TVar())))

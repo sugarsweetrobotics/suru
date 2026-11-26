@@ -38,6 +38,12 @@ func TestTestAndLint(t *testing.T) {
 	}
 	root := filepath.Join(dir, "計算")
 	k, out, errb = newKumu(root)
+	// 新規は 試験/例.suru を作る(#155)
+	if rc := k.run([]string{"試験"}); rc != 0 || !strings.Contains(out.String(), "✓ 試験/例.suru 足し算試験する\n") {
+		t.Fatalf("例の試験: rc=%d %s%s", rc, out, errb)
+	}
+	os.Remove(filepath.Join(root, "試験", "例.suru"))
+	out.Reset()
 	if rc := k.run([]string{"試験"}); rc != 0 || !strings.Contains(errb.String(), "試験が見つかりません") {
 		t.Fatalf("試験なし: rc=%d %s", rc, errb)
 	}
@@ -60,9 +66,9 @@ func TestTestAndLint(t *testing.T) {
 	got := out.String()
 	for _, want := range []string{
 		"✓ 試験/二倍.suru 小さい数試験する\n",
-		"✗ 試験/二倍.suru 大きい数試験する\n    等しくありません: 期待は 201 / 実際は 200\n",
+		"✗ 試験/二倍.suru 大きい数試験する\n    「二倍.suru」の8行目 28文字目: 等しくありません: 期待は 201 / 実際は 200\n", // 確かめた行(#155)
 		"✗ 試験/二倍.suru 零で割る試験する\n",
-		"✗ 試験/下/別.suru 理由試験する\n    わざと\n",
+		"✗ 試験/下/別.suru 理由試験する\n    「別.suru」の2行目 19文字目: わざと\n",
 		// ライブラリの中のエラーは、試験のファイルの呼んだ場所で出す(#154)
 		"✗ 試験/下/別.suru 最大試験する\n    エラー: 「別.suru」の4行目 16文字目: 空のリストの最大値はありません(「標準.suru」の",
 		"合格 1・不合格 4\n",
