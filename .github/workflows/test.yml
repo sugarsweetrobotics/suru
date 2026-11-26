@@ -1,7 +1,7 @@
 # 「する」本体の試験: PR のたびと main への push で動きます(#193)。
 #   1. Go 版: go vet と go test
 #   2. Python 版: pytest(全部)。Go 版と同じ IR とエラーを出すかも、ここで確かめます
-#   3. する で書いた試験: suru --試験 lib/(試験のまとまり・例)
+#   3. する で書いた試験: suru --試験 lib/ と suruc --試験 lib/(試験のまとまり・例)
 # pytest は4つに分けて並べて流します(1つにすると30分を超えます)
 name: 試験
 
@@ -70,4 +70,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python3 suru.py --試験 lib/
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: |
+          python3 suru.py --試験 lib/
+          go run ./cmd/suruc --試験 lib/
