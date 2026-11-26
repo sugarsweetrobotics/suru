@@ -227,11 +227,12 @@ func buildLayout(lines []*Line) []*LNode {
 			}
 			pos++
 			node := &LNode{Line: ln}
-			if !ln.Closed && pos < len(lines) && lines[pos].Indent > indent {
+			if (!ln.Closed || opensIka(ln)) && pos < len(lines) && lines[pos].Indent > indent {
 				node.Children = block(indent + 1)
 			}
 			first := ln.Tokens[0]
-			if len(nodes) > 0 && !ln.Closed && !nodes[len(nodes)-1].Line.Closed && first.Kind == "KW" && continuationKeywords[first.S] {
+			if len(nodes) > 0 && !ln.Closed && !nodes[len(nodes)-1].Line.Closed && first.Kind == "KW" && continuationKeywords[first.S] &&
+				!opensIka(nodes[len(nodes)-1].Line) {
 				prev := nodes[len(nodes)-1]
 				prev.Children = append(prev.Children, node)
 			} else {
@@ -244,16 +245,75 @@ func buildLayout(lines []*Line) []*LNode {
 	if len(lines) > 0 && lines[0].Indent != 0 {
 		raise(lines[0].Number, "最初の行はインデントできません")
 	}
-	return top
+	return closeIjou(top)
+}
+
+// opensIka は「… とは 以下の手順です」で終わる行か
+func opensIka(ln *Line) bool {
+	ts := nosep(ln.Tokens)
+	return len(ts) > 0 && ts[len(ts)-1].Kind == "KW" && ikaWords[ts[len(ts)-1].S]
+}
+
+// isIjou は「以上」だけの行(文)か
+func isIjou(ln *Line) bool {
+	ts := nosep(ln.Tokens)
+	return len(ts) == 1 && isKw(ts[0], KwIjou)
+}
+
+func ikaMissing(n *LNode) {
+	ts := nosep(n.Line.Tokens)
+	raise(n.Line.Number, "「"+ts[len(ts)-1].S+"です」を閉じる「"+KwIjou+"」がありません(手順の最後の文の後に「"+KwIjou+"」だけの行を書きます)")
+}
+
+// closeIjou は「以下の手順です」の行に、「以上」までの文を深い行としてまとめる(「以上」の行は取り除く)。
+// 文は深い行か、同じ字下げで続く行(句読点の書き方では続く文)。「以上」は最後の深い行か、頭と同じ字下げの行
+func closeIjou(nodes []*LNode) []*LNode {
+	var out []*LNode
+	for i := 0; i < len(nodes); {
+		var n *LNode
+		n, i = closeOne(nodes, i)
+		out = append(out, n)
+	}
+	return out
+}
+
+func closeOne(nodes []*LNode, i int) (*LNode, int) {
+	n := nodes[i]
+	i++
+	n.Children = closeIjou(n.Children)
+	if !opensIka(n.Line) {
+		return n, i
+	}
+	if len(n.Children) > 0 {
+		if isIjou(n.Children[len(n.Children)-1].Line) {
+			n.Children = n.Children[:len(n.Children)-1]
+		} else if i < len(nodes) && isIjou(nodes[i].Line) {
+			i++
+		} else {
+			ikaMissing(n)
+		}
+	} else {
+		var body []*LNode
+		for i < len(nodes) && !isIjou(nodes[i].Line) {
+			var m *LNode
+			m, i = closeOne(nodes, i)
+			body = append(body, m)
+		}
+		if i >= len(nodes) {
+			ikaMissing(n)
+		}
+		i++
+		n.Children = body
+	}
+	if len(n.Children) == 0 {
+		ts := nosep(n.Line.Tokens)
+		raise(n.Line.Number, "「"+ts[len(ts)-1].S+"です」と「"+KwIjou+"」の間に文がありません")
+	}
+	return n, i
 }
 
 func flatten(node *LNode) []*Token {
-	out := append([]*Token{}, node.Line.Tokens...)
-	for _, c := range node.Children {
-		out = append(out, tok("SEP", "", c.Line.Number))
-		out = append(out, flatten(c)...)
-	}
-	return out
+	return withChildren(node.Line.Tokens, node.Children)
 }
 
 func isKw(t *Token, v string) bool { return t != nil && t.Kind == "KW" && t.S == v }
@@ -464,6 +524,34 @@ type ExprParser struct {
 	stopSep bool
 	inNamed bool
 	noLogic bool
+	// caseIndents は読んでいる場合分けの、場合の行の字下げ(外側から。分からなければ -1)
+	caseIndents []*int
+}
+
+// sepIndent は i から続く区切りのうち、行の切れ目の区切りの字下げ(なければ -1)
+func (p *ExprParser) sepIndent(i int) int {
+	d := -1
+	for i < len(p.tokens) && p.tokens[i].Kind == "SEP" {
+		if p.tokens[i].SepIndent > 0 {
+			d = p.tokens[i].SepIndent - 1
+		}
+		i++
+	}
+	return d
+}
+
+// outerCaseHere は次が、外側の場合分けの場合と同じか浅い字下げの行か(この場合分けより浅いときだけ)
+func (p *ExprParser) outerCaseHere(mine int) bool {
+	d := p.sepIndent(p.pos)
+	if d < 0 || mine < 0 || d >= mine {
+		return false
+	}
+	for _, o := range p.caseIndents[:len(p.caseIndents)-1] {
+		if *o >= 0 && d <= *o {
+			return true
+		}
+	}
+	return false
 }
 
 func newExprParser(tokens []*Token) *ExprParser { return &ExprParser{tokens: tokens} }
@@ -523,6 +611,9 @@ func (p *ExprParser) parseAll() Node {
 	if t := p.peek0(); t != nil {
 		if t.Kind == "RP" {
 			raise(t.Line, "対応する「(」のない「)」があります")
+		}
+		if isKw(t, KwIjou) {
+			raise(t.Line, "対応する「もし 値 が」の場合分けか「以下の手順です」のない「"+KwIjou+"」があります")
 		}
 		raise(t.Line, "余分な「"+t.Value()+"」があります")
 	}
@@ -720,6 +811,7 @@ func (p *ExprParser) pipeline(piped Node, hasPiped bool) Node {
 
 func (p *ExprParser) matchRest(line Pos) Node {
 	var pat, guard, subject Node
+	firstPat := 0
 	err := try(func() {
 		items := []Node{p.additive()}
 		for isKw(p.peek0(), KwTo) {
@@ -740,6 +832,7 @@ func (p *ExprParser) matchRest(line Pos) Node {
 			return
 		}
 		p.next()
+		firstPat = p.pos
 		pat = p.pattern()
 		guard = p.guard()
 	})
@@ -751,18 +844,34 @@ func (p *ExprParser) matchRest(line Pos) Node {
 	}
 	var cases []Case
 	var deflt Node
+	here := p.sepIndent(firstPat)
+	p.caseIndents = append(p.caseIndents, &here)
+	defer func() { p.caseIndents = p.caseIndents[:len(p.caseIndents)-1] }()
 	for {
 		checkPattern(pat, p.peek0().Line)
 		p.next()
 		cases = append(cases, Case{pat, guard, p.caseBody()})
 		t := p.peek0()
+		if isKw(t, KwIjou) {
+			p.next() // 「以上」: この場合分けを閉じる
+			break
+		}
+		if p.outerCaseHere(here) {
+			break // 外側の場合分けの字下げの行: この場合分けはここまで
+		}
 		if isKw(t, KwElse) {
 			p.next()
 			deflt = p.caseBody()
+			if isKw(p.peek0(), KwIjou) {
+				p.next()
+			}
 			break
 		}
 		if t == nil || t.Kind == "RP" || t.Kind == "PERIOD" || !p.sepHere() {
 			break
+		}
+		if here < 0 {
+			here = p.sepIndent(p.pos)
 		}
 		pat = p.pattern()
 		guard = p.guard()
@@ -1259,6 +1368,11 @@ func (p *ExprParser) atom() Node {
 		return &Num{t.N, t.Line}
 	case "STR":
 		return &Str{t.S, t.Line}
+	case "DO":
+		// 「以下の手順です」+ 文 + 「以上」
+		d := parseDo(t.Do, t.Line)
+		d.(*Do).IO = t.Form == KwIkaIO
+		return d
 	case "WORD":
 		var nxt *Token
 		if p.pos < len(p.tokens) {
@@ -1614,10 +1728,21 @@ func indexOf(raw []*Token, t *Token) int {
 	return -1
 }
 
+// withChildren は行のトークンに深い行を続ける。「以下の手順です」で終わる行なら、深い行(手順の文)を1つの DO トークンにする
 func withChildren(tokens []*Token, children []*LNode) []*Token {
+	ts := nosep(tokens)
+	if len(children) > 0 && len(ts) > 0 && ts[len(ts)-1].Kind == "KW" && ikaWords[ts[len(ts)-1].S] {
+		last := ts[len(ts)-1]
+		k := indexOf(tokens, last)
+		out := append([]*Token{}, tokens[:k]...)
+		out = append(out, &Token{Kind: "DO", S: last.S, Form: last.S, Line: last.Line, Do: children})
+		return append(out, tokens[k+1:]...)
+	}
 	out := append([]*Token{}, tokens...)
 	for _, c := range children {
-		out = append(out, tok("SEP", "", c.Line.Number))
+		sep := tok("SEP", "", c.Line.Number)
+		sep.SepIndent = c.Line.Indent + 1
+		out = append(out, sep)
 		out = append(out, flatten(c)...)
 	}
 	return out
@@ -1626,6 +1751,9 @@ func withChildren(tokens []*Token, children []*LNode) []*Token {
 func parseStatement(node *LNode) Node {
 	raw := node.Line.Tokens
 	tokens := nosep(raw)
+	if len(tokens) == 1 && isKw(tokens[0], KwIjou) {
+		raise(tokens[0].Line, "対応する「以下の手順です」のない「"+KwIjou+"」があります")
+	}
 	if isKw(tokens[0], KwSorekara) {
 		rest := raw[indexOf(raw, tokens[0])+1:]
 		inner := &LNode{&Line{node.Line.Indent, rest, node.Line.Number, node.Line.Closed}, node.Children}
@@ -1690,6 +1818,12 @@ func parseStatement(node *LNode) Node {
 		raise(head[0].Line, "「"+name+"」: 読み込んだファイルの中の名前は定義できません")
 	}
 	afterT := nosep(after)
+	if len(afterT) == 1 && afterT[0].Kind == "KW" && ikaWords[afterT[0].S] {
+		// 「挨拶する とは 以下の手順です」+ 文 + 「以上」(文は closeIjou が深い行にまとめた)
+		d := parseDo(node.Children, node.Line.Number)
+		d.(*Do).IO = afterT[0].S == KwIkaIO
+		return &Define{name, params, d, isFunction, node.Line.Number}
+	}
 	if len(afterT) == 1 && afterT[0].Kind == "WORD" && (afterT[0].S == Tejun || afterT[0].S == TejunIO) && !afterT[0].Quoted && len(node.Children) > 0 {
 		// 「挨拶する とは 手順」+ 深い行(「入出力手順」なら動作だけ)
 		d := parseDo(node.Children, node.Line.Number)

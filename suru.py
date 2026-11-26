@@ -169,13 +169,17 @@ KW_USE_POLITE = "使います"
 SOURCE_SUFFIX = ".suru"
 KW_MAIN_THREAD = "主スレッドで"  # 外部の「SDL3」 を 主スレッドで 読み込む
 KW_EXTERN = "外部の"  # 外部の「m」 を 読み込む / x を 余弦にする とは 外部の「cos」
+KW_IJOU = "以上"  # 「以下の手順です」と「もし 値 が」の場合分けを閉じる言葉
+KW_IKA = "以下の手順"  # 「挨拶する とは 以下の手順です」+ 文 + 「以上」
+KW_IKA_IO = "以下の入出力手順"
+IKA_WORDS = {KW_IKA: "手順", KW_IKA_IO: "入出力手順"}
 
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
     KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA, DESU, KW_HENSU, KW_HENSU_POLITE,
-    KW_IMPORT, KW_IMPORT_POLITE, KW_IMPORT_TE, KW_USE, KW_USE_POLITE,
+    KW_IMPORT, KW_IMPORT_POLITE, KW_IMPORT_TE, KW_USE, KW_USE_POLITE, KW_IJOU, KW_IKA, KW_IKA_IO,
 }
-KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU}
+KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU, KW_IJOU}
 CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}  # 行頭に来たら前の文の続きとみなす
 
 # 引数を区別する格助詞。長いものから順に照合する(「より」「から」を先に)
@@ -360,7 +364,7 @@ def tokenize_line(text: str, line: int) -> list[Token]:
             buf += c
         i += 1
     flush()
-    return drop_desu(tokens)
+    return drop_desu(join_ika(tokens))
 
 
 def join_module_names(tokens: list[Token], modules: set) -> list[Token]:
@@ -384,6 +388,27 @@ def join_module_names(tokens: list[Token], modules: set) -> list[Token]:
             # 空白の書き方の「数学内の 円周率」
             out.append(Token(nxt.kind, t.value + nxt.value, t.line, nxt.form, nxt.quoted, nxt.negated))
             i += 2
+            continue
+        out.append(t)
+        i += 1
+    return out
+
+
+def join_ika(tokens: list[Token]) -> list[Token]:
+    """「以下の手順」「以下 の 手順」「以下の入出力手順」を1つの言葉にする"""
+    out: list[Token] = []
+    i = 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t.kind == "WORD" and not t.quoted and t.value in IKA_WORDS:
+            out.append(Token("KW", t.value, t.line))
+            i += 1
+            continue
+        if (t.kind == "WORD" and not t.quoted and t.value == "以下" and i + 2 < len(tokens) and is_kw(tokens[i + 1], KW_NO)
+                and tokens[i + 2].kind == "WORD" and not tokens[i + 2].quoted
+                and "以下の" + tokens[i + 2].value in IKA_WORDS):
+            out.append(Token("KW", "以下の" + tokens[i + 2].value, t.line))
+            i += 3
             continue
         out.append(t)
         i += 1
@@ -683,7 +708,7 @@ def tokenize_punct_line(text: str, line: int) -> list[Token]:
             buf += c
         i += 1
     flush()
-    return tokens
+    return join_ika(tokens)
 
 
 def is_punct_line(text: str) -> bool:
@@ -1270,11 +1295,12 @@ def build_layout(lines: list[Line]) -> list[Node]:
                 raise SuruError("予期しないインデントです", ln.number)
             pos += 1
             node = Node(ln)
-            if not ln.closed and pos < len(lines) and lines[pos].indent > indent:
+            if (not ln.closed or opens_ika(ln)) and pos < len(lines) and lines[pos].indent > indent:
                 node.children = block(indent + 1)
             # 行頭が ならば/そうでなければ の行は前の文の続き
             first = ln.tokens[0]
-            if nodes and not ln.closed and not nodes[-1].line.closed and first.kind == "KW" and first.value in CONTINUATION_KEYWORDS:
+            if (nodes and not ln.closed and not nodes[-1].line.closed and first.kind == "KW" and first.value in CONTINUATION_KEYWORDS
+                    and not opens_ika(nodes[-1].line)):
                 prev = nodes[-1]
                 prev.children.append(node)
             else:
@@ -1284,16 +1310,69 @@ def build_layout(lines: list[Line]) -> list[Node]:
     top = block(0)
     if lines and lines[0].indent != 0:
         raise SuruError("最初の行はインデントできません", lines[0].number)
-    return top
+    return close_ijou(top)
+
+
+def opens_ika(ln: Line) -> bool:
+    """「… とは 以下の手順です」で終わる行か"""
+    toks = nosep(ln.tokens)
+    return bool(toks) and toks[-1].kind == "KW" and toks[-1].value in IKA_WORDS
+
+
+def is_ijou(ln: Line) -> bool:
+    """「以上」だけの行(文)か"""
+    toks = nosep(ln.tokens)
+    return len(toks) == 1 and is_kw(toks[0], KW_IJOU)
+
+
+def _ika_missing(n: Node) -> SuruError:
+    word = nosep(n.line.tokens)[-1].value
+    return SuruError(f"「{word}です」を閉じる「{KW_IJOU}」がありません(手順の最後の文の後に「{KW_IJOU}」だけの行を書きます)",
+                     n.line.number)
+
+
+def close_ijou(nodes: list[Node]) -> list[Node]:
+    """「以下の手順です」の行に、「以上」までの文を深い行としてまとめる(「以上」の行は取り除く)。
+    文は深い行か、同じ字下げで続く行(句読点の書き方では続く文)。「以上」は最後の深い行か、頭と同じ字下げの行"""
+    out: list[Node] = []
+    i = 0
+    while i < len(nodes):
+        n, i = _close_one(nodes, i)
+        out.append(n)
+    return out
+
+
+def _close_one(nodes: list[Node], i: int) -> tuple[Node, int]:
+    n = nodes[i]
+    i += 1
+    n.children = close_ijou(n.children)
+    if not opens_ika(n.line):
+        return n, i
+    if n.children:
+        if is_ijou(n.children[-1].line):
+            n.children.pop()
+        elif i < len(nodes) and is_ijou(nodes[i].line):
+            i += 1
+        else:
+            raise _ika_missing(n)
+    else:
+        body: list[Node] = []
+        while i < len(nodes) and not is_ijou(nodes[i].line):
+            m, i = _close_one(nodes, i)
+            body.append(m)
+        if i >= len(nodes):
+            raise _ika_missing(n)
+        i += 1
+        n.children = body
+    if not n.children:
+        word = nosep(n.line.tokens)[-1].value
+        raise SuruError(f"「{word}です」と「{KW_IJOU}」の間に文がありません", n.line.number)
+    return n, i
 
 
 def flatten(node: Node) -> list[Token]:
     """行とその深い行を1つのトークン列にする。行の切れ目には区切り(SEP)を入れる(場合分けで使う)"""
-    out = list(node.line.tokens)
-    for c in node.children:
-        out.append(Token("SEP", "", c.line.number))
-        out.extend(flatten(c))
-    return out
+    return _with_children(node.line.tokens, node.children)
 
 
 # ---------------------------------------------------------------------------
@@ -1417,6 +1496,7 @@ class ExprParser:
         self.stop_sep = False
         self.in_named = False  # 「横 は 値 …」の値を読んでいる
         self.no_logic = False  # パターンを読んでいる間は「かつ」を条件の始まりとして残す
+        self.case_indents: list[list[int]] = []  # 読んでいる場合分けの、場合の行の字下げ(外側から。分からなければ -1)
 
     def _skip(self, i: int) -> int:
         while i < len(self.tokens) and self.tokens[i].kind == "SEP":
@@ -1456,6 +1536,8 @@ class ExprParser:
         if tok is not None:
             if tok.kind == "RP":
                 raise SuruError("対応する「(」のない「)」があります", tok.line)
+            if is_kw(tok, KW_IJOU):
+                raise SuruError(f"対応する「もし 値 が」の場合分けか「以下の手順です」のない「{KW_IJOU}」があります", tok.line)
             raise SuruError(f"余分な「{tok.value}」があります", tok.line)
         return expr
 
@@ -1604,6 +1686,22 @@ class ExprParser:
 
     # --- パターンマッチ ---------------------------------------------------
     # もし 値 が パターン ならば 式 { 区切り パターン ならば 式 } [ そうでなければ 式 ]
+    def sep_indent(self, i: int) -> int:
+        """i から続く区切りのうち、行の切れ目の区切りの字下げ(なければ -1)"""
+        d = -1
+        while i < len(self.tokens) and self.tokens[i].kind == "SEP":
+            if isinstance(self.tokens[i].value, int):
+                d = self.tokens[i].value
+            i += 1
+        return d
+
+    def outer_case_here(self, mine: int) -> bool:
+        """次が、外側の場合分けの場合と同じか浅い字下げの行か(この場合分けより浅いときだけ)"""
+        d = self.sep_indent(self.pos)
+        if d < 0 or mine < 0 or d >= mine:
+            return False
+        return any(0 <= o[0] and d <= o[0] for o in self.case_indents[:-1])
+
     def match_rest(self, line: int) -> Match | None:
         """「もし」の後が「値 が パターン ならば」なら場合分けとして読む。違えば None"""
         try:
@@ -1618,6 +1716,7 @@ class ExprParser:
             if not is_kw(self.peek(), KW_GA):
                 return None
             self.next()
+            first_pat = self.pos
             pat = self.pattern()
             guard = self.guard()
         except SuruError:
@@ -1626,22 +1725,36 @@ class ExprParser:
             return None
         cases: list = []
         default = None
-        while True:
-            check_pattern(pat, self.peek().line)
-            self.next()  # ならば
-            cases.append((pat, guard, self.case_body()))
-            tok = self.peek()
-            if is_kw(tok, KW_ELSE):
-                self.next()
-                default = self.case_body()
-                break
-            if tok is None or tok.kind in ("RP", "PERIOD") or not self.sep_here():
-                break
-            pat = self.pattern()
-            guard = self.guard()
-            tok = self.peek()
-            if not is_kw(tok, KW_THEN):
-                raise SuruError("場合の後に「ならば」が必要です", tok.line if tok else self.last_line())
+        here = [self.sep_indent(first_pat)]
+        self.case_indents.append(here)
+        try:
+            while True:
+                check_pattern(pat, self.peek().line)
+                self.next()  # ならば
+                cases.append((pat, guard, self.case_body()))
+                tok = self.peek()
+                if is_kw(tok, KW_IJOU):
+                    self.next()  # 「以上」: この場合分けを閉じる
+                    break
+                if self.outer_case_here(here[0]):
+                    break  # 外側の場合分けの字下げの行: この場合分けはここまで
+                if is_kw(tok, KW_ELSE):
+                    self.next()
+                    default = self.case_body()
+                    if is_kw(self.peek(), KW_IJOU):
+                        self.next()
+                    break
+                if tok is None or tok.kind in ("RP", "PERIOD") or not self.sep_here():
+                    break
+                if here[0] < 0:
+                    here[0] = self.sep_indent(self.pos)
+                pat = self.pattern()
+                guard = self.guard()
+                tok = self.peek()
+                if not is_kw(tok, KW_THEN):
+                    raise SuruError("場合の後に「ならば」が必要です", tok.line if tok else self.last_line())
+        finally:
+            self.case_indents.pop()
         if default is None:
             check_exhaustive(cases, line)
         return Match(subject, cases, default, line)
@@ -2005,6 +2118,11 @@ class ExprParser:
             return Num(tok.value, tok.line)
         if tok.kind == "STR":
             return Str(tok.value, tok.line)
+        if tok.kind == "DO":
+            # 「以下の手順です」+ 文 + 「以上」
+            do = parse_do(tok.value, tok.line)
+            do.io = tok.form == KW_IKA_IO
+            return do
         if tok.kind == "WORD":
             nxt = self.tokens[self.pos] if self.pos < len(self.tokens) else None
             if tok.value in (TEJUN, TEJUN_IO) and not tok.quoted and nxt is not None and nxt.kind == "LP":
@@ -2216,9 +2334,14 @@ def _index_of(raw: list[Token], tok: Token) -> int:
 
 
 def _with_children(tokens: list[Token], children: list[Node]) -> list[Token]:
+    """行のトークンに深い行を続ける。「以下の手順です」で終わる行なら、深い行(手順の文)を1つの DO トークンにする"""
+    toks = nosep(tokens)
+    if children and toks and toks[-1].kind == "KW" and toks[-1].value in IKA_WORDS:
+        k = len(tokens) - 1 - tokens[::-1].index(toks[-1])
+        return list(tokens[:k]) + [Token("DO", children, toks[-1].line, toks[-1].value)] + list(tokens[k + 1 :])
     out = list(tokens)
     for c in children:
-        out.append(Token("SEP", "", c.line.number))
+        out.append(Token("SEP", c.line.indent, c.line.number))
         out.extend(flatten(c))
     return out
 
@@ -2226,6 +2349,8 @@ def _with_children(tokens: list[Token], children: list[Node]) -> list[Token]:
 def parse_statement(node: Node) -> Any:
     raw = node.line.tokens
     tokens = nosep(raw)
+    if len(tokens) == 1 and is_kw(tokens[0], KW_IJOU):
+        raise SuruError(f"対応する「以下の手順です」のない「{KW_IJOU}」があります", tokens[0].line)
     if is_kw(tokens[0], KW_SOREKARA):
         rest = raw[_index_of(raw, tokens[0]) + 1 :]
         inner_node = Node(Line(node.line.indent, rest, node.line.number, node.line.closed), node.children)
@@ -2273,6 +2398,11 @@ def parse_statement(node: Node) -> Any:
     if MODULE_SEP in name and not head[0].qualified:
         raise SuruError(f"「{name}」: 読み込んだファイルの中の名前は定義できません", head[0].line)
     after_t = nosep(after)
+    if len(after_t) == 1 and after_t[0].kind == "KW" and after_t[0].value in IKA_WORDS:
+        # 「挨拶する とは 以下の手順です」+ 文 + 「以上」(文は close_ijou が深い行にまとめた)
+        do = parse_do(node.children, node.line.number)
+        do.io = after_t[0].value == KW_IKA_IO
+        return Define(name, params, do, is_function, node.line.number)
     if (len(after_t) == 1 and after_t[0].kind == "WORD" and after_t[0].value in (TEJUN, TEJUN_IO)
             and not after_t[0].quoted and node.children):
         # 「挨拶する とは 手順」+ 深い行: 深い行を順に行う(「入出力手順」なら動作だけ)
@@ -6824,6 +6954,12 @@ class Repl:
         text = "\n".join(buf)
         if _paren_depth(text) > 0:
             return False
+        try:
+            lines = split_lines(text)
+        except SuruError:
+            lines = []
+        if sum(opens_ika(ln) for ln in lines) > sum(is_ijou(ln) for ln in lines):
+            return False  # 「以下の手順です」の「以上」がまだない
         if is_punct_line(text):
             # 句読点の書き方: 「。」で終わるまで読む
             return text.rstrip().endswith(PERIOD) or not text.strip()
@@ -6996,7 +7132,7 @@ class Repl:
         for env in (self.interp.shared, self.interp.globals):
             names.update(n for n in env.vars if not n.startswith("\0"))
         names.update(":" + k for k in REPL_COMMANDS)
-        names.update((KW_TOWA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, KW_SOREKARA, KW_RETURN, KW_LAMBDA, KW_IMPORT))
+        names.update((KW_TOWA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, KW_SOREKARA, KW_RETURN, KW_LAMBDA, KW_IMPORT, KW_IKA, KW_IJOU))
         return sorted(names)
 
 

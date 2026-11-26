@@ -46,6 +46,10 @@ const (
 	KwUse         = "使う"
 	KwUsePolite   = "使います"
 	SourceSuffix  = ".suru"
+	// KwIjou は「以下の手順です」と「もし 値 が」の場合分けを閉じる言葉
+	KwIjou  = "以上"
+	KwIka   = "以下の手順" // 「挨拶する とは 以下の手順です」+ 文 + 「以上」
+	KwIkaIO = "以下の入出力手順"
 
 	WO        = "を"
 	GA        = "が"
@@ -87,9 +91,10 @@ var operators = map[string]string{
 var keywords = setOf(
 	KwTo, KwTowa, KwNo, KwGa, KwIf, KwThen, KwElse, KwLambda, KwReturn, KwProviso,
 	KwKa, KwWa, KwToiu, KwKumi, KwSeishitsu, KwSorekara, KwKatsu, KwMataha, Desu, KwHensu, KwHensuPolite,
-	KwImport, KwImportPolit, KwImportTe, KwUse, KwUsePolite,
+	KwImport, KwImportPolit, KwImportTe, KwUse, KwUsePolite, KwIjou, KwIka, KwIkaIO,
 )
-var kanjiKeywords = setOf(KwKumi, KwSeishitsu)
+var kanjiKeywords = setOf(KwKumi, KwSeishitsu, KwIjou)
+var ikaWords = setOf(KwIka, KwIkaIO)
 var continuationKeywords = setOf(KwThen, KwElse)
 var particles = []string{"より", "から", "を", "に", "で", "へ"}
 var particleSet = setOf(particles...)
@@ -117,6 +122,10 @@ type Token struct {
 	Negated bool
 	// Qualified は読み込んだファイルの型か形の名前に、そのファイルの前置きを付けたもの(「部品内の点」)
 	Qualified bool
+	// SepIndent は行の切れ目の SEP の、次の行の字下げ + 1(「、」の SEP なら 0)
+	SepIndent int
+	// Do は DO のトークン(「以下の手順です」+ 文 + 「以上」)の文。Form が「以下の手順」か「以下の入出力手順」
+	Do []*LNode
 }
 
 // Value は Python の str(tok.value) にあたる表示
@@ -540,7 +549,27 @@ func tokenizeLine(text string, line int) ([]*Token, error) {
 	if err := flush(); err != nil {
 		return nil, err
 	}
-	return dropDesu(tokens)
+	return dropDesu(joinIka(tokens))
+}
+
+// joinIka は「以下の手順」「以下 の 手順」「以下の入出力手順」を1つの言葉にする
+func joinIka(tokens []*Token) []*Token {
+	var out []*Token
+	for i := 0; i < len(tokens); i++ {
+		t := tokens[i]
+		if t.Kind == "WORD" && !t.Quoted && ikaWords[t.S] {
+			out = append(out, tok("KW", t.S, t.Line))
+			continue
+		}
+		if t.Kind == "WORD" && !t.Quoted && t.S == "以下" && i+2 < len(tokens) && isKw(tokens[i+1], KwNo) &&
+			tokens[i+2].Kind == "WORD" && !tokens[i+2].Quoted && ikaWords["以下の"+tokens[i+2].S] {
+			out = append(out, tok("KW", "以下の"+tokens[i+2].S, t.Line))
+			i += 2
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 func joinModuleNames(tokens []*Token, modules map[string]bool) ([]*Token, error) {
@@ -1030,7 +1059,7 @@ func tokenizePunctLine(text string, line int) ([]*Token, error) {
 	if err := flush(); err != nil {
 		return nil, err
 	}
-	return tokens, nil
+	return joinIka(tokens), nil
 }
 
 func isPunctLine(text string) bool {
