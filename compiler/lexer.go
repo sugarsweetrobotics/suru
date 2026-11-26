@@ -6,6 +6,7 @@ package compiler
 import (
 	"math"
 	"math/big"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -551,6 +552,8 @@ func tokenizeLine(text string, line int) ([]*Token, error) {
 			tokens = append(tokens, tok("RP", ")", here))
 		case c == '・':
 			return nil, reservedError(here)
+		case c == '【' || c == '】':
+			return nil, errAt(here, "「【】」は「以下は【道】です」のような準クォートの頭にだけ書けます(文字列の中では使えます)")
 		default:
 			buf = append(buf, c)
 		}
@@ -1071,6 +1074,8 @@ func tokenizePunctLine(text string, line int) ([]*Token, error) {
 			tokens = append(tokens, tok("PERIOD", Period, here))
 		case c == '・':
 			return nil, reservedError(here)
+		case c == '【' || c == '】':
+			return nil, errAt(here, "「【】」は「以下は【道】です」のような準クォートの頭にだけ書けます(文字列の中では使えます)")
 		default:
 			buf = append(buf, c)
 		}
@@ -1112,6 +1117,100 @@ type Line struct {
 	Tokens []*Token
 	Number Pos
 	Closed bool
+	// HasQuasi なら準クォート「以下は【道】です … 以上です」の行。Quasi はその中身(字下げを除いたもの)で、
+	// Tokens の最後が QUASI の字句。QuasiEnd は「以上」の行の番号
+	HasQuasi bool
+	Quasi    string
+	QuasiEnd int
+}
+
+// --- 準クォート(#192): 「以下は【道】です」+ 中身 + 「以上です」。中身はライブラリの「道展開する」で する に展開する ---
+
+const quasiSuffix = "展開する" // 【道】の展開の関数は「道展開する」
+const quasiMaxDepth = 20   // 展開したコードの中の準クォートを展開する深さの上限
+
+// 空白は半角・全角の空白とタブ(suru.py と同じ)
+var (
+	quasiTop  = regexp.MustCompile(`^以下[ \t　]*は[ \t　]*【([^【】 \t　]+)】[ \t　]*(?:です)?[ \t　]*。?[ \t　]*(?:#.*)?$`)
+	quasiExpr = regexp.MustCompile(`^(.*?[^ \t　])[ \t　]*とは[ \t　]*以下[ \t　]*の[ \t　]*【([^【】 \t　]+)】[ \t　]*(?:です)?[ \t　]*。?[ \t　]*(?:#.*)?$`)
+	quasiEnd  = regexp.MustCompile(`^以上[ \t　]*(?:です)?[ \t　]*。?[ \t　]*(?:#.*)?$`)
+)
+
+func indentOf(raw string) int {
+	w := 0
+	for _, c := range raw {
+		x := indentWidth(c)
+		if x == 0 {
+			break
+		}
+		w += x
+	}
+	return w
+}
+
+// quasiHeader は準クォートの頭の行なら、名前と、式の形の「x とは」の前の部分
+func quasiHeader(raw string) (name, before string, isExpr, ok bool) {
+	text := strings.TrimSpace(raw)
+	if !strings.Contains(text, "【") {
+		return
+	}
+	if m := quasiTop.FindStringSubmatch(text); m != nil {
+		return m[1], "", false, true
+	}
+	if m := quasiExpr.FindStringSubmatch(text); m != nil && !strings.Contains(m[1], "「") {
+		return m[2], m[1], true, true
+	}
+	return
+}
+
+// quasiBlock は頭の行 k の後ろの中身(字下げを除いて改行でつないだもの)と、「以上」の行の位置
+func quasiBlock(raws []string, k, indent int, name string) (string, int, error) {
+	var body []string
+	j := k + 1
+	for ; j < len(raws); j++ {
+		raw := raws[j]
+		if strings.TrimSpace(raw) != "" {
+			w := indentOf(raw)
+			if w <= indent {
+				if quasiEnd.MatchString(strings.TrimSpace(raw)) && w == indent {
+					break
+				}
+				return "", 0, errAt(Pos{j + 1, 0, curPosFile}, "「以下は【"+name+"】です」の中身は頭より深く字下げして、頭と同じ字下げの「以上です」で閉じてください")
+			}
+		}
+		body = append(body, raw)
+	}
+	if j >= len(raws) {
+		return "", 0, errAt(Pos{k + 1, 0, curPosFile}, "「以下は【"+name+"】です」を閉じる「以上です」がありません")
+	}
+	for len(body) > 0 && strings.TrimSpace(body[len(body)-1]) == "" {
+		body = body[:len(body)-1]
+	}
+	for len(body) > 0 && strings.TrimSpace(body[0]) == "" {
+		body = body[1:]
+	}
+	if len(body) == 0 {
+		return "", 0, errAt(Pos{k + 1, 0, curPosFile}, "「以下は【"+name+"】です」と「以上です」の間に中身がありません")
+	}
+	least := -1
+	for _, b := range body {
+		if strings.TrimSpace(b) != "" {
+			if w := indentOf(b); least < 0 || w < least {
+				least = w
+			}
+		}
+	}
+	var out []string
+	for _, b := range body {
+		rs := []rune(b)
+		w, n := 0, 0
+		for n < len(rs) && indentWidth(rs[n]) > 0 && w+indentWidth(rs[n]) <= least {
+			w += indentWidth(rs[n])
+			n++
+		}
+		out = append(out, strings.TrimRightFunc(string(rs[n:]), unicode.IsSpace))
+	}
+	return strings.Join(out, "\n"), j, nil
 }
 
 func depthZeroPeriods(tokens []*Token) []int {
@@ -1182,6 +1281,23 @@ func opensPunct(raws []string, k int) bool {
 	return false
 }
 
+// splitSourceLinesAt は splitSourceLines と同じで、すべての位置を at の行にする(準クォートを展開したコードは、頭の行を指す)
+func splitSourceLinesAt(source string, at Pos) ([]*Line, error) {
+	lines, err := splitSourceLines(source)
+	if err != nil {
+		return nil, err
+	}
+	p := Pos{at.Line, 0, at.File}
+	for _, ln := range lines {
+		ln.Number = p
+		for _, t := range ln.Tokens {
+			t.Line = p
+		}
+		ln.QuasiEnd = 0
+	}
+	return lines, nil
+}
+
 func splitSourceLines(source string) ([]*Line, error) {
 	var lines []*Line
 	raws := SplitLines(source)
@@ -1195,6 +1311,25 @@ func splitSourceLines(source string) ([]*Line, error) {
 				break
 			}
 			indent += w
+		}
+		if name, before, isExpr, ok := quasiHeader(raw); ok {
+			body, end, err := quasiBlock(raws, k, indent, name)
+			if err != nil {
+				return nil, err
+			}
+			var toks []*Token
+			if isExpr {
+				toks, err = tokenizeLine(before, number)
+				if err != nil {
+					return nil, err
+				}
+				toks = append(toks, &Token{Kind: "KW", S: KwTowa, Line: Pos{number, 0, curPosFile}})
+			}
+			toks = append(toks, &Token{Kind: "QUASI", S: name, Line: Pos{number, 0, curPosFile}})
+			lines = append(lines, &Line{Indent: indent, Tokens: toks, Number: Pos{number, 0, curPosFile},
+				HasQuasi: true, Quasi: body, QuasiEnd: end + 1})
+			k = end + 1
+			continue
 		}
 		if !isPunctLine(raw) && !opensPunct(raws, k) {
 			tokens, err := tokenizeLine(raw, number)

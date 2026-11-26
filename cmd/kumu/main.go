@@ -290,6 +290,7 @@ func compileTo(source, path, exe, opt string, check bool, cb *CBuild) (built boo
 
 func main() {
 	compiler.LibFS = mustSub()
+	native.InstallExpander()
 	if d := os.Getenv("SURU_LIB"); d != "" {
 		compiler.LibDir = d
 	}

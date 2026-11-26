@@ -1441,24 +1441,30 @@ s を 字数計測する とは 外部の「strlen」 で 文字列 を 受け�
 1. **A record definition can give each field a type.** `会員 とは 番号 は 数 で 名前 は 文字列 で 年齢 は 数 の 組` has the same shape as building a record by field name (`横 は 3 で 縦 は 4 の 点`): `field は type`, separated by `で`. Types are written as in type declarations (`数`, `数 の リスト`, `（数 を 受け取って 数 を 返すこと）`, other record types, including ones defined later in the file). This is the first stage of the plan for deriving and quasi-quotes (#192): deriving needs to know the field types.
 2. **All fields or none.** Within one type, either every field has a type or none does (forms without fields, like `葉`, do not count). The old form `番号 と 名前 の 組` keeps inferring field types as before. Fields with the same name in different forms of one type must be given the same type.
 3. **Values are checked against the written types.** `（「1」 と 「花子」 と 20 の 会員）` is an error: 「「会員」の「番号」は数ですが、文字列が渡されています」. In error messages and type declarations such a type is just its name (`会員`).
-4. **甲・乙 … are the type's parameters.** In `木` above, `値 は 甲` makes `木` take one type parameter, so the type is written `数 の 木`. Type parameters are ordered by where 甲・乙 … first appear in the field types (not by field order as in inferred records). A field whose type is the type itself without parameters (`左 は 木`) has the same parameters as the value it is in.
-5. **The same everywhere.** The interpreter, both compilers (Python and Go `suruc`), the language server, and the する-written parser `lib/構文.suru` (used by 点検) read this form.
-
-### Field types in records
-
-```suru
-会員 とは 番号 は 数 で 名前 は 文字列 で 年齢 は 数 の 組
-木 とは 値 は 甲 で 左 は 木 で 右 は 木 の 節 か 葉
-
-（1 と 「花子」 と 20 の 会員） の 名前 を 表示する
-（1 と 葉 と 葉 の 節） の 値 を 表示する
-```
-
-1. **A record definition can give each field a type.** `会員 とは 番号 は 数 で 名前 は 文字列 で 年齢 は 数 の 組` has the same shape as building a record by field name (`横 は 3 で 縦 は 4 の 点`): `field は type`, separated by `で`. Types are written as in type declarations (`数`, `数 の リスト`, `（数 を 受け取って 数 を 返すこと）`, other record types, including ones defined later in the file). This is the first stage of the plan for deriving and quasi-quotes (#192): deriving needs to know the field types.
-2. **All fields or none.** Within one type, either every field has a type or none does (forms without fields, like `葉`, do not count). The old form `番号 と 名前 の 組` keeps inferring field types as before. Fields with the same name in different forms of one type must be given the same type.
-3. **Values are checked against the written types.** `（「1」 と 「花子」 と 20 の 会員）` is an error: 「「会員」の「番号」は数ですが、文字列が渡されています」. In error messages and type declarations such a type is just its name (`会員`).
 4. **甲・乙 … are the type's parameters.** In `木` above, `値 は 甲` makes `木` take one type parameter, so the type is written `数 の 木`. Type parameters are numbered by the order 甲・乙 … first appear in the field types (not by field order as in inferred records). A field whose type is the type itself without parameters (`左 は 木`) has the same parameters as the value it is in.
 5. **The same everywhere.** The interpreter, both compilers (Python and Go `suruc`), the language server, and the する-written parser `lib/構文.suru` (used by 点検) read this form.
+
+### Quasi-quotes
+
+```suru
+「道」 を 読み込む
+
+以下は【定】です
+  x 10
+  y x * 2
+以上です
+
+z とは 以下の【式】です
+  y + 3
+以上です
+```
+
+1. **A block written in another notation becomes Suru code.** `以下は【X】です` … `以上です` hands the lines in between (with their common indentation removed) to the function `X展開する` as one string, and puts the Suru code it returns in place of the block. This is the second and third stages of the plan for deriving and quasi-quotes (#192). Libraries will use it for things like table definitions (【表】) and routes (【道】).
+2. **The expander is an ordinary function.** `X展開する` has the type `文字列 を X展開する は 文字列 の 成否` and must be defined in a file the program reads (`「道」 を 読み込む`). If no file read has it, or two do, it is an error. It returns the code with `成功`, or an explanation with `失敗`. When the explanation starts with `N行目:`, the error points at the N-th line of the block.
+3. **Two forms.** `以下は【X】です` at the top level (not indented) is replaced by the definitions and statements the expander returns. `x とは 以下の【X】です` makes the returned code the value of `x` (one line becomes an expression; several lines become the indented body of `x`). The body must be indented deeper than the header, and `以上です` must have the same indentation as the header. `です` and `。` can be left out, as with other `以上`.
+4. **When it runs.** Quasi-quotes are expanded while the program is read, before type checking, so errors in the expanded code are reported like other errors (at the header line). The expanded code may contain quasi-quotes itself (up to 20 levels), but not `読み込む`. The interpreter runs the expander in-process. `suruc` compiles the expander into a small program, keeps it in the cache folder (the same IR is not built again), and runs it; `kumu` and the language server do the same.
+5. **Seeing the result.** `suru --展開 prog.suru` and `suruc --展開 prog.suru` (also `--expand`) print the program with every quasi-quote replaced by its expansion.
+6. **【 and 】 are reserved.** Outside strings, `【` and `】` can only be used in a quasi-quote header. 点検 (`lib/字句.suru` and `lib/構文.suru`) reads the header without expanding it: the file that defines `X展開する` counts as used, and so do names written in the block.
 
 ## License
 
