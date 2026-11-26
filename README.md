@@ -1330,10 +1330,23 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 1. **The sentences from `X とは 以下の手順です` to `以上` are a procedure.** Write the sentences on deeper lines, or continue at the same indent. Write `以上` as the last deeper line or on a line at the indent of the head. Unlike `手順（…）`, no parenthesis stays open over many lines, and the start and end read like a Japanese document ("the steps below are … that is all") (#161). `以下 の 手順` (without です), `以下の入出力手順です` (checked like 「入出力手順」) and `以上です` work too. `手順（…）` and `… とは 手順` + deeper lines work as before.
 2. **「以上」 is required.** 「以下の手順です」 and 「以上」 are a pair, so forgetting it gives 「「以下の手順です」を閉じる「以上」がありません」 ("there is no 以上 closing 以下の手順です"), no sentences between them give 「「以下の手順です」と「以上」の間に文がありません」, and a 「以上」 with no 「以下の手順です」 gives 「対応する「以下の手順です」のない「以上」があります」.
 3. **In the punctuation style, sentences separate them.** As in `挨拶するとは、以下の手順です。「a」を表示する。「b」を表示する。以上です。`, the sentences up to 「以上。」 are the procedure's sentences. The lines after 「以下の手順です。」 may be indented.
-4. **It can be written in a branch of a case analysis.** As in `そうでなければ 以下の手順です` + deeper lines + `以上`, it can go anywhere an expression can (the same as writing `手順（…）` there).
+4. **It can be written in a branch of a case analysis.** As in `そうでなければ 以下の手順です` + deeper lines + `以上`, it can go anywhere an expression can (the same as writing `手順（…）` there). For the `ならば` branch, see "そうでなければ after a procedure in the `ならば` branch".
 5. **「以上」 also closes the innermost 「もし 値 が」.** It is optional, and used to write a nested case analysis on one line or in the punctuation style. In `もしxが1ならば、もしyが1ならば「a」、2ならば「b」以上です、2ならば「c」、そうでなければ「d」。` the inner case analysis ends at 「以上」, and `2ならば「c」` is a case of the outer one.
 6. **Indentation also ends a nested case analysis.** When a line shallower than the cases of the inner 「もし 値 が」, at the indent of the outer cases, comes, the inner one ends there. Previously the inner case analysis took the outer cases after it (`2 ならば 「c」` or `そうでなければ …`) as its own.
 7. **Everything reads it the same way.** The Python version, the Go version (`suruc`), the lexer and parser written in Suru (`lib/字句.suru`, `lib/構文.suru`), the linter, the VS Code extension's highlighting and the interactive mode (which reads up to 「以上」 before running) treat it the same. The example is `examples/blocks.suru`.
+8. **そうでなければ after a procedure in the `ならば` branch.** After `もし … ならば 以下の手順です` + deeper lines + a deeper `以上`, a `そうでなければ …` line can follow at the indent of the `もし` line (#190). The procedure is closed by the deeper `以上`, and the case analysis continues from the next `そうでなければ`. Previously a `そうでなければ` after a `以下の手順です` line was not read as the continuation of the sentence before it, so the long branch had to be moved to the end.
+
+```suru
+n を 報告する とは 以下の手順です
+  もし n > 10 ならば 以下の手順です
+    「多い: 」 を 続表示する
+    n を 表示する
+    以上です
+  そうでなければ 「少ない」 を 表示する
+  以上です
+```
+
+Only `そうでなければ …` (and `ならば …`) lines may follow that `以上`; any other sentence is still the error 「「以上」の後に文があります」 ("there is a sentence after 以上"). When `以上` is written at the indent of the `もし` line, it closes the procedure, so `そうでなければ` cannot follow. The old form `ならば 手順` + deeper lines, like `そうでなければ 手順`, is not available inside an expression.
 
 ### Errors inside libraries
 
@@ -1407,6 +1420,7 @@ s を 字数計測する とは 外部の「strlen」 で 文字列 を 受け�
 5. **Lines are deeper than the header, or at the same indent.** The same as `以下の手順です`. Comment lines and blank lines are allowed inside. A missing `以上`, an empty block, a line in neither shape, and the same name twice are errors. In the punctuation style it is `以下は外部の入出力動作です。文字列を字数計測するは、「strlen」で整数を返します。以上です。`.
 6. **Everything reads them the same way.** Before building the indentation tree, they are turned into the two lines (declaration and definition). The interpreter, the Python and Go compilers, the lexer and parser written in する (`lib/字句.suru`, `lib/構文.suru`), the linter, the REPL (which reads until 「以上」) and the VS Code highlighting all do the same. The libm functions in `lib/算術.suru` are written with `以下は外部の関数です`.
 7. **The header starts with 「以下は」.** The header begins a sentence, so it reads `以下は外部の関数です` / `以下は外部の入出力動作です`, while `以下の手順です` stays as it is because it comes after `とは` in the middle of a sentence. The 0.9.0 spelling `以下の外部の関数です` / `以下の外部の入出力動作です` (and `以下 の 外部 の …`) still works with the same meaning. Error messages quote the header as you wrote it.
+8. **`外部の（f）`, which calls through a function pointer, can also be written on one line or in a block.** `p を f で 呼出する とは 外部の（f） で 番地 を 番地 で 受け取って 無 を 返す 入出力動作です` means the same as the two lines `番地 を 番地 で 呼出する は 無 を 返す 入出力動作` and `p を f で 呼出する とは 外部の（f）` (#189). The rules are those of `外部の「…」`: the types follow the definition's particles in order, and f has the type `番地` (f is not passed to C). In a block, use the definition form with names: `p を f で 呼出する とは （f） で 番地 を 番地 で 受け取って 無 を 返します`. The short `は` form has no parameter names, so it cannot say which argument is the pointer, and `（f）` is not allowed there (the error points to the definition form).
 
 ### Blank lines between definitions (lint)
 

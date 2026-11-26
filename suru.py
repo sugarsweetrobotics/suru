@@ -1371,10 +1371,11 @@ def build_layout(lines: list[Line]) -> list[Node]:
             node = Node(ln)
             if (not ln.closed or opens_ika(ln)) and pos < len(lines) and lines[pos].indent > indent:
                 node.children = block(indent + 1)
-            # 行頭が ならば/そうでなければ の行は前の文の続き
+            # 行頭が ならば/そうでなければ の行は前の文の続き。
+            # 「… ならば 以下の手順です」の後は、深い行の「以上」で閉じていれば続ける(#190)
             first = ln.tokens[0]
             if (nodes and not ln.closed and not nodes[-1].line.closed and first.kind == "KW" and first.value in CONTINUATION_KEYWORDS
-                    and not opens_ika(nodes[-1].line)):
+                    and (not opens_ika(nodes[-1].line) or ika_closed_deep(nodes[-1]))):
                 prev = nodes[-1]
                 prev.children.append(node)
             else:
@@ -1397,6 +1398,11 @@ def opens_ext_block(ln: Line) -> bool:
     """「以下は外部の入出力動作です」「以下は外部の関数です」(「以下の外部の…」も)だけの行か"""
     toks = nosep(ln.tokens)
     return len(toks) == 1 and toks[0].kind == "KW" and toks[0].value in EXT_BLOCK_WORDS
+
+
+def ika_closed_deep(n: Node) -> bool:
+    """「以下の手順です」の行で、深い行の「以上」で既に閉じているか(その後の続きの行は式の続き)"""
+    return any(is_ijou(c.line) for c in n.children)
 
 
 def is_ijou(ln: Line) -> bool:
@@ -1442,6 +1448,22 @@ def _close_one(nodes: list[Node], i: int) -> tuple[Node, int]:
     i += 1
     n.children = close_ijou(n.children)
     if not opens_ika(n.line):
+        return n, i
+    j = next((k for k, c in enumerate(n.children) if is_ijou(c.line)), None)
+    if j is not None and j < len(n.children) - 1 and all(
+            nosep(c.line.tokens)[0].kind == "KW" and nosep(c.line.tokens)[0].value in CONTINUATION_KEYWORDS
+            for c in n.children[j + 1:]):
+        # 「もし … ならば 以下の手順です」+ 深い行 + 「以上」の後に「そうでなければ …」(#190):
+        # 手順の文を DO の字句にして行に入れ、続きの行を深い行として残す
+        body, rest = n.children[:j], n.children[j + 1:]
+        if not body:
+            word = nosep(n.line.tokens)[-1].value
+            raise SuruError(f"「{word}です」と「{KW_IJOU}」の間に文がありません", n.line.number)
+        toks = n.line.tokens
+        k = max(x for x, t in enumerate(toks) if t.kind == "KW" and t.value in IKA_WORDS)
+        do = Token("DO", body, toks[k].line, toks[k].value)
+        n.line = Line(n.line.indent, list(toks[:k]) + [do] + list(toks[k + 1:]), n.line.number, n.line.closed)
+        n.children = rest
         return n, i
     if n.children:
         if is_ijou(n.children[-1].line):
@@ -1551,11 +1573,13 @@ def _typed_extern(ln: Line, head: list[Token], towa: Token, ext: list[Token], ty
 
 
 def _ext_split(after: list[Token]) -> tuple[list[Token], list[Token]] | None:
-    """「「f」（…） で 型」を「「f」（…）」と型に分ける(合わなければ None)"""
-    if len(after) < 2 or after[0].kind != "STR":
-        return None
+    """「「f」（…） で 型」を「「f」（…）」と型に分ける(合わなければ None)。番地で呼ぶ「（f）」も(#189)"""
     k = 1
-    if after[k].kind == "LP":
+    if len(after) >= 4 and after[0].kind == "LP" and after[1].kind == "WORD" and after[2].kind == "RP":
+        k = 3
+    elif len(after) < 2 or after[0].kind != "STR":
+        return None
+    elif after[k].kind == "LP":
         k = _close_paren(after, k)
         if k < 0:
             return None
@@ -1599,6 +1623,9 @@ def _extern_block_line(ln: Line, word: str) -> list[Line]:
     before, after = toks[:wa[0]], toks[wa[0] + 1:]
     name = _ext_name(before)
     if name is None or len(after) < 3 or after[0].kind != "STR" or not (after[1].kind == "PART" and after[1].value == "で"):
+        if name is not None and len(after) >= 3 and after[0].kind == "LP" and after[1].kind == "WORD" and after[2].kind == "RP":
+            raise SuruError(f"番地で呼ぶ「（{after[1].value}）」は、名前を付けた定義の形で書きます"
+                            f"(「p を f で 呼出する とは （f） で 番地 を 番地 で 受け取って 無 を 返します」)", after[0].line)
         if name is not None and len(after) >= 2 and after[0].kind == "STR" and after[1].kind == "LP":
             raise SuruError("C に渡す引数を並べて書くときは、名前を付けた定義の形で書きます"
                             "(「r を 読取する とは 「SDL_RenderReadPixels」（r と 0） で 番地 を 受け取って 番地 を 返します」)",
