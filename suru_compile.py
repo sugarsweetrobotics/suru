@@ -106,6 +106,8 @@ declare i64 @rt_do_result(i64)
 declare i64 @rt_std(ptr)
 declare i64 @rt_global_cached(ptr, ptr, i32)
 declare void @rt_top(i64)
+declare i32 @rt_enter(i32)
+declare void @rt_leave(i32)
 declare void @rt_top_unwrap(i64)
 declare void @rt_safepoint()
 @rt_gc_stop = external dso_local global i32
@@ -165,6 +167,7 @@ class FnInfo:
         self.order = order  # 助詞の順
         self.direct = direct  # @f.N(ptr up, i64..., i32 pos)
         self.wrapper = wrapper  # @g.N(ptr up, ptr args, i32 pos)
+        self.lib = False  # ライブラリで定義した関数(自分のプログラムから呼ぶときに、呼んだ場所を覚える)
 
 
 class Binding:
@@ -652,7 +655,13 @@ class Compiler:
             by_part = dict(zip(parts, vals))
             up = "null" if b.kind == "gfn" else fg.frame_of(b.owner)
             args = ", ".join([f"ptr {up}"] + [f"i64 {by_part[p]}" for p in b.info.order] + [f"i32 {pos}"])
-            return fg.call("i64", b.info.direct, args)
+            if not (b.info.lib and pos and S.is_user_pos(node.line)):
+                return fg.call("i64", b.info.direct, args)
+            # 自分のプログラムからライブラリの関数を呼ぶ: その中の実行時エラーは、ここの位置で出す(#154)
+            old = fg.call("i32", "@rt_enter", f"i32 {pos}")
+            r = fg.call("i64", b.info.direct, args)
+            fg.call("void", "@rt_leave", f"i32 {old}")
+            return r
         fn = self.var_value(node.name, sc, fg, node.line)
         arr = fg.array(vals)
         pa = self.parts(parts)
@@ -1078,6 +1087,7 @@ class Compiler:
         for d in defines:
             if d.is_function:
                 info = self.new_info(d.name, d.params)
+                info.lib = S.in_library(d.line)
                 sc.vars[d.name] = Binding("gfn", g=self.new_global("gf"), info=info)
             else:
                 sc.vars[d.name] = Binding("gval", g=self.new_global("gv"))
@@ -1145,9 +1155,10 @@ class Compiler:
     def files_table(self) -> str:
         """読み込んだファイル(読み込んだ順)の、行の番号に足した数・名前・中身(実行時エラーの表示に使う)"""
         mods = [m for m in self.ctx.modules.values() if m is not None]
-        bases, names, srcs = [], [], []
+        bases, names, srcs, libs = [], [], [], []
         for m in mods:
             bases.append(f"i32 {LINE_BASE.get(m.path, 0)}")
+            libs.append(f"i32 {int(m.path in S.LIBRARY_SRCS)}")
             names.append(f"ptr {self.cstr(os.path.basename(m.path))}")
             data = m.source.encode("utf-8")
             g = f"@fs.{self.uid()}"
@@ -1161,6 +1172,7 @@ class Compiler:
         return (f"@suru_file_base = constant [{n} x i32] {arr('i32', bases)}\n"
                 f"@suru_file_name = constant [{n} x ptr] {arr('ptr', names)}\n"
                 f"@suru_file_src = constant [{n} x ptr] {arr('ptr', srcs)}\n"
+                f"@suru_file_lib = constant [{n} x i32] {arr('i32', libs)}\n"
                 f"@suru_nfiles = constant i64 {n}")
 
     def roots_table(self) -> str:

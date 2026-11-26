@@ -76,7 +76,7 @@ enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT
        A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY, A_INPUT_OPT, A_RECVB, A_TIMEOUT,
        A_UDP_OPEN, A_UDP_SEND, A_UDP_RECV, A_LOCAL_PORT, A_PEER_ADDR, A_PEER_PORT,
        A_BROADCAST, A_MC_JOIN, A_MC_LEAVE };
-typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; V c, d; } Act;
+typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; V c, d; int32_t upos; } Act; /* upos: 作ったときの call_pos */
 /* C形(「C形作成する」): 見本の組と欄。ctype は C_MEM の番号か -1(構造体)、count は配列の要素の数(配列でなければ -1) */
 typedef struct { int32_t ctype; int64_t count; V inner; } CFieldC;
 typedef struct { int32_t tag; int32_t n; V sample; CFieldC f[]; } CShapeObj; /* c・d は引数が3つ以上の動作だけ(UDPバイト列送信する) */
@@ -642,6 +642,7 @@ static const char *short_type_name(const char *name) {
 extern const int32_t suru_file_base[];
 extern const char *const suru_file_name[];
 extern const char *const suru_file_src[];
+extern const int32_t suru_file_lib[]; /* ライブラリのファイル(同梱の lib/ と依存のもの)なら 1 */
 extern const int64_t suru_nfiles;
 /* 行の番号を、そのファイルの中の行に戻す。読み込んだファイルならその名前と中身も返す(本体なら名前は NULL) */
 static int local_line(int line, const char **name, const char **src) {
@@ -678,17 +679,45 @@ static int display_width(const char *s, size_t n) {
 }
 
 /* 「試行する」の中なら、実行時エラーで止まらずに代わりの動作へ戻る */
-typedef struct TryFrame { jmp_buf jb; struct TryFrame *prev; int quiet; } TryFrame; /* quiet: 文を書かない(並列写像の中) */
+typedef struct TryFrame { jmp_buf jb; struct TryFrame *prev; int quiet; int32_t cpos; } TryFrame; /* quiet: 文を書かない(並列写像の中)。cpos: 入ったときの call_pos */
 static _Thread_local TryFrame *try_top;
 static _Thread_local char *fail_last_msg;
 static _Thread_local int32_t fail_last_pos;
 static V caught_failure(void); /* 受け止めた実行時エラーの失敗(後で定義) */
+/* 自分のプログラムから、ライブラリの関数を呼んでいる場所(#154)。ライブラリの中で実行時エラーになったら、
+   この場所をエラーの位置にして、ライブラリの位置は添えるだけにする。0 なら呼んでいない */
+static _Thread_local int32_t call_pos;
+/* 位置がライブラリのファイルの中なら 1、自分のプログラム(本体と、ライブラリでない読み込んだファイル)なら 0 */
+static int pos_in_library(int32_t pos) {
+    int line = pos & 0xfffff;
+    for (int64_t i = suru_nfiles - 1; i >= 0; i--)
+        if (line > suru_file_base[i]) return suru_file_lib[i];
+    return 0;
+}
+static int is_user_pos(int32_t pos) { return (pos & 0xfffff) && !pos_in_library(pos); }
+/* コンパイラが、自分のプログラムからライブラリの関数を直接呼ぶ前後に呼ぶ */
+int32_t rt_enter(int32_t pos) {
+    int32_t old = call_pos;
+    if (is_user_pos(pos)) call_pos = pos;
+    return old;
+}
+void rt_leave(int32_t old) { call_pos = old; }
 
 __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
     fflush(stdout);
     int line = pos & 0xfffff, col = (pos >> 20) & 0x7ff;
     const char *fname, *ftext;
     line = local_line(line, &fname, &ftext);
+    char lib_where[160] = "";
+    if (line && fname && call_pos && pos_in_library(pos)) {
+        /* ライブラリの中: 自分のプログラムの呼んだ場所をエラーの位置にして、ライブラリの位置は添える */
+        if (col) snprintf(lib_where, sizeof lib_where, "(「%s」の%d行目 %d文字目)", fname, line, col);
+        else snprintf(lib_where, sizeof lib_where, "(「%s」の%d行目)", fname, line);
+        pos = call_pos;
+        line = pos & 0xfffff;
+        col = (pos >> 20) & 0x7ff;
+        line = local_line(line, &fname, &ftext);
+    }
     Buf b = {0};
     buf_cat(&b, "エラー: ");
     if (line && fname) buf_printf(&b, "「%s」の", fname);
@@ -697,6 +726,7 @@ __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
         else buf_printf(&b, "%d行目: ", line);
     }
     buf_cat(&b, msg);
+    buf_cat(&b, lib_where);
     if (try_top) {
         /* 試行する の中: エラーの文だけを書いて、代わりの動作へ */
         if (!try_top->quiet) {
@@ -709,6 +739,7 @@ __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
         fail_last_pos = pos;
         TryFrame *f = try_top;
         try_top = f->prev;
+        call_pos = f->cpos;
         longjmp(f->jb, 1);
     }
     /* 該当する行と位置の印 */
@@ -853,6 +884,7 @@ static V mk_act(int kind, const char *name, V a, V b) {
     x->a = a;
     x->b = b;
     x->c = x->d = 0;
+    x->upos = call_pos;
     return (V)(intptr_t)x;
 }
 
@@ -1516,6 +1548,14 @@ static V invoke(Fn *f, V *args, int32_t pos) {
     for (int i = 0; i < f->n; i++)
         if (args[i] == 0 && is_req(f, i)) fail(pos, "「%s」には「%s」の引数が必要です", f->name, PART_NAMES[f->parts[i]]);
     if (f->kind == FK_TRAIT) return dispatch(f, args, pos);
+    if (is_user_pos(pos)) {
+        /* 自分のプログラムから関数の値を呼ぶ: ライブラリの関数かもしれないので、呼んだ場所を覚えておく */
+        int32_t old = call_pos;
+        call_pos = pos;
+        V r = f->code(f->up, args, pos);
+        call_pos = old;
+        return r;
+    }
     return f->code(f->up, args, pos);
 }
 
@@ -1659,6 +1699,7 @@ static V act_run(Act *a) {
     case A_TRY: {
         TryFrame f;
         f.prev = try_top;
+        f.cpos = call_pos;
         f.quiet = a->b == 0; /* 「で」を省いたときは、エラーの文を書かずに失敗にする */
         try_top = &f;
         if (setjmp(f.jb) == 0) {
@@ -1672,6 +1713,7 @@ static V act_run(Act *a) {
     case A_FINALLY: {
         TryFrame f;
         f.prev = try_top;
+        f.cpos = call_pos;
         f.quiet = 1; /* 文は、後始末のあとで同じエラーを続けるときに書く */
         try_top = &f;
         if (setjmp(f.jb) == 0) {
@@ -1709,7 +1751,11 @@ static V perform(V v) {
     for (;;) {
         int t = TAG(v);
         if (t == T_ACT) {
-            v = act_run(AS(Act, v));
+            Act *a = AS(Act, v);
+            int32_t old = call_pos;
+            if (a->upos) call_pos = a->upos; /* ライブラリの関数が作った動作: その関数を呼んだ場所 */
+            v = act_run(a);
+            call_pos = old;
             int t2 = TAG(v);
             if (t2 != T_ACT && t2 != T_PURE) return v;
             continue;
@@ -3697,6 +3743,7 @@ BI(f_detail) {
 BI(m_numcheck) { /* 数にできれば 数 の 成功、できなければ エラーの文 の 失敗 */
     TryFrame f;
     f.prev = try_top;
+    f.cpos = call_pos;
     f.quiet = 1;
     try_top = &f;
     if (setjmp(f.jb) == 0) {
@@ -3712,6 +3759,7 @@ BI(m_calc_try) { /* 引数を全部渡した関数の値を呼び、成功なら
     need_fn(a[0], pos);
     TryFrame f;
     f.prev = try_top;
+    f.cpos = call_pos;
     f.quiet = 1;
     try_top = &f;
     if (setjmp(f.jb) == 0) {
@@ -3918,6 +3966,7 @@ static void *thread_main(void *arg) {
        合流したときは「エラーで終わりました」のエラー。並列写像なら文を書かず、待つ側で同じエラーにする */
     TryFrame f;
     f.prev = NULL;
+    f.cpos = 0;
     f.quiet = st.quiet;
     try_top = &f;
     int64_t state;
@@ -4230,6 +4279,7 @@ static int slot_ready(void *a) { return ld(&((GateWait *)a)->g->free) > 0; }
 static V run_guarded(V m, void (*leave)(Gate *), Gate *g) {
     TryFrame f;
     f.prev = try_top;
+    f.cpos = call_pos;
     f.quiet = 1; /* 文は外の受け口で1回だけ書く */
     try_top = &f;
     if (setjmp(f.jb) == 0) {

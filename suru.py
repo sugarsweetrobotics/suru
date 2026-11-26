@@ -29,6 +29,8 @@ from typing import Any
 
 _POS_SRC: str | None = None  # 読み込んだファイルを解析している間は、そのファイルの道(Pos.src に入れる)
 SOURCES: dict[str, str] = {}  # 読み込んだファイルの道 → 中身(エラーの行を見せるため)
+# ライブラリのファイル(同梱の lib/ と依存のもの、そこから読み込んだもの)の道。それ以外は自分のプログラム(#154)
+LIBRARY_SRCS: set[str] = set()
 
 
 class Pos(int):
@@ -55,14 +57,39 @@ def _where(line: int | None) -> str:
     return f"{line}行目 {col}文字目" if col else f"{line}行目"
 
 
+# 自分のプログラムから、ライブラリの関数を呼んでいる場所(#154。スレッドごと)。
+# ライブラリの中で実行時エラーになったら、この場所をエラーの位置にして、ライブラリの位置は添えるだけにする
+_CALL = __import__("threading").local()
+
+
+def call_pos() -> Any:
+    return getattr(_CALL, "pos", None)
+
+
+def in_library(line: Any) -> bool:
+    """ライブラリのファイルの中の位置か"""
+    return getattr(line, "src", None) in LIBRARY_SRCS
+
+
+def is_user_pos(line: Any) -> bool:
+    """自分のプログラム(本体と、ライブラリでない読み込んだファイル)の位置か"""
+    return bool(line) and getattr(line, "src", None) not in LIBRARY_SRCS
+
+
 class SuruError(Exception):
     """「する」の実行時・構文エラー"""
 
     def __init__(self, message: str, line: int | None = None):
+        self.lib_where = ""  # ライブラリの中の位置(「(「標準.suru」の43行目)」)。line は自分のプログラムの呼んだ場所
+        if line and in_library(line):
+            cp = call_pos()
+            if cp:
+                self.lib_where = f"({_file_of(line)}{_where(line)})"
+                line = cp
         self.line = line
         self.col = getattr(line, "col", None)
         self.message = message
-        super().__init__(f"{_file_of(line)}{_where(line)}: {message}" if line else message)
+        super().__init__(f"{_file_of(line)}{_where(line)}: {message}{self.lib_where}" if line else message)
 
 
 def module_error(e: Any, name: str, path: str, line: Any) -> "SuruError":
@@ -95,7 +122,7 @@ def error_json(e: "SuruError", kind: str = "実行", path: str = "") -> str:
             "column": e.col or None,
             "kind": kind,
             "rule": None,
-            "message": e.message,
+            "message": e.message + getattr(e, "lib_where", ""),
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -3054,6 +3081,7 @@ def load_prelude(ctx: ParseContext, line: int) -> Module:
     """lib/基本.suru を読む(同じフォルダに 基本.suru があっても、いつも同梱のもの)"""
     if PRELUDE_PATH in ctx.modules and ctx.modules[PRELUDE_PATH] is not None:
         return ctx.modules[PRELUDE_PATH]
+    LIBRARY_SRCS.add(PRELUDE_PATH)
     return _load_path(PRELUDE_PATH, PRELUDE_NAME, ctx, line, prelude=True)
 
 
@@ -3289,14 +3317,36 @@ def load_module(name: str, ctx: ParseContext, line: int) -> Module:
     if path == ctx.path:
         # 「試験/会話帳.suru」の「「会話帳」 を 読み込む」: 自分自身は飛ばして、依存・プロジェクトのフォルダ・標準の lib を探す
         lib = os.path.abspath(os.path.join(LIB_DIR, file))
-        found = package_path(name, ctx, line) or _project_file(file, ctx) or (lib if os.path.exists(lib) else None)
+        pkg = package_path(name, ctx, line)
+        found = pkg or _project_file(file, ctx) or (lib if os.path.exists(lib) else None)
         if found is None:
             raise SuruError(f"「{file}」を読み込むと、自分自身を読み込むことになります"
                             "(同じ名前の別のファイルなら、置き場所かファイルの名前を変えてください)", line)
+        _mark_library(found, ctx, found == pkg or found == lib)
         return _load_path(found, name, ctx, line)
-    if not os.path.exists(path):
+    searched = not os.path.exists(path)
+    if searched:
         path = package_path(name, ctx, line) or os.path.abspath(os.path.join(LIB_DIR, file))
+    _mark_library(path, ctx, searched)
     return _load_path(path, name, ctx, line)
+
+
+def _mark_library(path: str, ctx: ParseContext, searched: bool) -> None:
+    """同梱の lib/ のファイル、依存(自分のプロジェクトの外)から見つけたファイル、ライブラリから読み込んだファイルを
+    ライブラリとする(#154)。自分のプロジェクトのファイルは、組.suru の名前で読み込んでも自分のプログラム"""
+    if _is_lib_path(path) or ctx.path in LIBRARY_SRCS or (searched and not _in_own_project(path, ctx.base_dir)):
+        LIBRARY_SRCS.add(path)
+
+
+def _in_own_project(path: str, base_dir: str) -> bool:
+    """path が base_dir を含むプロジェクト(組.suru のあるフォルダ)の中か"""
+    d = os.path.abspath(base_dir)
+    while not os.path.exists(os.path.join(d, PROJECT_CONFIG)):
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
+    return os.path.abspath(path).startswith(os.path.join(d, ""))
 
 
 def _project_file(file: str, ctx: ParseContext) -> str | None:
@@ -3439,6 +3489,7 @@ class Action:
 
     name: str
     perform: Any  # perform(interp) -> 結果
+    upos: Any = field(default_factory=call_pos, compare=False, repr=False)  # 作ったときの呼んだ場所(#154)
 
 
 @dataclass
@@ -6450,7 +6501,14 @@ class Interpreter:
         """動作を行って結果を返す(動作でない値はそのまま)"""
         while True:
             if isinstance(v, Action):
-                v = v.perform(self)
+                if v.upos:  # ライブラリの関数が作った動作: その関数を呼んだ場所
+                    old, _CALL.pos = call_pos(), v.upos
+                    try:
+                        v = v.perform(self)
+                    finally:
+                        _CALL.pos = old
+                else:
+                    v = v.perform(self)
                 if not isinstance(v, ACTION_TYPES):
                     return v
                 continue  # 「してから」の続きが返した動作も続けて行う
@@ -6910,6 +6968,16 @@ class Interpreter:
             return fn.fn(self, args, line)
         if isinstance(fn, TraitMethod):
             return self.dispatch(fn, args, line)
+        if is_user_pos(line) and _is_lib_fn(fn):
+            # 自分のプログラムからライブラリの関数を呼ぶ: その中の実行時エラーは、ここの位置で出す(#154)
+            old, _CALL.pos = call_pos(), line
+            try:
+                return self.call_function(fn, args, line)
+            finally:
+                _CALL.pos = old
+        return self.call_function(fn, args, line)
+
+    def call_function(self, fn: Function, args: dict, line: int) -> Any:
         local = Env(fn.closure)
         for p, pat in fn.params:
             bind(local, pat, args[p], p, fn.name, line)
@@ -6920,6 +6988,11 @@ class Interpreter:
         if is_predicate(fn.name) and not isinstance(result, bool):
             raise SuruError(f"述語「{fn.name}」は 真 か 偽 を返す必要があります(「{self.format(result)}」が返りました)", line)
         return result
+
+
+def _is_lib_fn(fn: Function) -> bool:
+    """ライブラリで定義した関数か"""
+    return in_library(getattr(fn.body, "line", None))
 
 
 def run(source: str) -> list[Any]:

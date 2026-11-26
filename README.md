@@ -1333,6 +1333,13 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 6. **Indentation also ends a nested case analysis.** When a line shallower than the cases of the inner 「もし 値 が」, at the indent of the outer cases, comes, the inner one ends there. Previously the inner case analysis took the outer cases after it (`2 ならば 「c」` or `そうでなければ …`) as its own.
 7. **Everything reads it the same way.** The Python version, the Go version (`suruc`), the lexer and parser written in Suru (`lib/字句.suru`, `lib/構文.suru`), the linter, the VS Code extension's highlighting and the interactive mode (which reads up to 「以上」 before running) treat it the same. The example is `examples/blocks.suru`.
 
+### Errors inside libraries
+
+1. **A runtime error inside a library is shown at the place in your program that called it.** For example, `（空 を 最大値にする） を 表示する` gives `エラー: 3行目 6文字目: 空のリストの最大値はありません(「標準.suru」の45行目 35文字目)` and marks the line in your program. The position inside the library is added at the end in parentheses (#154). Previously only the line inside the library (such as `lib/標準.suru`) was shown, so you couldn't tell which call in your program caused it. The interpreter, `suruc` and `suru --翻訳` show the same thing.
+2. **Libraries are the bundled `lib/` files and dependencies.** Files of dependencies in 組.lock, and files those load, are libraries. Your own files (the main file and files of your project, including ones loaded by the project name from `試験/`) are your program, and an error inside them is shown at its own position as before. In `kumu 試験`, an error inside a library is shown at the line of the test file.
+3. **The place is the innermost call from your program.** It is the call from your program into a library function that is still running, including calls through function values (`xs を 最大値にすること で 写像する`). An action made by a library function (such as `ファイル内の読込する`) uses the place where that function was called, even when the action is carried out later. The 「(ここで実行時エラー)」 line of the trace of `試行する` and `試算する` and `--json` (`line` and `column`) also use this place, and the reason of the failure (理由) stays the message alone.
+4. **`最大値にする` and `最小値にする` of an empty list explain the error.** They give 「空のリストの最大値はありません」 ("an empty list has no maximum") instead of 「「空」は「最大値にする」のどの定義にも当てはまりません」.
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)
