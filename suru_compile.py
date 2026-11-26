@@ -1308,8 +1308,19 @@ def build(ll_path: str, out: str, opt: str = "-O2") -> None:
     cc = find_cc()
     if cc is None:
         raise S.SuruError("バイナリを作るには clang が必要です(LLVM IR だけなら --ll を付けてください)")
-    cmd = [cc, *target_args(), opt, "-w", ll_path, runtime_object(cc), "-o", exe_path(out)] + link_flags(ll_path)
+    exe = exe_path(out)
+    link_out, tmp_dir = exe, None
+    if target_windows() and not windows_lld() and not exe.isascii():
+        # GNU ld は Windows で日本語の道に書けないので、一時フォルダに作ってから移す(Go 版と同じ)
+        import tempfile
+
+        tmp_dir = tempfile.mkdtemp(prefix="suru-link-")
+        link_out = os.path.join(tmp_dir, "out.exe")
+    cmd = [cc, *target_args(), opt, "-w", ll_path, runtime_object(cc), "-o", link_out] + link_flags(ll_path)
     if target_windows():
+        if windows_lld():
+            # lld は日本語の道も読み書きできる(GNU ld は Windows の ANSI の道しか扱えない)
+            cmd.append("-fuse-ld=lld")
         # pthread(winpthreads)は中に入れて、libwinpthread-1.dll なしで動くようにする(Go 版と同じ)
         cmd += ["-lm", "-Wl,-Bstatic", "-lpthread", "-Wl,-Bdynamic", "-lws2_32"]
         m = manifest_object()
@@ -1317,9 +1328,21 @@ def build(ll_path: str, out: str, opt: str = "-O2") -> None:
             cmd.append(m)
     else:
         cmd += ["-lm", "-lpthread"]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise S.SuruError("clang でのビルドに失敗しました:\n" + r.stderr)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise S.SuruError("clang でのビルドに失敗しました:\n" + r.stderr)
+        if tmp_dir:
+            shutil.copyfile(link_out, exe)
+            os.chmod(exe, 0o755)
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def windows_lld() -> bool:
+    """Windows 向けのリンクに lld(ld.lld)を使えるか(Go 版の windowsLLD と同じ)"""
+    return shutil.which("ld.lld") is not None
 
 
 # Windows のプログラムに埋め込む印。ファイルの道などの文字を UTF-8 で扱うようにする(Go 版の windowsManifest と同じ)
