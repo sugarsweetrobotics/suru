@@ -480,6 +480,27 @@ func init() {
 		c.needKind(a.must(WO), []string{"文字列", "リスト"}, line, "「逆順にする」の「を」は文字列かリスト")
 		return a.must(WO)
 	})
+	prim("整列する", []partReq{req(WO)}, func() Type {
+		x := newTVar()
+		return &TFun{Params: []TParam{{WO, lst(x)}}, Result: lst(x)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		c.needKind(a.must(WO), []string{"リスト"}, line, "「整列する」の「を」はリスト")
+		elem := newTVar()
+		need(c, a, WO, lst(elem), line, "整列する")
+		c.needKind(elem, []string{"数", "文字列"}, line, "「整列する」のリストの要素は数か文字列")
+		return a.must(WO)
+	})
+	prim("基準整列する", []partReq{req(WO), req("で")}, func() Type {
+		x, k := newTVar(), newTVar()
+		return &TFun{Params: []TParam{{WO, lst(x)}, {"で", &TFun{Params: []TParam{{WO, x}}, Result: k}}}, Result: lst(x)}
+	}, func(c *Checker, a typedArgs, line Pos) Type {
+		c.needKind(a.must(WO), []string{"リスト"}, line, "「基準整列する」の「を」はリスト")
+		elem := newTVar()
+		need(c, a, WO, lst(elem), line, "基準整列する")
+		key := c.apply(a.must("で"), []Type{elem}, line, "「基準整列する」の「で」")
+		c.needKind(key, []string{"数", "文字列"}, line, "「基準整列する」の「で」の関数の値は数か文字列")
+		return a.must(WO)
+	})
 	for _, name := range []string{"先頭取得する", "先頭削除する"} {
 		n := name
 		prim(n, []partReq{req("から"), req(WO)}, func() Type {

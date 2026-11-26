@@ -2216,6 +2216,56 @@ BI(s_range) { /* から, を */
     for (int64_t i = lo; i <= hi; i++) l->it[i - lo] = mk_int(i, pos);
     return (V)(intptr_t)l;
 }
+/* 整列(#153)。基準 keys は全部が数か全部が文字列(比べ方は「<」と同じ)。同じ基準なら元の順(安定なマージソート) */
+static void sort_keys_check(V *keys, int64_t n, const char *name, int32_t pos) {
+    int nums = 0, strs = 0;
+    for (int64_t i = 0; i < n; i++) {
+        int t = TAG(keys[i]);
+        if (t == T_INT || t == T_FLT) nums = 1;
+        else if (t == T_STR) strs = 1;
+        else fail(pos, "「%s」では数か文字列しか比べられません(「%s」があります)", name, plain(keys[i]).s);
+    }
+    if (nums && strs) fail(pos, "「%s」では数と文字列を比べられません", name);
+}
+static void merge_sort_idx(int64_t *ix, int64_t *tmp, int64_t n, V *keys, int32_t pos) {
+    for (int64_t w = 1; w < n; w *= 2) {
+        for (int64_t lo = 0; lo < n; lo += 2 * w) {
+            int64_t mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n;
+            int64_t i = lo, j = mid, k = lo;
+            while (i < mid && j < hi) {
+                /* 右が左より小さいときだけ右を先に(同じなら左。安定) */
+                if (rt_truthy(rt_binop(OP_LT, keys[ix[j]], keys[ix[i]], pos))) tmp[k++] = ix[j++];
+                else tmp[k++] = ix[i++];
+            }
+            while (i < mid) tmp[k++] = ix[i++];
+            while (j < hi) tmp[k++] = ix[j++];
+        }
+        memcpy(ix, tmp, (size_t)n * sizeof(int64_t));
+    }
+}
+static V sort_list(List *l, V *keys, const char *name, int32_t pos) {
+    int64_t n = l->n;
+    sort_keys_check(keys, n, name, pos);
+    if (n <= 1) return (V)(intptr_t)l;
+    int64_t *ix = malloc((size_t)n * sizeof(int64_t)), *tmp = malloc((size_t)n * sizeof(int64_t));
+    for (int64_t i = 0; i < n; i++) ix[i] = i;
+    merge_sort_idx(ix, tmp, n, keys, pos);
+    List *o = new_list(n);
+    for (int64_t i = 0; i < n; i++) o->it[i] = l->it[ix[i]];
+    free(ix);
+    free(tmp);
+    return (V)(intptr_t)o;
+}
+BI(s_sort) { /* を */
+    List *l = need_list(a[0], "「整列する」の「を」", pos);
+    return sort_list(l, l->it, "整列する", pos);
+}
+BI(s_sort_by) { /* を, で */
+    List *l = need_list(a[0], "「基準整列する」の「を」", pos);
+    V *keys = rt_alloc((l->n + 1) * sizeof(V));
+    for (int64_t i = 0; i < l->n; i++) keys[i] = apply1(a[1], l->it[i], pos);
+    return sort_list(l, keys, "基準整列する", pos);
+}
 BI(s_reverse) {
     V v = need_seq(a[0], "「逆順にする」の「を」", pos);
     if (TAG(v) == T_LIST) {
@@ -4687,6 +4737,8 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"平方根にする", 1, P1_WO, NULL, s_sqrt},
     {"範囲にする", 2, P2_KARA_WO, NULL, s_range},
     {"逆順にする", 1, P1_WO, NULL, s_reverse},
+    {"整列する", 1, P1_WO, NULL, s_sort},
+    {"基準整列する", 2, P2_WO_DE, NULL, s_sort_by},
     {"先頭取得する", 2, P2_KARA_WO, NULL, s_take},
     {"先頭削除する", 2, P2_KARA_WO, NULL, s_drop},
     {"番目取得する", 2, P2_KARA_WO, NULL, s_nth},

@@ -3945,12 +3945,39 @@ def _fixed_deserialize(v: Any, sample: Any, line: int) -> Any:
     return get(sample)
 
 
+def _sort_keys(keys: list, name: str, line: int) -> None:
+    """整列の基準は、全部が数か、全部が文字列(比べ方は「<」と同じ)"""
+    def is_num(k: Any) -> bool:
+        return isinstance(k, (int, float)) and not isinstance(k, bool)
+    for k in keys:
+        if not (is_num(k) or isinstance(k, str)):
+            raise SuruError(f"「{name}」では数か文字列しか比べられません(「{format_value(k)}」があります)", line)
+    if any(is_num(k) for k in keys) and any(isinstance(k, str) for k in keys):
+        raise SuruError(f"「{name}」では数と文字列を比べられません", line)
+
+
+def _sort(it: Any, a: dict, line: int) -> tuple:
+    xs = _list(a[WO], "「整列する」の「を」", line)
+    _sort_keys(list(xs), "整列する", line)
+    return tuple(sorted(xs))
+
+
+def _sort_by(it: Any, a: dict, line: int) -> tuple:
+    xs = _list(a[WO], "「基準整列する」の「を」", line)
+    keys = [it.apply(a["で"], [x], line) for x in xs]
+    _sort_keys(keys, "基準整列する", line)
+    order = sorted(range(len(xs)), key=lambda i: keys[i])  # 同じ基準なら元の順(安定)
+    return tuple(xs[i] for i in order)
+
+
 # 標準.suru の中と、読み込んだ側の「標準内の…」でだけ使える組み込み(する では書けないもの)
 STD_PRIMITIVES = [
     Builtin("切捨する", [(WO, True)], _floor),
     Builtin("平方根にする", [(WO, True)], _sqrt),
     Builtin("範囲にする", [("から", True), (WO, True)], _range),
     Builtin("逆順にする", [(WO, True)], lambda it, a, line: _seq(a[WO], "「逆順にする」の「を」", line)[::-1]),
+    Builtin("整列する", [(WO, True)], _sort),
+    Builtin("基準整列する", [(WO, True), ("で", True)], _sort_by),
     Builtin("先頭取得する", [("から", True), (WO, True)], _take),
     Builtin("先頭削除する", [("から", True), (WO, True)], _drop),
     Builtin("番目取得する", [("から", True), (WO, True)], _nth),
