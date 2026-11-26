@@ -4,6 +4,20 @@
 
 Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
 
+## 0.8.0
+
+### New
+
+1. **Windows support (MSYS2 UCRT64).** `suruc`, `kumu 作る` and `suru --翻訳` make Windows .exe files, and `SURU_TARGET` (for example `x86_64-w64-mingw32`) builds them from Linux or macOS. Use MSYS2's clang and lld (`pacman -S mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-lld`). A built .exe needs no extra DLLs and handles UTF-8 paths and text (#176, #177, #180).
+2. **The standard library works in Windows programs.** 「ファイル」, 「時間」, 「乱数」, 「動的リンク」, 「共有メモリ」, 「環境」, 「プロセス」 (through `cmd.exe`) and the others work. `分岐する`, `子実行する`, the System V semaphores and 「シグナル」 say 「…は Windows ではまだ使えません」 ("not available on Windows yet") when called (#178, #181).
+3. **GitHub Releases has `suruc.exe` and `kumu.exe` for Windows** (amd64 and arm64), next to `suru-ls.exe`. The release workflow runs them on Windows before publishing (#182).
+
+### Fixed
+
+1. **The lint binary is always built for the machine you are on**, even when `SURU_TARGET` is set (#177).
+
+The libraries regex, sqlite, http and gui-sdl3 also run their tests on Windows now, and their READMEs explain the MSYS2 packages.
+
 ## 0.7.0
 
 ### Changes that need edits when moving from 0.6
