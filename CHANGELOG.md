@@ -4,7 +4,7 @@
 
 Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
 
-## Unreleased
+## 0.9.1
 
 ### New
 
@@ -15,7 +15,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 1. **The bundled `lib/` writes its C functions in the new way.** The two-line external definitions are now one-line definitions or `以下は外部の入出力動作です` … `以上です` blocks. Nothing changes for programs that use the library.
 2. **The test runner that `kumu 試験` writes leaves a blank line between definitions,** so `suru --点検` on it no longer reports 「定義の間の空行」.
 
-The next VS Code extension highlights `以下は外部の入出力動作` and `以下は外部の関数` too.
+The VS Code extension 0.9.1 highlights `以下は外部の入出力動作` and `以下は外部の関数` too.
 
 ## 0.9.0
 
