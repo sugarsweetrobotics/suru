@@ -245,7 +245,8 @@ STDLIB = """「ファイル」 を 読み込む
   「3行目」 + 改行 を 道 へ ファイル内の追記します
   （道 を ファイル内の行分割読込した 結果） を 表示します
   （道 を ファイル内の存在確認した 結果） を 表示します
-  （（（道 を ファイル内の実道取得した 結果） を 取出する） の 長さ > 10） を 表示します
+  （（（道 を ファイル内の実道取得した 結果） を 取出する） が 「:/」 を 含有である） を 表示します
+  （（（道 を ファイル内の実道取得した 結果） を 取出する） が 「/日本語のフォルダ/メモ.txt」 で 末尾一致である） を 表示します
   （「日本語のフォルダ」 を ファイル内のフォルダ確認した 結果） を 表示します
   道 を ファイル内の削除します
   （道 を ファイル内の存在確認した 結果） を 表示します
@@ -285,7 +286,7 @@ def test_Windows_で標準ライブラリが動く(tmp_path, rt_obj, wine_env):
     assert r.returncode == 0, r.stderr
     r = subprocess.run(["wine", str(tmp_path / "標準.exe")], capture_output=True, env=wine_env, cwd=tmp_path, timeout=180)
     out = r.stdout.decode("utf-8").replace("\r\n", "\n")
-    assert (r.returncode, out) == (0, "Windows\n（「1行目」 と 「2行目」 と 「3行目」）\n真\n真\n真\n偽\n真\n真\n真\n16\n真\n共有\n"
+    assert (r.returncode, out) == (0, "Windows\n（「1行目」 と 「2行目」 と 「3行目」）\n真\n真\n真\n真\n偽\n真\n真\n真\n16\n真\n共有\n"
                                       "\"hello world\"\n\n3\n"), r.stderr.decode("utf-8", "replace")
 
 
