@@ -56,6 +56,7 @@ type Runner struct {
 	Filters []string // 名前かファイルの道にどれかを含む試験だけ(空なら全部)
 	WorkDir string   // 試験用のバイナリを置くフォルダ
 	Extra   []string // リンクするオブジェクトや引数(kumu の Cソース)
+	Dir     string   // 試験を動かすフォルダ(空なら今のフォルダ)
 	Passed  int
 	Failed  int
 }
@@ -79,15 +80,18 @@ func indent(s string) string {
 }
 
 // File は1つのファイルの試験を、1つのバイナリにして1つずつ別のプロセスで動かす(file は表示に使う道)
-func (r *Runner) File(file string) {
-	data, err := os.ReadFile(file)
+func (r *Runner) File(file string) { r.FileAt(file, file) }
+
+// FileAt は File と同じで、読むファイルの道 path と表示する道 file を分けたもの
+func (r *Runner) FileAt(path, file string) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintf(r.Out, "✗ %s(読めません)\n%s\n", file, indent(err.Error()))
 		r.Failed++
 		return
 	}
 	source := compiler.NormalizeNewlines(string(data))
-	abs, _ := filepath.Abs(file)
+	abs, _ := filepath.Abs(path)
 	ir, cases, serr := compiler.CompileTests(source, filepath.Dir(abs), abs, file, r.match(file))
 	if serr != nil {
 		fmt.Fprintf(r.Out, "✗ %s(読めません)\n%s\n", file, indent(compiler.FormatError(serr, source, true)))
@@ -120,6 +124,7 @@ func (r *Runner) File(file string) {
 	for _, c := range cases {
 		var out bytes.Buffer
 		cmd := exec.Command(exe, strconv.Itoa(c.Number))
+		cmd.Dir = r.Dir
 		cmd.Stdout, cmd.Stderr = &out, &out
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(r.Out, "✗ %s %s\n", file, c.Label)
