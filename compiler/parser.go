@@ -260,6 +260,16 @@ func isIjou(ln *Line) bool {
 	return len(ts) == 1 && isKw(ts[0], KwIjou)
 }
 
+// ijouThenMore は「以上」の後に同じ深さで文が続くなら、そう知らせる
+// (場合分けを閉じる「以上」は場合と同じ深い行にあるので、ここには来ない)
+func ijouThenMore(n *LNode) {
+	for k := 0; k+1 < len(n.Children); k++ {
+		if isIjou(n.Children[k].Line) {
+			raise(n.Children[k+1].Line.Number, "「"+KwIjou+"」の後に文があります(手順の文は「"+KwIjou+"」の前に書きます)")
+		}
+	}
+}
+
 func ikaMissing(n *LNode) {
 	ts := nosep(n.Line.Tokens)
 	raise(n.Line.Number, "「"+ts[len(ts)-1].S+"です」を閉じる「"+KwIjou+"」がありません(手順の最後の文の後に「"+KwIjou+"」だけの行を書きます)")
@@ -290,6 +300,7 @@ func closeOne(nodes []*LNode, i int) (*LNode, int) {
 		} else if i < len(nodes) && isIjou(nodes[i].Line) {
 			i++
 		} else {
+			ijouThenMore(n)
 			ikaMissing(n)
 		}
 	} else {
