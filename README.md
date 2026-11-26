@@ -76,9 +76,10 @@ Tests are written in files in the `試験/` ("tests") folder, as procedures whos
 「試験」 を 読み込んで 使う
 「計算」 を 読み込む                       # load a project file by its name in 組.suru
 
-二倍試験する とは 手順
+二倍試験する とは 以下の手順です
   （2 を 計算内の二倍する） を 4 に 一致確認する
   1 < 2 を 確認する
+  以上です
 ```
 
 The steps for publishing a library are in [docs/ライブラリを公開する.md](docs/ライブラリを公開する.md) (in Japanese). You can also run kumu's commands from the command palette of the VS Code extension.
@@ -108,10 +109,11 @@ kumu 書き込む       # build, then write to the serial port it finds with avr
 ```
 「マイコン」 を 読み込んで 使う
 
-点滅する とは 手順
+点滅する とは 以下の手順です
   内蔵灯 を 反転出力する
   500 を ミリ秒待機する
   点滅する
+  以上です
 
 内蔵灯 を 出力設定する
 「こんにちは」 を 表示する      # goes to the serial port (9600)
@@ -215,7 +217,7 @@ A procedure can also be written as the sentences from 「以下の手順です�
 名前 を 歓迎する とは 以下の手順です
   「こんにちは、」 + 名前 + 「さん」 を 表示する
   「ようこそ」 を 表示する
-  以上
+  以上です
 ```
 
 More examples: `examples/stdlib.suru` and `examples/stdlib_open.suru` show the standard library, `examples/predicate.suru` predicates, `examples/cases.suru` case-by-case function definitions and pattern conditions, `examples/io.suru` actions and procedures, `examples/blocks.suru` 「以下の手順です … 以上」 and nested case analysis, `examples/fib_input.suru` asks for a count and prints the Fibonacci sequence, `examples/data.suru` records, pattern matching and traits, `examples/punct.suru` the punctuation style, `examples/more.suru` line breaks and indentation, local definitions, conditionals and recursion, and long pipelines, and `examples/list.suru` particle arguments, lists and higher-order functions. `examples/通信/` has TCP and UDP echo servers and echo clients (run them in two terminals).
@@ -259,7 +261,7 @@ More examples: `examples/stdlib.suru` and `examples/stdlib_open.suru` show the s
 | `3 と 4 の 点` / `横 は 3 で 縦 は 4 の 点` | Building a record (positional / named) |
 | `p の 横`, `横 は 10 の p` | Reading a field, making a new record with one field changed |
 | `もし 形 が` + deeper lines like `半径 の 円 ならば …` | Pattern matching (case analysis) |
-| `…、2 ならば 「b」 以上、…` | 「以上」 closes the innermost case analysis (when nesting on one line) |
+| `…、2 ならば 「b」 以上です、…` | 「以上」 closes the innermost case analysis (when nesting on one line) |
 | `先頭 は x で 残り は 他 ならば …` | Splits a non-empty list into its head and rest |
 | `半径 の 円 かつ 半径 > 10 ならば …` | A pattern condition (guard) |
 | `（s という JSON文字列） を …`, `半径 という 円 ならば …` | In patterns, 「の 形名」 can also be written 「という 形名」 |
@@ -717,10 +719,11 @@ x を f で 番地余弦にする とは 外部の（f）
 
 ```
 「スレッド」 を 読み込んで 使う
-試す とは 手順
+試す とは 以下の手順です
   t とは （30 を 重く計算して 結果にする） を 並行開始した 結果
   「計算中」 を 表示する
   t を 合流してから 表示する
+  以上です
 ```
 
 2. **An error inside a thread ends only that thread.** The message is written to standard error right away. Joining it gives the runtime error `並行開始した動作はエラーで終わりました` ("the started action ended with an error"), catchable with `試行する`. An error inside `並列写像する` is the same error as when computed in order.
@@ -950,11 +953,12 @@ r とは 「/suru-例」 を （0 と 0.0 の 点） で 固定領域作成し�
 「通信」 を 読み込む
 「標準」 を 読み込んで 使う
 
-始めする とは 手順
+始めする とは 以下の手順です
   接続 とは 「localhost」 に 11434 で 通信内の接続した 結果
   「GET / HTTP/1.0」 + 復帰改行 + 復帰改行 を 接続 へ 通信内の送信する
   接続 から 通信内の行受信した 結果 を 表示する
   接続 を 通信内の切断する
+  以上です
 始めする
 ```
 2. **Outgoing connections have no wait limit.** Accepted connections give up after 5 seconds, but outgoing connections wait until the peer answers. This is because some peers, like a local LLM, take tens of seconds to give the first response.
@@ -980,9 +984,10 @@ r とは 「/suru-例」 を （0 と 0.0 の 点） で 固定領域作成し�
 「標準」 を 読み込んで 使う
 
 接続 を 読込する とは 接続 から 通信内の行受信してから 表示する
-始めする とは 手順
+始めする とは 以下の手順です
   接続 とは 「localhost」 に 8080 で 通信内の接続した 結果
   （接続 を 読込する） を （接続 を 通信内の切断する） で 後始末実行する
+  以上です
 始めする
 ```
 2. **The cleanup's result is discarded.** The result type of the cleanup action can be anything. If the cleanup itself hits an error, that error continues.
@@ -1092,14 +1097,16 @@ Added for the WebSocket (suru-lang/http) handshake and masking. All give the sam
 ```
 「通信」 を 読み込んで 使う
 
-口 を 返し続けする とは 入出力手順
+口 を 返し続けする とは 以下の入出力手順です
   便 とは 口 から UDP受信した 結果
   （便 の 中身） を 口 から 便 へ UDP返信する
   口 を 返し続けする
+  以上です
 
-始めする とは 入出力手順
+始めする とは 以下の入出力手順です
   口 とは 9001 を UDP開始した 結果
   口 を 返し続けする
+  以上です
 始めする
 ```
 
@@ -1125,11 +1132,12 @@ Additions for TCP listeners and connections and UDP sockets (stage 2 of #123).
 ```
 「通信」 を 読み込んで 使う
 
-始めする とは 入出力手順
+始めする とは 以下の入出力手順です
   口 とは 0 を 「127.0.0.1」 に 待受開始した 結果   # only from this machine; the OS picks the port
   「ポート 」 + （口 を ポート取得して 文字列化する） + 「 で待っています」 を 表示する
   受 とは 口 から 接続受付した 結果
   「相手: 」 + （受 を 相手アドレス取得した 結果） を 表示する
+  以上です
 ```
 
 1. **`ポート を アドレス に 待受開始する` chooses the address to listen on.** With `「127.0.0.1」`, only the same machine can connect. Leaving out 「に」 gives 0.0.0.0 (all) as before. UDP can be written `ポート を アドレス に UDP開始する` too. The address is an IPv4 address or a name (`「localhost」`); if it can't be resolved, you get the runtime error 「「待受開始する」で通信に失敗しました(…)」.
@@ -1162,13 +1170,14 @@ Additions for UDP sockets and listeners (stage 3 of #123).
 ```
 「通信」 を 読み込んで 使う
 
-始めする とは 入出力手順
+始めする とは 以下の入出力手順です
   受 とは 9002 を UDP開始した 結果
   受 を 「239.1.2.3」 に マルチキャスト参加する      # also receive messages sent to this group
   送 とは 0 を UDP開始した 結果
   「みなさん」 を 送 から 「239.1.2.3」 に 9002 で UDP送信する
   送 を ブロードキャスト許可する
   「全員」 を 送 から 「255.255.255.255」 に 9002 で UDP送信する
+  以上です
 ```
 
 1. **`口 を ブロードキャスト許可する` allows sending to broadcast addresses.** Sending to addresses such as `255.255.255.255` or `192.168.1.255` from a socket that hasn't allowed it gives 「通信に失敗しました(Permission denied)」 (SO_BROADCAST). The result is the socket.
@@ -1306,9 +1315,9 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 
 1. **The sentences from `X とは 以下の手順です` to `以上` are a procedure.** Write the sentences on deeper lines, or continue at the same indent. Write `以上` as the last deeper line or on a line at the indent of the head. Unlike `手順（…）`, no parenthesis stays open over many lines, and the start and end read like a Japanese document ("the steps below are … that is all") (#161). `以下 の 手順` (without です), `以下の入出力手順です` (checked like 「入出力手順」) and `以上です` work too. `手順（…）` and `… とは 手順` + deeper lines work as before.
 2. **「以上」 is required.** 「以下の手順です」 and 「以上」 are a pair, so forgetting it gives 「「以下の手順です」を閉じる「以上」がありません」 ("there is no 以上 closing 以下の手順です"), no sentences between them give 「「以下の手順です」と「以上」の間に文がありません」, and a 「以上」 with no 「以下の手順です」 gives 「対応する「以下の手順です」のない「以上」があります」.
-3. **In the punctuation style, sentences separate them.** As in `挨拶するとは、以下の手順です。「a」を表示する。「b」を表示する。以上。`, the sentences up to 「以上。」 are the procedure's sentences. The lines after 「以下の手順です。」 may be indented.
+3. **In the punctuation style, sentences separate them.** As in `挨拶するとは、以下の手順です。「a」を表示する。「b」を表示する。以上です。`, the sentences up to 「以上。」 are the procedure's sentences. The lines after 「以下の手順です。」 may be indented.
 4. **It can be written in a branch of a case analysis.** As in `そうでなければ 以下の手順です` + deeper lines + `以上`, it can go anywhere an expression can (the same as writing `手順（…）` there).
-5. **「以上」 also closes the innermost 「もし 値 が」.** It is optional, and used to write a nested case analysis on one line or in the punctuation style. In `もしxが1ならば、もしyが1ならば「a」、2ならば「b」以上、2ならば「c」、そうでなければ「d」。` the inner case analysis ends at 「以上」, and `2ならば「c」` is a case of the outer one.
+5. **「以上」 also closes the innermost 「もし 値 が」.** It is optional, and used to write a nested case analysis on one line or in the punctuation style. In `もしxが1ならば、もしyが1ならば「a」、2ならば「b」以上です、2ならば「c」、そうでなければ「d」。` the inner case analysis ends at 「以上」, and `2ならば「c」` is a case of the outer one.
 6. **Indentation also ends a nested case analysis.** When a line shallower than the cases of the inner 「もし 値 が」, at the indent of the outer cases, comes, the inner one ends there. Previously the inner case analysis took the outer cases after it (`2 ならば 「c」` or `そうでなければ …`) as its own.
 7. **Everything reads it the same way.** The Python version, the Go version (`suruc`), the lexer and parser written in Suru (`lib/字句.suru`, `lib/構文.suru`), the linter, the VS Code extension's highlighting and the interactive mode (which reads up to 「以上」 before running) treat it the same. The example is `examples/blocks.suru`.
 
