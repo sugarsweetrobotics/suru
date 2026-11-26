@@ -1366,8 +1366,16 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 2. **A built .exe needs no extra DLLs.** winpthreads is linked in, and Winsock2 (`-lws2_32`) is added. `dl`, `rt` and `pthread`, which libraries list for Linux, are skipped on Windows, and no rpath is written.
 3. **File paths and text are UTF-8 on Windows too.** When `windres` (`x86_64-w64-mingw32-windres`, `llvm-windres` or `windres`) is available, the .exe gets a manifest that sets the active code page to UTF-8, so Japanese file names work with the C functions as they are. It is built once and cached.
 4. **Lint is always built for your own machine.** The lint binary (`suru --点検`, `kumu 点検`, the language server) runs on your machine, so it ignores `SURU_TARGET`.
-5. **The interpreter also starts on Windows.** `suru.py` doesn't load `fcntl` on Windows, and for external libraries it looks for `<name>.dll` (`c` and `m` mean `msvcrt`). Standard library modules that use POSIX functions (files, processes and so on) don't link for Windows yet; that is the next stage.
+5. **The interpreter also starts on Windows.** `suru.py` doesn't load `fcntl` on Windows, and for external libraries it looks for `<name>.dll` (`c` and `m` mean `msvcrt`). Standard library modules that call C functions are covered in "Standard library on Windows" (compiled programs only, for now).
 6. **`tests/test_windows.py` checks it.** With `SURU_TARGET=x86_64-w64-mingw32` it makes .exe files with `suruc`, `suru --翻訳` and `kumu 作る` and runs them under wine.
+
+### Standard library on Windows
+
+1. **The standard library modules also work in Windows programs.** The `.suru` files in `lib/` can't be split by OS, so they keep calling the POSIX names (`realpath`, `uname`, `localtime_r`, `getentropy`, `dlopen`, `shm_open`, `mmap` and so on). On Windows the runtime library provides those names itself, built on the Windows API. `環境内のOS名取得する` returns 「Windows」.
+2. **What each module does on Windows.** 「ファイル」 handles UTF-8 paths and `実道取得する` returns a path with `\`. 「時間」 reads the clock and the time zone offset. 「乱数」 uses `rand_s`. 「動的リンク」 uses `LoadLibrary` (a name like `kernel32.dll`). 「共有メモリ」 and 「固定領域」 map a file `suru-shm-<name>` in the temp folder, so other processes share it.
+3. **「プロセス」 uses cmd.exe.** Commands go to cmd.exe instead of `/bin/sh`. When arguments are given as a list, only those with spaces or symbols are quoted with `"…"`, and the exit code is returned as is. Temporary files go in `%TEMP%`. The output of other programs is in their own encoding (cmd's `echo` uses the console code page).
+4. **What isn't available yet gives a clear error.** `分岐する`, `子終了待機する` and `子実行する` (fork), 「セマフォ」, 「共有箱」 and 「読書ロック」 (System V semaphores), and 「シグナル」 say 「…は Windows ではまだ使えません」 ("not available on Windows yet") when called. Loading the module and linking still work.
+5. **`tests/test_windows.py` checks it.** It builds a program that uses files, time, environment, random numbers, dynamic linking, shared memory and processes, and runs it under wine. It also checks the error messages for semaphores, signals and fork.
 
 ## License
 

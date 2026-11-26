@@ -5296,6 +5296,245 @@ static void init_builtins(void) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Windows で標準ライブラリ(lib の .suru)が呼ぶ POSIX の関数              */
+/* ------------------------------------------------------------------ */
+/* lib の .suru は OS で分けられないので、POSIX の名前のまま呼ぶ。Windows にないものは
+   ここで同じ名前・同じ形で作る。作れないもの(fork・System V のセマフォ・シグナル)は、
+   呼んだところで「Windows では使えません」のエラーにする */
+#ifdef _WIN32
+__attribute__((noreturn)) static void win_unsupported(const char *what) {
+    fail(call_pos, "%sは Windows ではまだ使えません", what);
+}
+
+/* UTF-8 ⇄ UTF-16(Windows の W の関数に渡す)。結果は malloc したもの */
+static wchar_t *win_wide(const char *s) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
+    wchar_t *w = malloc(sizeof(wchar_t) * (n > 0 ? n : 1));
+    if (n <= 0 || !MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n)) w[0] = 0;
+    return w;
+}
+static char *win_utf8(const wchar_t *w) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, NULL, 0, NULL, NULL);
+    char *s = malloc(n > 0 ? n : 1);
+    if (n <= 0 || !WideCharToMultiByte(CP_UTF8, 0, w, -1, s, n, NULL, NULL)) s[0] = 0;
+    return s;
+}
+/* Windows のエラー(GetLastError)を errno に直す(strerror で読めるように) */
+static void win_errno(void) {
+    DWORD e = GetLastError();
+    errno = e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND || e == ERROR_MOD_NOT_FOUND ? ENOENT
+            : e == ERROR_ACCESS_DENIED || e == ERROR_SHARING_VIOLATION                     ? EACCES
+            : e == ERROR_FILE_EXISTS || e == ERROR_ALREADY_EXISTS                             ? EEXIST
+            : e == ERROR_NOT_ENOUGH_MEMORY || e == ERROR_OUTOFMEMORY                          ? ENOMEM
+                                                                                              : EINVAL;
+}
+
+/* 環境: uname。lib が読むのは先頭の OS の名前だけ(struct utsname は 65 バイトずつの欄) */
+int uname(char *buf) {
+    memset(buf, 0, 65 * 5);
+    strcpy(buf, "Windows");
+    DWORD n = 64;
+    GetComputerNameA(buf + 65, &n);
+    strcpy(buf + 65 * 4, sizeof(void *) == 8 ? "x86_64" : "x86");
+    return 0;
+}
+
+/* ファイル: realpath(ないファイルなら NULL)。区切りは Windows の「\」のまま */
+char *realpath(const char *path, char *resolved) {
+    wchar_t *w = win_wide(path);
+    DWORD n = GetFullPathNameW(w, 0, NULL, NULL);
+    wchar_t *full = malloc(sizeof(wchar_t) * (n + 1));
+    char *r = NULL;
+    if (n && GetFullPathNameW(w, n + 1, full, NULL)) {
+        if (GetFileAttributesW(full) == INVALID_FILE_ATTRIBUTES) win_errno();
+        else {
+            char *s = win_utf8(full);
+            if (resolved) {
+                snprintf(resolved, 4096, "%s", s);
+                free(s);
+                r = resolved;
+            } else r = s;
+        }
+    } else win_errno();
+    free(full);
+    free(w);
+    return r;
+}
+
+/* 時間: localtime_r。Linux と同じ並び(9 つの int の後、40 バイト目に UTC からの秒の差)で書く */
+struct tm *suru_localtime_r(const int64_t *t, char *out) __asm__("localtime_r");
+struct tm *suru_localtime_r(const int64_t *t, char *out) {
+    __time64_t s = (__time64_t)*t;
+    struct tm lt, ut;
+    if (_localtime64_s(&lt, &s) != 0 || _gmtime64_s(&ut, &s) != 0) {
+        errno = EINVAL;
+        return NULL;
+    }
+    memcpy(out, &lt, sizeof(int) * 9);
+    ut.tm_isdst = 0;
+    lt.tm_isdst = 0;
+    int64_t off = (int64_t)(_mkgmtime64(&lt) - _mkgmtime64(&ut));
+    memset(out + 36, 0, 4);
+    memcpy(out + 40, &off, 8);
+    return (struct tm *)out;
+}
+
+/* 乱数: getentropy(256 バイトまで)。rand_s は _CRT_RAND_S を付けたときだけ宣言されるので、ここで宣言する */
+errno_t __cdecl rand_s(unsigned int *x);
+int getentropy(void *p, size_t n) {
+    if (n > 256) {
+        errno = EIO;
+        return -1;
+    }
+    unsigned char *b = p;
+    for (size_t i = 0; i < n; i += 4) {
+        unsigned int x;
+        if (rand_s(&x) != 0) {
+            errno = EIO;
+            return -1;
+        }
+        memcpy(b + i, &x, n - i < 4 ? n - i : 4);
+    }
+    return 0;
+}
+
+/* 動的リンク: dlopen・dlsym・dlclose・dlerror を LoadLibrary などで */
+static _Thread_local char dl_msg[512];
+static _Thread_local int dl_has_msg;
+static void dl_set_error(const char *what) {
+    DWORD e = GetLastError();
+    char m[400] = "";
+    DWORD k = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, e,
+                             MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), m, sizeof m, NULL);
+    while (k > 0 && (m[k - 1] == '\n' || m[k - 1] == '\r' || m[k - 1] == '.')) m[--k] = 0;
+    snprintf(dl_msg, sizeof dl_msg, "%s: %s", what, k ? m : "Windows のエラー");
+    dl_has_msg = 1;
+}
+void *dlopen(const char *path, int flags) {
+    (void)flags;
+    if (!path) return GetModuleHandleW(NULL);
+    wchar_t *w = win_wide(path);
+    HMODULE h = LoadLibraryW(w);
+    free(w);
+    if (!h) dl_set_error(path);
+    return h;
+}
+void *dlsym(void *h, const char *name) {
+    void *f = (void *)GetProcAddress((HMODULE)h, name);
+    if (!f) dl_set_error(name);
+    return f;
+}
+int dlclose(void *h) {
+    if (h == GetModuleHandleW(NULL)) return 0;
+    if (FreeLibrary((HMODULE)h)) return 0;
+    dl_set_error("dlclose");
+    return -1;
+}
+char *dlerror(void) {
+    if (!dl_has_msg) return NULL;
+    dl_has_msg = 0;
+    return dl_msg;
+}
+
+/* プロセス: pipe はあるが fork はない */
+int(pipe)(int *fd) { return _pipe(fd, 65536, _O_BINARY); }
+int fork(void) { win_unsupported("プロセスを分けること(「分岐する」など)"); }
+int waitpid(int pid, int *st, int opt) {
+    (void)pid, (void)st, (void)opt;
+    win_unsupported("プロセスを待つこと(waitpid)");
+}
+
+/* 共有メモリ: 一時フォルダの suru-shm-名前 というファイルを、プロセスどうしで同じ所に対応付ける。
+   開いている間も消せるように FILE_SHARE_DELETE で開く */
+static wchar_t *shm_path(const char *name) {
+    wchar_t dir[MAX_PATH + 1];
+    DWORD n = GetTempPathW(MAX_PATH + 1, dir);
+    if (!n) wcscpy(dir, L".\\");
+    while (*name == '/') name++;
+    wchar_t *wn = win_wide(name);
+    size_t len = wcslen(dir) + wcslen(wn) + 16;
+    wchar_t *p = malloc(sizeof(wchar_t) * len);
+    _snwprintf(p, len, L"%lssuru-shm-%ls", dir, wn);
+    p[len - 1] = 0;
+    free(wn);
+    return p;
+}
+int shm_open(const char *name, int oflag, ...) {
+    wchar_t *p = shm_path(name);
+    DWORD disp = (oflag & _O_CREAT) ? ((oflag & _O_EXCL) ? CREATE_NEW : OPEN_ALWAYS) : OPEN_EXISTING;
+    HANDLE h = CreateFileW(p, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           NULL, disp, FILE_ATTRIBUTE_TEMPORARY, NULL);
+    free(p);
+    if (h == INVALID_HANDLE_VALUE) {
+        win_errno();
+        return -1;
+    }
+    int fd = _open_osfhandle((intptr_t)h, _O_RDWR | _O_BINARY);
+    if (fd < 0) CloseHandle(h);
+    return fd;
+}
+int shm_unlink(const char *name) {
+    wchar_t *p = shm_path(name);
+    BOOL ok = DeleteFileW(p);
+    free(p);
+    if (!ok) {
+        win_errno();
+        return -1;
+    }
+    return 0;
+}
+int fchmod(int fd, int mode) {
+    (void)fd, (void)mode;
+    return 0;
+}
+void *mmap(void *addr, size_t len, int prot, int flags, int fd, int64_t off) {
+    (void)addr, (void)prot, (void)flags;
+    HANDLE f = (HANDLE)_get_osfhandle(fd);
+    uint64_t end = (uint64_t)off + len;
+    HANDLE m = CreateFileMappingW(f, NULL, PAGE_READWRITE, (DWORD)(end >> 32), (DWORD)end, NULL);
+    if (!m) {
+        win_errno();
+        return (void *)-1;
+    }
+    void *p = MapViewOfFile(m, FILE_MAP_ALL_ACCESS, (DWORD)((uint64_t)off >> 32), (DWORD)off, len);
+    CloseHandle(m); /* 対応付けた所が残っている間は、中身も残る */
+    if (!p) {
+        win_errno();
+        return (void *)-1;
+    }
+    return p;
+}
+int munmap(void *p, size_t len) {
+    (void)len;
+    if (UnmapViewOfFile(p)) return 0;
+    win_errno();
+    return -1;
+}
+
+/* セマフォ・共有箱・読書ロック(System V のセマフォ)とシグナルは、まだ作っていない */
+int semget(int key, int n, int flags) {
+    (void)key, (void)n, (void)flags;
+    win_unsupported("セマフォ(「セマフォ」「共有箱」「読書ロック」)");
+}
+int semctl(int id, int k, int cmd, ...) {
+    (void)id, (void)k, (void)cmd;
+    win_unsupported("セマフォ(「セマフォ」「共有箱」「読書ロック」)");
+}
+int semop(int id, void *ops, size_t n) {
+    (void)id, (void)ops, (void)n;
+    win_unsupported("セマフォ(「セマフォ」「共有箱」「読書ロック」)");
+}
+#define WIN_NO_SIGNAL win_unsupported("シグナル(「シグナル」)")
+int kill(int pid, int sig) { (void)pid, (void)sig; WIN_NO_SIGNAL; }
+int(sigemptyset)(void *s) { (void)s; WIN_NO_SIGNAL; }
+int(sigaddset)(void *s, int sig) { (void)s, (void)sig; WIN_NO_SIGNAL; }
+int(sigismember)(const void *s, int sig) { (void)s, (void)sig; WIN_NO_SIGNAL; }
+int sigpending(void *s) { (void)s; WIN_NO_SIGNAL; }
+int sigprocmask(int how, const void *s, void *old) { (void)how, (void)s, (void)old; WIN_NO_SIGNAL; }
+int sigwait(const void *s, int *sig) { (void)s, (void)sig; WIN_NO_SIGNAL; }
+#endif
+
+/* ------------------------------------------------------------------ */
 /* 始まり                                                              */
 /* ------------------------------------------------------------------ */
 
