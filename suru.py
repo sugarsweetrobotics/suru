@@ -1325,6 +1325,21 @@ def is_ijou(ln: Line) -> bool:
     return len(toks) == 1 and is_kw(toks[0], KW_IJOU)
 
 
+def opens_case(ln: Line) -> bool:
+    """「もし 値 が」で終わる行か(次の深い行が場合)"""
+    toks = nosep(ln.tokens)
+    return len(toks) > 1 and is_kw(toks[-1], KW_GA) and any(is_kw(t, KW_IF) for t in toks)
+
+
+def _ijou_then_more(n: Node) -> None:
+    """「以上」の後に同じ深さで文が続くなら、そう知らせる(場合分けを閉じる「以上」は場合と同じ深い行にあるので、ここには来ない)"""
+    kids = n.children
+    for k in range(len(kids) - 1):
+        if is_ijou(kids[k].line):
+            raise SuruError(f"「{KW_IJOU}」の後に文があります(手順の文は「{KW_IJOU}」の前に書きます)",
+                            kids[k + 1].line.number)
+
+
 def _ika_missing(n: Node) -> SuruError:
     word = nosep(n.line.tokens)[-1].value
     return SuruError(f"「{word}です」を閉じる「{KW_IJOU}」がありません(手順の最後の文の後に「{KW_IJOU}」だけの行を書きます)",
@@ -1354,6 +1369,7 @@ def _close_one(nodes: list[Node], i: int) -> tuple[Node, int]:
         elif i < len(nodes) and is_ijou(nodes[i].line):
             i += 1
         else:
+            _ijou_then_more(n)
             raise _ika_missing(n)
     else:
         body: list[Node] = []
@@ -6935,6 +6951,25 @@ def _paren_depth(text: str) -> int:
     return depth
 
 
+def _ika_open(lines: list[Line]) -> bool:
+    """「以上」で閉じていない「以下の手順です」があるか(対話モードで入力を待つため)。
+    場合分けがまだ開いていれば、その後の「以上」は場合分けを閉じる「以上」と見る"""
+    stack: list[tuple[str, int]] = []  # ("手順" か "場合", 字下げ)
+    for ln in lines:
+        if not nosep(ln.tokens):
+            continue
+        while stack and stack[-1][0] == "場合" and stack[-1][1] >= ln.indent:
+            stack.pop()  # 字下げで閉じた場合分け(場合分けを閉じる「以上」は場合と同じ深い行)
+        if is_ijou(ln):
+            if stack:
+                stack.pop()
+        elif opens_ika(ln):
+            stack.append(("手順", ln.indent))
+        elif opens_case(ln):
+            stack.append(("場合", ln.indent))
+    return any(kind == "手順" for kind, _ in stack)
+
+
 class Repl:
     """対話モード。1つの入力(1行か、空行までの複数行)ごとに、型を調べてから実行し、値と型を表示する"""
 
@@ -6958,7 +6993,7 @@ class Repl:
             lines = split_lines(text)
         except SuruError:
             lines = []
-        if sum(opens_ika(ln) for ln in lines) > sum(is_ijou(ln) for ln in lines):
+        if _ika_open(lines):
             return False  # 「以下の手順です」の「以上」がまだない
         if is_punct_line(text):
             # 句読点の書き方: 「。」で終わるまで読む
