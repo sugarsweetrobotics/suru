@@ -12,6 +12,7 @@ from __future__ import annotations
 __version__ = "0.9.1"
 
 import contextlib
+import re
 import math
 import os
 import stat
@@ -433,6 +434,8 @@ def tokenize_line(text: str, line: int) -> list[Token]:
             tokens.append(Token("RP", ")", here))
         elif c in RESERVED_MARKS:
             raise SuruError(f"{RESERVED_MARKS[c]}は将来の書き方のために予約されています(文字列の中では使えます)", here)
+        elif c in (QUASI_OPEN, QUASI_CLOSE):
+            raise SuruError("「【】」は「以下は【道】です」のような準クォートの頭にだけ書けます(文字列の中では使えます)", here)
         else:
             buf += c
         i += 1
@@ -799,6 +802,8 @@ def tokenize_punct_line(text: str, line: int) -> list[Token]:
             tokens.append(Token("PERIOD", PERIOD, here))
         elif c in RESERVED_MARKS:
             raise SuruError(f"{RESERVED_MARKS[c]}は将来の書き方のために予約されています(文字列の中では使えます)", here)
+        elif c in (QUASI_OPEN, QUASI_CLOSE):
+            raise SuruError("「【】」は「以下は【道】です」のような準クォートの頭にだけ書けます(文字列の中では使えます)", here)
         else:
             buf += c
         i += 1
@@ -832,6 +837,76 @@ class Line:
     tokens: list[Token]
     number: int
     closed: bool = False  # 「。」で終わった文(後ろの深い行を続きとみなさない)
+    # 準クォート「以下は【道】です … 以上です」の中身(字下げを除いた文字列)。tokens の最後が QUASI の字句
+    quasi: str | None = None
+    quasi_end: int = 0  # 準クォートの「以上」の行の番号
+
+
+# --- 準クォート(#192): 「以下は【道】です」+ 中身 + 「以上です」。中身はライブラリの「道展開する」で する に展開する ---
+QUASI_OPEN, QUASI_CLOSE = "【", "】"
+_QUASI_TOP = re.compile(r"^以下[ \t　]*は[ \t　]*【([^【】 \t　]+)】[ \t　]*(?:です)?[ \t　]*。?[ \t　]*(?:#.*)?$")
+_QUASI_EXPR = re.compile(r"^(.*?[^ \t　])[ \t　]*とは[ \t　]*以下[ \t　]*の[ \t　]*【([^【】 \t　]+)】[ \t　]*(?:です)?[ \t　]*。?[ \t　]*(?:#.*)?$")
+_QUASI_END = re.compile(r"^以上[ \t　]*(?:です)?[ \t　]*。?[ \t　]*(?:#.*)?$")
+QUASI_SUFFIX = "展開する"  # 【道】の展開の関数は「道展開する」
+QUASI_MAX_DEPTH = 20  # 展開したコードの中の準クォートを展開する深さの上限
+
+
+def _indent_of(raw: str) -> tuple[int, int]:
+    """行の字下げの幅と、字下げの文字数"""
+    width = 0
+    for i, c in enumerate(raw):
+        if c not in INDENT_WIDTH:
+            return width, i
+        width += INDENT_WIDTH[c]
+    return width, len(raw)
+
+
+def _quasi_header(raw: str) -> tuple[str, str | None] | None:
+    """準クォートの頭の行なら (名前, 式の形の「x とは」の部分 か None)"""
+    text = raw.strip()
+    if QUASI_OPEN not in text:
+        return None
+    m = _QUASI_TOP.match(text)
+    if m:
+        return m.group(1), None
+    m = _QUASI_EXPR.match(text)
+    if m and "「" not in m.group(1):
+        return m.group(2), m.group(1)
+    return None
+
+
+def _quasi_block(raws: list[str], k: int, indent: int, name: str) -> tuple[str, int]:
+    """頭の行 k の後ろの中身(字下げを除いて改行でつないだもの)と、「以上」の行の位置"""
+    body: list[str] = []
+    j = k + 1
+    while j < len(raws):
+        raw = raws[j]
+        if raw.strip():
+            width, _ = _indent_of(raw)
+            if width <= indent:
+                if _QUASI_END.match(raw.strip()) and width == indent:
+                    break
+                raise SuruError(f"「以下は【{name}】です」の中身は頭より深く字下げして、頭と同じ字下げの「以上です」で閉じてください",
+                                Pos(j + 1))
+        body.append(raw)
+        j += 1
+    else:
+        raise SuruError(f"「以下は【{name}】です」を閉じる「以上です」がありません", Pos(k + 1))
+    while body and not body[-1].strip():
+        body.pop()
+    while body and not body[0].strip():
+        body.pop(0)
+    if not body:
+        raise SuruError(f"「以下は【{name}】です」と「以上です」の間に中身がありません", Pos(k + 1))
+    least = min(_indent_of(b)[0] for b in body if b.strip())
+    out = []
+    for b in body:
+        width, n = 0, 0
+        while n < len(b) and b[n] in INDENT_WIDTH and width + INDENT_WIDTH[b[n]] <= least:
+            width += INDENT_WIDTH[b[n]]
+            n += 1
+        out.append(b[n:].rstrip())
+    return "\n".join(out), j
 
 
 def _depth_zero_periods(tokens: list[Token]) -> list[int]:
@@ -880,10 +955,19 @@ def _opens_punct(raws: list[str], k: int) -> bool:
     return nxt is not None and is_punct_line(nxt)
 
 
-def split_lines(source: str) -> list[Line]:
+def split_lines(source: str, at: int | None = None) -> list[Line]:
+    """行に分ける。at を渡すと、すべての行の番号をそれにする(準クォートを展開したコードは、頭の行を指す)"""
     lines = []
     raws = source.splitlines()
     k = 0
+    if at is not None:
+        lines = split_lines(source)
+        for ln in lines:  # 展開したコードの位置は、準クォートの頭の行(何文字目かは示さない)
+            ln.number = Pos(at)
+            for t in ln.tokens:
+                t.line = Pos(at)
+            ln.quasi_end = 0
+        return lines
     while k < len(raws):
         raw, number = raws[k], k + 1
         indent = 0
@@ -892,6 +976,17 @@ def split_lines(source: str) -> list[Line]:
                 indent += INDENT_WIDTH[c]
             else:
                 break
+        head = _quasi_header(raw)
+        if head is not None:
+            name, before = head
+            body, k = _quasi_block(raws, k, indent, name)
+            toks = tokenize_line(before, number) if before is not None else []
+            if before is not None:
+                toks.append(Token("KW", KW_TOWA, number))  # 「x とは」の「とは」(before は「とは」の前)
+            toks.append(Token("QUASI", name, number))
+            lines.append(Line(indent, toks, Pos(number), quasi=body, quasi_end=k + 1))
+            k += 1
+            continue
         if not is_punct_line(raw) and not _opens_punct(raws, k):
             tokens = tokenize_line(raw, number)
             if tokens:
@@ -3365,6 +3460,8 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         line = _prelude_line(nodes)
         if line is not None:
             prelude = Import(load_prelude(ctx, line), line, True, auto=True)
+    if _has_quasi(nodes):
+        nodes = expand_quasi(nodes, [i.module for i in imports.values() if isinstance(i, Import)], cache={"ctx": ctx})
     test_import = None
     first_test = next((n.line.number for n in nodes if n.line.tokens and is_test_head(nosep(n.line.tokens)[0])), None)
     if first_test is not None:
@@ -3560,6 +3657,141 @@ def _join_in_nodes(nodes: list, modules: set) -> None:
     for n in nodes:
         n.line.tokens = join_module_names(n.line.tokens, modules)
         _join_in_nodes(n.children, modules)
+
+
+_QUASI_RECORD: tuple | None = None  # 「--展開」: (調べるファイルの ParseContext, [(頭の行, 以上の行, 展開したソース, 式なら字下げ)])
+
+
+def expand_source(source: str, base_dir: str, path: str) -> str:
+    """「suru --展開」: 準クォートを展開したソース(展開したコードの中の準クォートも展開したもの)"""
+    global _QUASI_RECORD
+    ctx = ParseContext(base_dir=base_dir, path=path)
+    _QUASI_RECORD = (ctx, [])
+    try:
+        parse_program(source, ctx)
+        record = list(_QUASI_RECORD[1])
+    finally:
+        _QUASI_RECORD = None
+    raws = source.splitlines()
+    out: list[str] = []
+    k = 0
+    for start, end, src, indent in sorted(record):
+        out.extend(raws[k : start - 1])
+        if indent is None:
+            out.extend(src.splitlines())
+        else:
+            head = raws[start - 1]
+            out.append(head[: head.find("とは") + 2] if "とは" in head else head)
+            pad = " " * (indent + 2)
+            out.extend(pad + x if x.strip() else x for x in src.splitlines())
+        k = end
+    out.extend(raws[k:])
+    return "\n".join(out) + "\n"
+
+
+def _has_quasi(nodes: list) -> bool:
+    return any(n.line.quasi is not None or _has_quasi(n.children) for n in nodes)
+
+
+def find_expander(name: str, modules: list, line: int) -> tuple:
+    """【name】の展開の関数「name展開する」を、読み込んだファイルから探す。(ファイル, 関数の名前)"""
+    fname = name + QUASI_SUFFIX
+    found = [m for m in modules
+             if fname not in m.private and any(isinstance(d, Define) and d.name == fname for d in m.program)]
+    if not found:
+        raise SuruError(f"【{name}】の展開の関数「{fname}」が、読み込んだファイルにありません"
+                        f"(「文字列 を {fname} は 文字列 の 成否」を定義したファイルを読み込んでください)", line)
+    if len(found) > 1:
+        names = "と".join(f"「{m.name}」" for m in found)
+        raise SuruError(f"【{name}】の展開の関数「{fname}」が{names}の両方にあります", line)
+    return found[0], fname
+
+
+def run_expander(name: str, body: str, modules: list, line: int, cache: dict) -> str:
+    """【name】の中身 body を展開の関数に渡し、返した する のソースを返す(インタプリタで動かす)"""
+    module, fname = find_expander(name, modules, line)
+    it = cache.get("interp")
+    if it is None:
+        it = cache["interp"] = Interpreter()
+        if "ctx" in cache:
+            it.ctx = cache["ctx"].copy()  # 読み込んだファイルの型(成否 など)
+    try:
+        env = it.load_module(module)
+        v = it.perform(it.call(env.vars[fname], {WO: body}, line))
+    except SuruError as e:
+        raise SuruError(f"【{name}】の展開の関数「{fname}」が止まりました: {e.message}", line) from None
+    return quasi_result(name, fname, v, line)
+
+
+def quasi_result(name: str, fname: str, v: Any, line: int) -> str:
+    """展開の関数の値(文字列 の 成否)から、する のソースを取り出す。失敗ならエラー"""
+    if isinstance(v, Record) and v.type_name == "成否" and len(v.values) == 1:
+        msg = v.values[0]
+        if v.ctor == "成功" and isinstance(msg, str):
+            return msg
+        if v.ctor == "失敗" and isinstance(msg, str):
+            m = re.match(r"^([0-9]+)行目[:：][ \t　]*(.*)$", msg, re.S)
+            if m:  # 「2行目: …」は中身の2行目(頭の行の次から数える)
+                raise SuruError(f"【{name}】の{m.group(1)}行目: {m.group(2)}", Pos(int(line) + int(m.group(1))))
+            raise SuruError(f"【{name}】: {msg}", line)
+    raise SuruError(f"【{name}】の展開の関数「{fname}」は「文字列 の 成否」を返してください", line)
+
+
+def expand_quasi(nodes: list, modules: list, depth: int = 0, cache: dict | None = None, top: bool = True) -> list:
+    """準クォートを、展開の関数が返した する のコードに置きかえる。一番外の「以下は【道】です」は文の並びに、
+    「x とは 以下の【SQL】です」は x の式になる。展開したコードの中の準クォートも展開する"""
+    cache = {} if cache is None else cache
+    out: list = []
+    for n in nodes:
+        q = n.line.quasi
+        if q is None:
+            n.children = expand_quasi(n.children, modules, depth, cache, False)
+            out.append(n)
+            continue
+        toks = n.line.tokens
+        name, line = toks[-1].value, n.line.number
+        if depth >= QUASI_MAX_DEPTH:
+            raise SuruError(f"【{name}】の展開が深すぎます(展開したコードの中の準クォートが{QUASI_MAX_DEPTH}回続きました)", line)
+        if len(toks) == 1 and not top:
+            raise SuruError(f"「以下は【{name}】です」は一番外(字下げなし)にだけ書けます", line)
+        src = run_expander(name, q, modules, line, cache)
+        if depth == 0 and _QUASI_RECORD is not None and cache.get("ctx") is not None and cache["ctx"] is _QUASI_RECORD[0]:
+            _QUASI_RECORD[1].append((int(line), n.line.quasi_end, src, None if len(toks) == 1 else n.line.indent))
+        made = build_layout(split_lines(src, int(line))) if src.strip() else []
+        made = expand_quasi(made, modules, depth + 1, cache, len(toks) == 1)
+        if len(toks) == 1:
+            for m in made:
+                if import_target(m) is not None:
+                    raise SuruError(f"【{name}】の展開したコードには、読み込みの文を書けません", line)
+            out.extend(made)
+            continue
+        # 「x とは 以下の【SQL】です」: 展開したものを式として x の定義の本体にする
+        head = toks[:-1]
+        if len(made) == 1 and not made[0].children:
+            n.line = Line(n.line.indent, head + [Token("LP", "(", line)] + made[0].line.tokens + [Token("RP", ")", line)],
+                          line, n.line.closed)
+        elif made:
+            n.line = Line(n.line.indent, head, line, n.line.closed)
+            n.children = _reindent(made, n.line.indent + 2)
+        else:
+            raise SuruError(f"【{name}】の展開の関数が空のコードを返しました(式の場所には式が要ります)", line)
+        out.append(n)
+    return out
+
+
+def _reindent(nodes: list, base: int) -> list:
+    """展開した行の字下げを base からにする(字下げの差はそのまま)"""
+    if not nodes:
+        return nodes
+    shift = base - nodes[0].line.indent
+
+    def walk(ns: list) -> None:
+        for m in ns:
+            m.line.indent += shift
+            walk(m.children)
+
+    walk(nodes)
+    return nodes
 
 
 def import_target(node: Node) -> tuple[str, bool] | None:
@@ -7809,6 +8041,7 @@ def repl(files: list[str] | None = None, checking: bool = True) -> None:
         r.feed(source)
 
 CHECK_FLAGS = ("--検査", "--check")  # 型の検査だけを行う(実行はしない)
+EXPAND_FLAGS = ("--展開", "--expand")  # 準クォートを展開したソースを表示する
 NO_CHECK_FLAGS = ("--検査なし", "--no-check")  # 型の検査をせずに実行する
 COMPILE_FLAGS = ("--翻訳", "--compile")  # バイナリにコンパイルする(suru_compile.py)
 REPL_FLAGS = ("--対話", "-i")  # ファイルを読んでから対話モードを始める
@@ -8091,6 +8324,18 @@ def main(argv: list[str]) -> int:
     if len(argv) >= 2 and argv[1] in TEST_FLAGS:
         return run_tests(argv[2:])
     argv, as_json = _take_json_flag(argv)
+    if len(argv) >= 2 and argv[1] in EXPAND_FLAGS:
+        if len(argv) != 3:
+            print("使い方: suru --展開 ファイル.suru", file=sys.stderr)
+            return 2
+        with open(argv[2], encoding="utf-8") as f:
+            source = f.read()
+        try:
+            sys.stdout.write(expand_source(source, os.path.dirname(os.path.abspath(argv[2])), argv[2]))
+        except SuruError as e:
+            print(error_json(e, "構文", argv[2]) if as_json else format_error(e, source), file=sys.stderr)
+            return 1
+        return 0
     if len(argv) >= 2 and argv[1] in CHECK_FLAGS:
         rest = [a for a in argv[2:] if a not in JSON_FLAGS]
         as_json = as_json or len(rest) < len(argv) - 2

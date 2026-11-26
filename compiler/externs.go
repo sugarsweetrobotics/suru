@@ -128,7 +128,7 @@ func typedExtern(ln *Line, head []*Token, towa *Token, ext, typ []*Token, word s
 	}
 	sig := cat(args, []*Token{name, tok("KW", KwWa, name.Line)}, res)
 	def := cat(head, []*Token{towa}, ext)
-	return []*Line{{0, sig, ln.Number, ln.Closed}, {0, def, ln.Number, ln.Closed}}
+	return []*Line{{Indent: 0, Tokens: sig, Number: ln.Number, Closed: ln.Closed}, {Indent: 0, Tokens: def, Number: ln.Number, Closed: ln.Closed}}
 }
 
 func joinStrings(xs []string, sep string) string {
@@ -237,7 +237,7 @@ func externBlockLine(ln *Line, word string) []*Line {
 	head = append(head, name)
 	sig := cat(before, []*Token{ts[wa[0]]}, res)
 	def := cat(head, []*Token{tok("KW", KwTowa, name.Line), tok("WORD", KwExtern, after[0].Line), after[0]})
-	return []*Line{{0, sig, ln.Number, ln.Closed}, {0, def, ln.Number, ln.Closed}}
+	return []*Line{{Indent: 0, Tokens: sig, Number: ln.Number, Closed: ln.Closed}, {Indent: 0, Tokens: def, Number: ln.Number, Closed: ln.Closed}}
 }
 
 // opensExtBlock は「以下は外部の入出力動作です」「以下は外部の関数です」(「以下の外部の…」も)だけの行か

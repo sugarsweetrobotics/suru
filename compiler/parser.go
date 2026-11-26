@@ -8,7 +8,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -352,7 +354,7 @@ func closeOne(nodes []*LNode, i int) (*LNode, int) {
 		}
 		do := &Token{Kind: "DO", S: toks[k].S, Form: toks[k].S, Line: toks[k].Line, Do: body}
 		line := append(append(append([]*Token{}, toks[:k]...), do), toks[k+1:]...)
-		n.Line = &Line{n.Line.Indent, line, n.Line.Number, n.Line.Closed}
+		n.Line = &Line{Indent: n.Line.Indent, Tokens: line, Number: n.Line.Number, Closed: n.Line.Closed}
 		n.Children = rest
 		return n, i
 	}
@@ -1434,7 +1436,7 @@ func (p *ExprParser) parenBlock(open *Token) Node {
 	}
 	var nodes []*LNode
 	for _, s := range sentences {
-		nodes = append(nodes, &LNode{Line: &Line{0, s, s[0].Line, true}})
+		nodes = append(nodes, &LNode{Line: &Line{Indent: 0, Tokens: s, Number: s[0].Line, Closed: true}})
 	}
 	return parseBlock(nodes)
 }
@@ -1464,7 +1466,7 @@ func (p *ExprParser) parenDo(open *Token) Node {
 	for _, x := range splitSentences(inner) {
 		x = stripSeps(x)
 		if len(x) > 0 {
-			nodes = append(nodes, &LNode{Line: &Line{0, x, x[0].Line, true}})
+			nodes = append(nodes, &LNode{Line: &Line{Indent: 0, Tokens: x, Number: x[0].Line, Closed: true}})
 		}
 	}
 	if len(nodes) == 0 {
@@ -1961,7 +1963,7 @@ func parseStatement(node *LNode) Node {
 	}
 	if isKw(tokens[0], KwSorekara) {
 		rest := raw[indexOf(raw, tokens[0])+1:]
-		inner := &LNode{&Line{node.Line.Indent, rest, node.Line.Number, node.Line.Closed}, node.Children}
+		inner := &LNode{&Line{Indent: node.Line.Indent, Tokens: rest, Number: node.Line.Number, Closed: node.Line.Closed}, node.Children}
 		if len(nosep(flatten(inner))) == 0 {
 			raise(tokens[0].Line, "「それから」の後に文が必要です")
 		}
@@ -1980,7 +1982,7 @@ func parseStatement(node *LNode) Node {
 		if len(nosep(rest)) == 0 {
 			raise(tokens[0].Line, "「ただし」の後に定義が必要です")
 		}
-		inner := &LNode{&Line{node.Line.Indent, rest, node.Line.Number, node.Line.Closed}, node.Children}
+		inner := &LNode{&Line{Indent: node.Line.Indent, Tokens: rest, Number: node.Line.Number, Closed: node.Line.Closed}, node.Children}
 		if findTopLevel(nosep(rest), KwTowa) < 0 {
 			head := nosep(flatten(inner))
 			last := head[len(head)-1]
@@ -2655,7 +2657,7 @@ func parseTraitDecl(node *LNode, nameTok *Token, after []*Token) Node {
 	line := node.Line.Number
 	var members []*LNode
 	if len(nosep(after)) > 0 {
-		members = []*LNode{{&Line{node.Line.Indent, after, line, node.Line.Closed}, node.Children}}
+		members = []*LNode{{&Line{Indent: node.Line.Indent, Tokens: after, Number: line, Closed: node.Line.Closed}, node.Children}}
 	} else {
 		members = node.Children
 	}
@@ -2815,6 +2817,7 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 	nodes := buildLayout(lines)
 	imports := map[*LNode]Node{}
 	var modNames []string
+	var mods []*Module
 	for _, n := range nodes {
 		if lib := externLibTarget(n, ctx); lib != nil {
 			imports[n] = lib
@@ -2824,7 +2827,11 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 			imp := &Import{loadModule(name, ctx, n.Line.Number), n.Line.Number, open, false}
 			imports[n] = imp
 			modNames = append(modNames, imp.Module.Name)
+			mods = append(mods, imp.Module)
 		}
+	}
+	if hasQuasi(nodes) {
+		nodes = expandQuasi(nodes, mods, 0, true, ctx)
 	}
 	var prelude *Import
 	if !ctx.InPrelude && !hasPreludeImport(imports) {
@@ -3340,6 +3347,208 @@ func joinInNodes(nodes []*LNode, modules map[string]bool) {
 		n.Line.Tokens = must(joinModuleNames(n.Line.Tokens, modules))
 		joinInNodes(n.Children, modules)
 	}
+}
+
+// --- 準クォートの展開(#192) ---
+
+// Expander は展開の関数 fname(読み込んだファイル mod の中)に中身 body を渡して動かす。成功なら ok が true で out が
+// する のソース、失敗なら ok が false で out が失敗の文。動かせなければ err。suruc などのコマンドが入れる
+var Expander func(mod *Module, fname, body string) (ok bool, out string, err error)
+
+// QuasiExpansion は「--展開」のための、一番外のファイルの準クォートと展開したソース
+type QuasiExpansion struct {
+	Start, End int    // 頭の行と「以上」の行
+	Src        string // 展開したソース
+	ExprIndent int    // 式の形なら頭の字下げ、一番外の形なら -1
+}
+
+// QuasiRecord を入れておくと、Ctx のファイルの準クォートを Items に足す(suruc --展開)
+var QuasiRecord *struct {
+	Ctx   *ParseContext
+	Items []QuasiExpansion
+}
+
+var quasiFailLine = regexp.MustCompile(`(?s)^([0-9]+)行目[:：][ \t　]*(.*)$`)
+
+func hasQuasi(nodes []*LNode) bool {
+	for _, n := range nodes {
+		if n.Line.HasQuasi || hasQuasi(n.Children) {
+			return true
+		}
+	}
+	return false
+}
+
+// findExpander は【name】の展開の関数「name展開する」を、読み込んだファイルから探す
+func findExpander(name string, mods []*Module, line Pos) (*Module, string) {
+	fname := name + quasiSuffix
+	var found []*Module
+	for _, m := range mods {
+		if m.Private[fname] {
+			continue
+		}
+		for _, d := range m.Program {
+			if def, ok := d.(*Define); ok && def.Name == fname {
+				found = append(found, m)
+				break
+			}
+		}
+	}
+	if len(found) == 0 {
+		raise(line, "【"+name+"】の展開の関数「"+fname+"」が、読み込んだファイルにありません"+
+			"(「文字列 を "+fname+" は 文字列 の 成否」を定義したファイルを読み込んでください)")
+	}
+	if len(found) > 1 {
+		var names []string
+		for _, m := range found {
+			names = append(names, "「"+m.Name+"」")
+		}
+		raise(line, "【"+name+"】の展開の関数「"+fname+"」が"+strings.Join(names, "と")+"の両方にあります")
+	}
+	return found[0], fname
+}
+
+// runExpander は【name】の中身を展開の関数に渡し、返した する のソースを返す
+func runExpander(name, body string, mods []*Module, line Pos) string {
+	mod, fname := findExpander(name, mods, line)
+	if Expander == nil {
+		raise(line, "【"+name+"】: この道具では準クォートを展開できません")
+	}
+	savedFile := curPosFile
+	curPosFile = ""
+	ok, out, err := Expander(mod, fname, body)
+	curPosFile = savedFile
+	if err != nil {
+		raise(line, "【"+name+"】の展開の関数「"+fname+"」が止まりました: "+err.Error())
+	}
+	if ok {
+		return out
+	}
+	if m := quasiFailLine.FindStringSubmatch(out); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		raise(Pos{line.Line + n, 0, line.File}, "【"+name+"】の"+m[1]+"行目: "+m[2])
+	}
+	raise(line, "【"+name+"】: "+out)
+	return ""
+}
+
+// expandQuasi は準クォートを、展開の関数が返した する のコードに置きかえる(suru.py の expand_quasi と同じ)
+func expandQuasi(nodes []*LNode, mods []*Module, depth int, top bool, ctx *ParseContext) []*LNode {
+	var out []*LNode
+	for _, n := range nodes {
+		if !n.Line.HasQuasi {
+			n.Children = expandQuasi(n.Children, mods, depth, false, ctx)
+			out = append(out, n)
+			continue
+		}
+		toks := n.Line.Tokens
+		name, line := toks[len(toks)-1].S, n.Line.Number
+		if depth >= quasiMaxDepth {
+			raisef(line, "【%s】の展開が深すぎます(展開したコードの中の準クォートが%d回続きました)", name, quasiMaxDepth)
+		}
+		if len(toks) == 1 && !top {
+			raise(line, "「以下は【"+name+"】です」は一番外(字下げなし)にだけ書けます")
+		}
+		src := runExpander(name, n.Line.Quasi, mods, line)
+		if depth == 0 && QuasiRecord != nil && QuasiRecord.Ctx == ctx {
+			ind := -1
+			if len(toks) > 1 {
+				ind = n.Line.Indent
+			}
+			QuasiRecord.Items = append(QuasiRecord.Items, QuasiExpansion{line.Line, n.Line.QuasiEnd, src, ind})
+		}
+		var made []*LNode
+		if strings.TrimSpace(src) != "" {
+			made = buildLayout(must(splitSourceLinesAt(src, line)))
+		}
+		made = expandQuasi(made, mods, depth+1, len(toks) == 1, ctx)
+		if len(toks) == 1 {
+			for _, m := range made {
+				if _, _, ok := importTarget(m); ok {
+					raise(line, "【"+name+"】の展開したコードには、読み込みの文を書けません")
+				}
+			}
+			out = append(out, made...)
+			continue
+		}
+		// 「x とは 以下の【SQL】です」: 展開したものを式として x の定義の本体にする
+		head := append([]*Token{}, toks[:len(toks)-1]...)
+		switch {
+		case len(made) == 1 && len(made[0].Children) == 0:
+			body := append(append(head, &Token{Kind: "LP", S: "(", Line: line}), made[0].Line.Tokens...)
+			body = append(body, &Token{Kind: "RP", S: ")", Line: line})
+			n.Line = &Line{Indent: n.Line.Indent, Tokens: body, Number: line, Closed: n.Line.Closed}
+		case len(made) > 0:
+			n.Line = &Line{Indent: n.Line.Indent, Tokens: head, Number: line, Closed: n.Line.Closed}
+			n.Children = reindent(made, n.Line.Indent+2)
+		default:
+			raise(line, "【"+name+"】の展開の関数が空のコードを返しました(式の場所には式が要ります)")
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+// reindent は展開した行の字下げを base からにする(字下げの差はそのまま)
+func reindent(nodes []*LNode, base int) []*LNode {
+	if len(nodes) == 0 {
+		return nodes
+	}
+	shift := base - nodes[0].Line.Indent
+	var walk func(ns []*LNode)
+	walk = func(ns []*LNode) {
+		for _, m := range ns {
+			m.Line.Indent += shift
+			walk(m.Children)
+		}
+	}
+	walk(nodes)
+	return nodes
+}
+
+// ExpandSource は「suruc --展開」: 準クォートを展開したソース
+func ExpandSource(source, baseDir, path string) (out string, err *SuruError) {
+	ctx := NewParseContext(baseDir)
+	ctx.Path = filePath(path)
+	QuasiRecord = &struct {
+		Ctx   *ParseContext
+		Items []QuasiExpansion
+	}{Ctx: ctx}
+	defer func() { QuasiRecord = nil }()
+	if err = tagged("構文", func() { ParseProgram(source, ctx) }); err != nil {
+		return
+	}
+	items := append([]QuasiExpansion{}, QuasiRecord.Items...)
+	sort.Slice(items, func(i, j int) bool { return items[i].Start < items[j].Start })
+	raws := SplitLines(source)
+	var lines []string
+	k := 0
+	for _, it := range items {
+		lines = append(lines, raws[k:it.Start-1]...)
+		srcLines := strings.Split(strings.ReplaceAll(it.Src, "\r\n", "\n"), "\n")
+		if len(srcLines) > 0 && srcLines[len(srcLines)-1] == "" {
+			srcLines = srcLines[:len(srcLines)-1]
+		}
+		if it.ExprIndent < 0 {
+			lines = append(lines, srcLines...)
+		} else {
+			head := raws[it.Start-1]
+			if i := strings.Index(head, "とは"); i >= 0 {
+				head = head[:i+len("とは")]
+			}
+			lines = append(lines, head)
+			pad := strings.Repeat(" ", it.ExprIndent+2)
+			for _, x := range srcLines {
+				if strings.TrimSpace(x) != "" {
+					x = pad + x
+				}
+				lines = append(lines, x)
+			}
+		}
+		k = it.End
+	}
+	lines = append(lines, raws[k:]...)
+	return strings.Join(lines, "\n") + "\n", nil
 }
 
 func importTarget(node *LNode) (string, bool, bool) {
