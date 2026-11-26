@@ -150,7 +150,11 @@
       "patterns": [
         {
           "name": "keyword.control.suru",
-          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(?:入出力手順|手順)(?![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])"
+          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])以下[ 　]*の[ 　]*(?:入出力)?手順"
+        },
+        {
+          "name": "keyword.control.suru",
+          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(?:入出力手順|以上|手順)(?![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])"
         },
         {
           "name": "storage.type.suru",

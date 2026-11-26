@@ -209,7 +209,16 @@ Side effects such as printing and input are handled as values called 「動作�
 「はじめ」を表示する。それから、「おわり」を表示する。
 ```
 
-More examples: `examples/stdlib.suru` and `examples/stdlib_open.suru` show the standard library, `examples/predicate.suru` predicates, `examples/cases.suru` case-by-case function definitions and pattern conditions, `examples/io.suru` actions and procedures, `examples/fib_input.suru` asks for a count and prints the Fibonacci sequence, `examples/data.suru` records, pattern matching and traits, `examples/punct.suru` the punctuation style, `examples/more.suru` line breaks and indentation, local definitions, conditionals and recursion, and long pipelines, and `examples/list.suru` particle arguments, lists and higher-order functions. `examples/通信/` has TCP and UDP echo servers and echo clients (run them in two terminals).
+A procedure can also be written as the sentences from 「以下の手順です」 ("the steps below") to 「以上」 ("that is all"), with no parenthesis to forget to close.
+
+```
+名前 を 歓迎する とは 以下の手順です
+  「こんにちは、」 + 名前 + 「さん」 を 表示する
+  「ようこそ」 を 表示する
+  以上
+```
+
+More examples: `examples/stdlib.suru` and `examples/stdlib_open.suru` show the standard library, `examples/predicate.suru` predicates, `examples/cases.suru` case-by-case function definitions and pattern conditions, `examples/io.suru` actions and procedures, `examples/blocks.suru` 「以下の手順です … 以上」 and nested case analysis, `examples/fib_input.suru` asks for a count and prints the Fibonacci sequence, `examples/data.suru` records, pattern matching and traits, `examples/punct.suru` the punctuation style, `examples/more.suru` line breaks and indentation, local definitions, conditionals and recursion, and long pipelines, and `examples/list.suru` particle arguments, lists and higher-order functions. `examples/通信/` has TCP and UDP echo servers and echo clients (run them in two terminals).
 
 ## Grammar summary
 
@@ -250,6 +259,7 @@ More examples: `examples/stdlib.suru` and `examples/stdlib_open.suru` show the s
 | `3 と 4 の 点` / `横 は 3 で 縦 は 4 の 点` | Building a record (positional / named) |
 | `p の 横`, `横 は 10 の p` | Reading a field, making a new record with one field changed |
 | `もし 形 が` + deeper lines like `半径 の 円 ならば …` | Pattern matching (case analysis) |
+| `…、2 ならば 「b」 以上、…` | 「以上」 closes the innermost case analysis (when nesting on one line) |
 | `先頭 は x で 残り は 他 ならば …` | Splits a non-empty list into its head and rest |
 | `半径 の 円 かつ 半径 > 10 ならば …` | A pattern condition (guard) |
 | `（s という JSON文字列） を …`, `半径 という 円 ならば …` | In patterns, 「の 形名」 can also be written 「という 形名」 |
@@ -257,6 +267,7 @@ More examples: `examples/stdlib.suru` and `examples/stdlib_open.suru` show the s
 | `比較可能 という 性質 とは …` / `点 は 比較可能` | Defining and implementing a trait (type class) |
 | `x を 表示する`, `入力する` | Make actions (side effects). Written at the top level, they are carried out |
 | `手順（文。文。…）` / `… とは 手順` + deeper lines | Carry out sentences in order (do notation). The last sentence is the action of the whole |
+| `… とは 以下の手順です` + sentences + `以上` | A procedure written with a closing word. 「以上」 is required. `以下の入出力手順です` too |
 | `名前 とは 入力した 結果` | Inside a procedure, carry out an action and name its result (bind) |
 | `入力してから 表示する` | Pass the previous action's result to the next function's 「を」 (bind) |
 | `（入力する） の 結果 を 数値にする` | Apply a function to an action's result (map) |
@@ -301,7 +312,7 @@ If you define a function with the same name as a built-in, your definition is us
 10. **Passing values to a function value fills the not-yet-given arguments in definition order.** For built-ins, the order is the one in the table (for 加算する, を then に). If required arguments remain, the result is again a partial application. In a fold, a function with two or more required arguments receives the "accumulator" and the "element" separately, and a function with one receives them as the list `（累積値 と 要素）`.
 11. **「それぞれ」 applies to one call only.** `リスト の それぞれ を 三倍する` returns the list of tripled results. With two 「それぞれ」 in the same call, the elements at the same positions are paired (different lengths are an error). `リスト の それぞれ` written anywhere other than a call argument is just the list.
 12. **Anonymous functions** are `x を 受け取って 本体 を 返すこと`. Parameters are written as in a definition (`a と b を 受け取って` also works, and a and b may have different types). They capture outer variables (closures). Wrap one in parentheses when it comes before other arguments.
-13. **Reserved names.** Words ending in 「する」, 「して」 or 「すること」 are always treated as functions, so they can't be variable names. `と` `とは` `の` `が` `を` `に` `で` `から` `へ` `より` `もし` `ならば` `そうでなければ` `受け取って` `返すこと` `ただし` `か` `は` `という` `組` `性質` `それから` `かつ` `または` `読み込む` `読み込んで` `使う` `真` `偽` `空` are also reserved. Words ending in 「…した」 (`入力した`) and words ending in 「…してから」 are function calls too. Words ending in 「…である」, 「…でない」 or 「…であること」 are predicate calls (item 47). `結果` and `手順` are not reserved; they have a special meaning only in fixed positions (item 36 onward).
+13. **Reserved names.** Words ending in 「する」, 「して」 or 「すること」 are always treated as functions, so they can't be variable names. `と` `とは` `の` `が` `を` `に` `で` `から` `へ` `より` `もし` `ならば` `そうでなければ` `受け取って` `返すこと` `ただし` `か` `は` `という` `組` `性質` `それから` `かつ` `または` `読み込む` `読み込んで` `使う` `真` `偽` `空` `以上` are also reserved (`以下の手順` and `以下の入出力手順` are read as one word too). Words ending in 「…した」 (`入力した`) and words ending in 「…してから」 are function calls too. Words ending in 「…である」, 「…でない」 or 「…であること」 are predicate calls (item 47). `結果` and `手順` are not reserved; they have a special meaning only in fixed positions (item 36 onward).
 14. **Arithmetic binds tighter than calls.** To use a call's result in a calculation, wrap it in parentheses: `( 1 と 2 を加算する ) * 3`.
 15. **In the spaced style, tokens are separated by spaces.** Writing `a+b` packed together makes it one name. As exceptions, parentheses and 「」『』 separate tokens even when packed. To write packed, use the punctuation style ("Punctuation style" below).
 16. **The off-side rule.** The indentation width at the start of a line decides the structure (a half-width space = 1, a full-width space = 2, a tab = 4).
@@ -1290,6 +1301,16 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 
 1. **A guide for AI to read first is in [docs/AIの手引き.md](docs/AIの手引き.md).** It gathers the essentials of the grammar, common mistakes and how to fix them, and how to run checks, lint and tests, in one file (in Japanese). `CLAUDE.md` and `AGENTS.md` point to it.
 2. **The guide's code examples are verified by tests.** `tests/test_ai_guide.py` checks that ` ```suru ` examples pass the type check and that ` ```suru-誤り ` examples are errors, so the guide doesn't drift from the language.
+
+### The steps below and 以上
+
+1. **The sentences from `X とは 以下の手順です` to `以上` are a procedure.** Write the sentences on deeper lines, or continue at the same indent. Write `以上` as the last deeper line or on a line at the indent of the head. Unlike `手順（…）`, no parenthesis stays open over many lines, and the start and end read like a Japanese document ("the steps below are … that is all") (#161). `以下 の 手順` (without です), `以下の入出力手順です` (checked like 「入出力手順」) and `以上です` work too. `手順（…）` and `… とは 手順` + deeper lines work as before.
+2. **「以上」 is required.** 「以下の手順です」 and 「以上」 are a pair, so forgetting it gives 「「以下の手順です」を閉じる「以上」がありません」 ("there is no 以上 closing 以下の手順です"), no sentences between them give 「「以下の手順です」と「以上」の間に文がありません」, and a 「以上」 with no 「以下の手順です」 gives 「対応する「以下の手順です」のない「以上」があります」.
+3. **In the punctuation style, sentences separate them.** As in `挨拶するとは、以下の手順です。「a」を表示する。「b」を表示する。以上。`, the sentences up to 「以上。」 are the procedure's sentences. The lines after 「以下の手順です。」 may be indented.
+4. **It can be written in a branch of a case analysis.** As in `そうでなければ 以下の手順です` + deeper lines + `以上`, it can go anywhere an expression can (the same as writing `手順（…）` there).
+5. **「以上」 also closes the innermost 「もし 値 が」.** It is optional, and used to write a nested case analysis on one line or in the punctuation style. In `もしxが1ならば、もしyが1ならば「a」、2ならば「b」以上、2ならば「c」、そうでなければ「d」。` the inner case analysis ends at 「以上」, and `2ならば「c」` is a case of the outer one.
+6. **Indentation also ends a nested case analysis.** When a line shallower than the cases of the inner 「もし 値 が」, at the indent of the outer cases, comes, the inner one ends there. Previously the inner case analysis took the outer cases after it (`2 ならば 「c」` or `そうでなければ …`) as its own.
+7. **Everything reads it the same way.** The Python version, the Go version (`suruc`), the lexer and parser written in Suru (`lib/字句.suru`, `lib/構文.suru`), the linter, the VS Code extension's highlighting and the interactive mode (which reads up to 「以上」 before running) treat it the same. The example is `examples/blocks.suru`.
 
 ## License
 

@@ -42,5 +42,7 @@ def test_builtins_and_keywords_are_highlighted():
     for name in suru_check.BUILTIN_CALLS:
         stem = name[: -len("する")] if name.endswith("する") else name
         assert stem in text, name
-    for w in suru.KEYWORDS | set(suru.PARTICLES) | set(suru.CALL_FORMS):
+    for w in (suru.KEYWORDS - set(suru.IKA_WORDS)) | set(suru.PARTICLES) | set(suru.CALL_FORMS):
         assert w in text, w
+    # 「以下の手順」は「以下 の 手順」とも書けるので、間の空白を許す形で入っている
+    assert "以下[ 　]*の[ 　]*(?:入出力)?手順" in text
