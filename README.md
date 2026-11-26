@@ -439,7 +439,7 @@ If you define a function with the same name as a built-in, your definition is us
 
 1. **`python3 suru.py --翻訳 prog.suru` builds an executable.** `suru_compile.py` turns the Suru program into LLVM IR, and clang makes it, together with the runtime library (`runtime/suru_rt.c`), into one executable `prog`. `-o NAME` sets the output name, and `--ll` emits only the LLVM IR (`prog.ll`) (`python3 suru_compile.py --ll prog.suru`). `CC` selects a different clang.
 2. **The results are the same as the interpreter's.** It compiles after type checking (`--検査なし` turns that off). Every construct works: loading, the standard library, traits, actions and procedures, case-by-case definitions and so on. Runtime errors have the same messages as the interpreter, with exit code 1. The tests (`tests/test_compile.py`) compile the example programs and others and check that the output matches the interpreter's.
-3. **Fast, and deep recursion works.** Functions become machine-code functions, and integer arithmetic is done inline. Recursion runs on a 1GB stack, so depths at which the interpreter stops (such as 100,000 levels) work.
+3. **Fast, and deep recursion works.** Functions become machine-code functions, and integer arithmetic is done inline. Recursion runs on a 1GB stack, so depths at which the interpreter stops (such as 300,000 levels) work.
 4. **Differences from the interpreter.** Integers go up to ±4611686018427387903 (2^62 − 1); beyond that you get the error 「整数が大きすぎます」 ("integer too large") (the interpreter can go arbitrarily large). `大文字にする` / `小文字にする` change only Latin letters (half-width and full-width). Memory no longer in use is cleaned up by a GC (conservative mark-and-sweep). Every value on the stack or in registers that might point to an object is treated as in use, and objects are never moved (the 「メモリ」 section of `runtime/suru_rt.c`). It runs every 8MB allocated, or every time twice the amount left last time has been allocated. `SURU_GC_LOG=1` prints the amount left after each GC, and `SURU_GC_MIN=KB` changes the lower limit of the interval (`0` runs it on every allocation, for testing). There is no interactive mode.
 
 ### Distribution
@@ -1285,6 +1285,11 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 
 1. **In `a と b を 受け取って`, a and b may have different types.** The 「と」 parameters of an anonymous function are checked as a list whose elements each have their own type (the same thing as 「文字列 と 数 を」 in type declarations). This allows folds whose accumulator and element types differ, as in `（「a」 と 「bb」） を 0 から （n と s を 受け取って n + （s の 長さ） を 返すこと） で 畳み込みする` (#150). Previously a and b were forced to the same type, giving errors such as 「初期値(数)と要素(文字列)の型が違います」 ("the initial value (number) and the elements (string) have different types").
 2. **They also unify with lists whose elements share one type.** A list with per-element types and a list of same-typed elements unify when the element types agree. Passing `a と b を 受け取って` as "a function taking a list of numbers" still works. A function declared as `数 と 数 を …` can also be given a list-of-numbers value (the length is checked at runtime).
+
+### Deep recursion in the interpreter
+
+1. **The interpreter also runs recursion about 200,000 levels deep.** Previously Python's recursion limit was 10000, and Suru recursion stopped at about 3000 levels (the standard `整列する` stopped on a reversed list of 2000 items). From Python 3.12, calling a Python function no longer uses the C stack, so the limit is now 1,000,000 (one Suru level is roughly 3 to 4 Python levels) (#152). Stopping takes about 1GB of memory and a few seconds. Up to Python 3.11 it stays at 10000 so the C stack doesn't overflow.
+2. **When it stops, it is a Suru error.** Previously the Python traceback (over 1MB) was printed as is. When running a file and with `--検査`, it now prints `エラー: 再帰が深すぎます(もっと深い再帰は、suruc か suru --翻訳 でコンパイルすると動きます)` ("recursion too deep; deeper recursion works when compiled with suruc or suru --翻訳"), the same as the interactive mode, and with `--json` it prints JSON (`line` and `column` are `null`).
 
 ### Guide for AI
 
