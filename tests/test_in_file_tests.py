@@ -1,6 +1,7 @@
 """同じファイルの試験と例(#193): 「以下は「二倍」の試験です … 以上です」と「例えば … は … です」、suru --試験"""
 
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -42,6 +43,27 @@ def _suru(*args: str, cwd: pathlib.Path) -> subprocess.CompletedProcess:
                           capture_output=True, text=True, encoding="utf-8")
 
 
+@pytest.fixture(scope="module")
+def suruc(tmp_path_factory):
+    import suru_compile
+
+    if shutil.which("go") is None or suru_compile.find_cc() is None:
+        pytest.skip("go か clang がありません")
+    exe = tmp_path_factory.mktemp("go") / "suruc"
+    subprocess.run(["go", "build", "-o", str(exe), "./cmd/suruc"], cwd=ROOT, check=True)
+    return exe
+
+
+@pytest.fixture(params=["suru", "suruc"])
+def runner(request):
+    """試験を動かす道具: suru --試験(インタプリタ)と suruc --試験(ファイルごとにバイナリ)"""
+    if request.param == "suru":
+        return lambda *args, cwd: _suru("--試験", *args, cwd=cwd)
+    exe = request.getfixturevalue("suruc")
+    return lambda *args, cwd: subprocess.run([str(exe), "--試験", *args], cwd=cwd, capture_output=True,
+                                             text=True, encoding="utf-8")
+
+
 def test_通常の実行では試験と例を行わない():
     src = CALC + "（5 を 二倍する） を 表示する\n"
     check(src)
@@ -70,13 +92,13 @@ def test_書き方の間違い():
     assert "名前" in _err("以下は「」の試験です\n  1 < 2 を 確認する\n  以上です\n")
 
 
-def test_試験で合格と不合格を知らせる(tmp_path):
+def test_試験で合格と不合格を知らせる(tmp_path, runner):
     (tmp_path / "計算.suru").write_text(CALC, encoding="utf-8")
     (tmp_path / "失敗.suru").write_text(
         "数 を 三倍する は 数\nx を 三倍する とは x * 2\n例えば （2 を 三倍する） は 6 です\n\n"
         "以下は「三倍」の試験です\n  「途中」 を 表示する\n  （2 を 三倍する） を 6 に 一致確認する\n  以上です\n",
         encoding="utf-8")
-    r = _suru("--試験", ".", cwd=tmp_path)
+    r = runner(".", cwd=tmp_path)
     assert r.returncode == 1, r.stderr
     lines = r.stdout.splitlines()
     assert "✓ ./計算.suru 二倍するの例(4行)" in lines
@@ -85,29 +107,30 @@ def test_試験で合格と不合格を知らせる(tmp_path):
     assert "✗ ./失敗.suru 三倍するの例(3行)" in lines
     assert "    ./失敗.suru:3: 等しくありません: 期待は 6 / 実際は 4" in lines
     # 不合格の試験が書いたもの(表示する・一致確認する のエラー)は、その下に字下げして見せる
+    # (バイナリでは、標準エラーのほうが先に出ることがある)
     k = lines.index("✗ ./失敗.suru 三倍")
-    assert lines[k + 1] == "    途中"
-    assert "等しくありません: 期待は 6 / 実際は 4" in lines[k + 2]
+    assert "    途中" in lines[k + 1:k + 3]
+    assert any("等しくありません: 期待は 6 / 実際は 4" in x for x in lines[k + 1:k + 3])
     assert lines[-1] == "合格 3・不合格 2"
 
 
-def test_名前で選ぶ(tmp_path):
+def test_名前で選ぶ(tmp_path, runner):
     (tmp_path / "計算.suru").write_text(CALC, encoding="utf-8")
-    r = _suru("--試験", "計算.suru", "の例", cwd=tmp_path)
+    r = runner("計算.suru", "の例", cwd=tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     assert r.stdout.splitlines()[-1] == "合格 2・不合格 0"
-    r = _suru("--試験", "計算.suru", "見つからない名前", cwd=tmp_path)
+    r = runner("計算.suru", "見つからない名前", cwd=tmp_path)
     assert r.returncode == 0 and "試験が見つかりません" in r.stderr
 
 
-def test_試験フォルダの試験するも動かす(tmp_path):
+def test_試験フォルダの試験するも動かす(tmp_path, runner):
     (tmp_path / "計算.suru").write_text(CALC, encoding="utf-8")
     (tmp_path / "試験").mkdir()
     (tmp_path / "試験" / "計算試験.suru").write_text(
         "「試験」 を 読み込んで 使う\n\n数 を 二倍する は 数\nx を 二倍する とは x * 2\n\n"
         "二倍試験する とは 以下の手順です\n  （3 を 二倍する） を 6 に 一致確認する\n  以上です\n",
         encoding="utf-8")
-    r = _suru("--試験", "試験", cwd=tmp_path)
+    r = runner("試験", cwd=tmp_path)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "✓ 試験/計算試験.suru 二倍試験する" in r.stdout.splitlines()
 
@@ -135,3 +158,15 @@ def test_lib_の試験():
     r = _suru("--試験", "lib/", cwd=ROOT)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "不合格" not in r.stdout
+
+
+def test_suruc_の試験は一番外の行うことをしない(tmp_path, suruc):
+    # 一番外の表示は行わず、型の間違いは「読めません」と知らせる
+    (tmp_path / "主.suru").write_text(CALC + "「外」 を 表示する\n", encoding="utf-8")
+    (tmp_path / "誤.suru").write_text("例えば 1 は 「1」\n", encoding="utf-8")
+    r = subprocess.run([str(suruc), "--試験", "主.suru", "誤.suru"], cwd=tmp_path, capture_output=True, text=True,
+                       encoding="utf-8")
+    assert r.returncode == 1
+    assert "外" not in r.stdout.replace("✗ 誤", "")
+    assert "✗ 誤.suru(読めません)" in r.stdout
+    assert r.stdout.splitlines()[-1] == "合格 3・不合格 1"

@@ -15,7 +15,8 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 5. **Tests in the same file, and examples.** A `以下は「二倍」の試験です … 以上です` block at the top level is a test that can use the file's private names, and `例えば （2 を 二倍する） は 4 です` under a definition is an example. Both are always type checked, are dropped in a normal run or build, and are ignored when the file is imported (#193).
 6. **`suru --試験 ファイルかフォルダ [名前]` runs tests.** It runs the test blocks, the examples and the top-level `…試験する` procedures of the files, and reports like `kumu 試験`. Words that are not paths select tests by part of their name (#193).
 7. **Deriving.** `会員 は 【JSON】 と 【表】 を 導出する` hands a description of the type (`型記述` from the new `lib/導出.suru`) to `JSON導出する` and `表導出する` from a file the program reads, and puts the definitions they return in place of the line. The type must be defined in the same file with field types (#192).
-8. **Deriving JSON.** `会員 は 【JSON】 を 導出する` defines `会員JSON化する` and `会員JSON復元する` (`（会員 と 文字列） の 成否`). Records become objects, and types with several forms get a `形` item. Fields can be `数`, `文字列`, `真偽`, `JSON`, `X の リスト` and other types that derive 【JSON】 (#192).
+8. **`suruc --試験 ファイルかフォルダ [名前]` runs the same tests with the Go compiler.** Each file becomes one test binary (built with -O0 unless another -O is given), and each test runs in its own process. The output is the same as `suru --試験` (#193).
+9. **Deriving JSON.** `会員 は 【JSON】 を 導出する` defines `会員JSON化する` and `会員JSON復元する` (`（会員 と 文字列） の 成否`). Records become objects, and types with several forms get a `形` item. Fields can be `数`, `文字列`, `真偽`, `JSON`, `X の リスト` and other types that derive 【JSON】 (#192).
 
 ### Fixed
 
