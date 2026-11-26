@@ -34,7 +34,9 @@ pytestmark = pytest.mark.skipif(not CROSS, reason="clang で MinGW-w64 向けに
 @pytest.fixture(scope="module")
 def rt_obj(tmp_path_factory):
     out = tmp_path_factory.mktemp("rt") / "suru_rt.o"
-    r = subprocess.run(["clang", f"--target={TARGET}", "-O1", "-w", "-c", str(ROOT / "runtime" / "suru_rt.c"), "-o", str(out)],
+    # 新しい clang(MSYS2 のものなど)では、型の合わないポインタなどは -w を付けても止まるエラーなので、手元でもエラーにして確かめる(-w を付けると -Werror も効かない)
+    strict = ["-Werror=incompatible-pointer-types", "-Werror=int-conversion", "-Werror=implicit-function-declaration"]
+    r = subprocess.run(["clang", f"--target={TARGET}", "-O1", *strict, "-c", str(ROOT / "runtime" / "suru_rt.c"), "-o", str(out)],
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return out
