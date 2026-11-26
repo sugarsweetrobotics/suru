@@ -23,18 +23,72 @@ import (
 	suru "github.com/suru-lang/suru"
 	"github.com/suru-lang/suru/cmd/internal/mcu"
 	"github.com/suru-lang/suru/cmd/internal/native"
+	"github.com/suru-lang/suru/cmd/internal/testrun"
 	"github.com/suru-lang/suru/compiler"
 )
 
 // version はリリースのときに -ldflags "-X main.version=…" で書きかえる
 var version = "0.9.1"
 
-const usage = "使い方: suruc [--ll] [--検査 | --検査なし | --展開] [--json] [-O0|-O1|-O2|-O3] [--対象 基板] プログラム.suru [-o 出力]"
+const usage = "使い方: suruc [--ll] [--検査 | --検査なし | --展開] [--json] [-O0|-O1|-O2|-O3] [--対象 基板] プログラム.suru [-o 出力]\n" +
+	"       suruc --試験 [-O0|-O1|-O2|-O3] ファイルかフォルダ … [名前 …]"
+
+// runTests は「suruc --試験 ファイルかフォルダ … [名前 …]」(#193): 試験のまとまり・例・「…試験する」を、
+// ファイルごとに1つのバイナリにして動かす。道でない引数は名前の一部。不合格があれば 1
+func runTests(args []string) int {
+	opt := "-O0"
+	var paths, filters []string
+	for _, a := range args {
+		switch {
+		case a == "-O0" || a == "-O1" || a == "-O2" || a == "-O3" || a == "-Os":
+			opt = a
+		default:
+			if _, err := os.Stat(a); err == nil {
+				paths = append(paths, a)
+			} else {
+				filters = append(filters, a)
+			}
+		}
+	}
+	if len(paths) == 0 {
+		fmt.Fprintln(os.Stderr, "使い方: suruc --試験 [-O0|-O1|-O2|-O3] ファイルかフォルダ … [名前 …]")
+		return 2
+	}
+	work, err := os.MkdirTemp("", "suruc-試験-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "エラー: "+err.Error())
+		return 1
+	}
+	defer os.RemoveAll(work)
+	r := &testrun.Runner{Out: os.Stdout, Opt: opt, Filters: filters, WorkDir: work}
+	for _, p := range paths {
+		files, err := testrun.Files(p)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "エラー: "+err.Error())
+			return 1
+		}
+		for _, f := range files {
+			r.File(f)
+		}
+	}
+	if r.Passed == 0 && r.Failed == 0 {
+		fmt.Fprintln(os.Stderr, "試験が見つかりません(「以下は「名前」の試験です」・「例えば … は … です」・「…試験する」を書きます)")
+		return 0
+	}
+	fmt.Printf("\n合格 %d・不合格 %d\n", r.Passed, r.Failed)
+	if r.Failed > 0 {
+		return 1
+	}
+	return 0
+}
 
 func run(args []string) int {
 	if len(args) >= 1 && (args[0] == "--version" || args[0] == "--版") {
 		fmt.Printf("する %s(Go 版コンパイラ)\n", version)
 		return 0
+	}
+	if len(args) >= 1 && (args[0] == "--試験" || args[0] == "--test") {
+		return runTests(args[1:])
 	}
 	llOnly := false
 	check := true
