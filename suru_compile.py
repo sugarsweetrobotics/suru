@@ -345,6 +345,7 @@ class Compiler:
         self.modules: dict[str, Scope] = {}
         self.init_fg: FnGen | None = None
         self.ffi_decls: dict[str, str] = {}  # 外部の関数の名前 → declare の行
+        self.ffi_where: dict[str, Any] = {}  # 外部の関数の名前 → 初めに宣言した位置
         self.link_libs: list[str] = []  # リンクするライブラリ(ExternLib.path)
 
     def uid(self) -> int:
@@ -732,7 +733,11 @@ class Compiler:
                 cts = [FFI_IR[t] for t in ext.params]
             decl = f"declare {ret} @{ext.symbol}({', '.join(cts)})"
             if self.ffi_decls.setdefault(ext.symbol, decl) != decl:
-                raise S.SuruError(f"外部の関数「{ext.symbol}」が違う型で2回宣言されています", ext.line)
+                first = self.ffi_where[ext.symbol]
+                raise S.SuruError(f"外部の関数「{ext.symbol}」が違う型で2回宣言されています"
+                                  f"(もう1つは{S._file_of(first)}{S._where(first)})。"
+                                  "C の関数1つにつき、引数と値の型は1通りにそろえてください", ext.line)
+            self.ffi_where.setdefault(ext.symbol, ext.line)
         fname = self.cstr(name)
 
         def call(sc: Scope, fg: FnGen) -> str:
