@@ -1,6 +1,6 @@
 # 「する」本体のリリース: v0.1.0 のようなタグを push すると動きます。
 #   1. 版がそろっているか調べて、テストする
-#   2. PyPI 用の wheel と sdist、OS ごとの suruc・suru-ls・kumu を作る
+#   2. PyPI 用の wheel と sdist、OS ごとの suruc・suru-ls・kumu を作る(macOS と Windows で動かして確かめる)
 #   3. GitHub Releases に置く
 #   4. PyPI に公開する(Trusted Publishing。トークンは要りません)
 #   5. Homebrew の tap(リポジトリの持ち主の homebrew-suru)の formula を新しくする
@@ -126,10 +126,44 @@ jobs:
           printf '1 と 2 を 加算する\n' > t.suru
           ./suruc t.suru && ./t
 
+  # Linux で作った Windows 用のものを、MSYS2 の clang と lld で動かして確かめる
+  smoke-windows:
+    name: Windows で動かす
+    needs: [check, binaries]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            unzip
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-lld
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+      - run: |
+          unzip -q suru-*-windows-amd64.zip
+          cd suru-*-windows-amd64
+          ./suruc.exe --version
+          ./suru-ls.exe --version
+          ./kumu.exe --version
+          printf '1 と 2 を 加算して 表示する\n' > t.suru
+          ./suruc.exe t.suru
+          test "$(./t.exe | tr -d '\r')" = 3
+          ./kumu.exe 新規 試し
+          cd 試し
+          ../kumu.exe 作る
+          ../kumu.exe 試験
+
   release:
     name: GitHub Releases
     if: needs.check.outputs.publish == 'true'
-    needs: [check, python, binaries, smoke-macos]
+    needs: [check, python, binaries, smoke-macos, smoke-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
