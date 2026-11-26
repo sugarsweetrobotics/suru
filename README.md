@@ -1353,6 +1353,13 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 1. **Putting a procedure's local that holds an action into a record is an error at its definition.** In a procedure, `番号 とは n を 番号作成する` without 「した 結果」 binds the action itself, not its result. Since the fields of a record can hold any type, putting that local into a record (`番号 の 数値`, `中身 は 番号 の 数値`, or an update) passed the type check, and the action only failed much later, far from the cause (#168). Now the definition line gives 「「番号」には動作そのものが入っていて、行われていません(それを「数値」の「中身」に入れています)。動作を行った結果を使うなら「番号 とは …を 番号作成した 結果」と書いてください。動作のまま入れるなら、「数値」の「中身」に直接書いてください」 ("「番号」 holds the action itself, which is not carried out (it is put into 「中身」 of 「数値」); to use the result, write 「番号 とは …を 番号作成した 結果」; to store the action as is, write it directly in 「中身」 of 「数値」"). The Python and Go versions give the same error.
 2. **Storing an action on purpose is written in the record itself.** `名前 は 「a」 で 処理 は （「押した」 を 表示する） の ボタン` still passes, and so do locals that hold a function value (`…すること`) or an anonymous function.
 
+### Runtime library on Windows
+
+1. **The runtime library (`runtime/suru_rt.c`) also builds for Windows (MinGW-w64).** Build it with `clang --target=x86_64-w64-mingw32` and link with `-lpthread -lws2_32`. Threads use MinGW-w64's winpthreads as they are, and only the parts that differ are split with `#ifdef _WIN32` (GC memory with `VirtualAlloc`, sockets with Winsock2, and console output switched to UTF-8 at startup). Making `suruc` and `kumu` produce Windows .exe files is the next stage (the plan is in `docs/今後/Windows.md`).
+2. **Receiving from sockets uses our own reader on every OS.** A Windows socket can't be made into a `FILE`, so receiving goes through a reader (`SockIn`) that reads in chunks with `recv` and hands out one character or a block at a time. Linux and macOS use the same reader. Timeouts (`待機時間設定する`) are set in each OS's own form.
+3. **What doesn't work on Windows yet gives a clear error.** Named channels (FIFOs) and callback addresses say 「Windows ではまだ使えません」 ("not available on Windows yet"). Callback entry points receive arguments in the Linux/macOS calling convention.
+4. **`tests/test_windows.py` checks it.** With MinGW-w64 it builds the runtime library for Windows, and with wine it runs the built .exe and checks that arithmetic, threads with GC, a million-deep recursion and the TCP echo server behave the same as on Linux (on Ubuntu, `apt install mingw-w64 wine`). Without them the tests are skipped.
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)
