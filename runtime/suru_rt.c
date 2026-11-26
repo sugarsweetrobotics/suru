@@ -4038,8 +4038,11 @@ static void world_wait(int (*ready)(void *), void *arg, int32_t pos) {
             fail(pos, "すべてのスレッドが待っていて、先に進めません(通路や合流の待ち)");
         }
         if (!spun) {
+            /* 回っている間は world_mu を手放していて「動いている」と数えられるので、ほかのスレッドが同じ間に
+             * 回って眠りに入ると、どちらも「止まった」と気づかずに眠ってしまう。回った後は、もう一度初めから調べる */
             spun = 1;
-            if (world_spin_wait(ready, arg)) continue;
+            world_spin_wait(ready, arg);
+            continue;
         }
         SThread *me = self_thread;
         me->warg = arg;

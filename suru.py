@@ -11,6 +11,7 @@ from __future__ import annotations
 
 __version__ = "0.9.1"
 
+import contextlib
 import re
 import math
 import os
@@ -219,6 +220,26 @@ KW_IKA_EXT_IO_NO = "以下の外部の入出力動作"
 KW_IKA_EXT_NO = "以下の外部の関数"
 EXT_IO_WORDS = (KW_IKA_EXT_IO, KW_IKA_EXT_IO_NO)
 EXT_BLOCK_WORDS = (KW_IKA_EXT_IO, KW_IKA_EXT, KW_IKA_EXT_IO_NO, KW_IKA_EXT_NO)
+# 同じファイルの試験(#193): 「以下は「二倍」の試験です」+ 手順の文 + 「以上です」。通常の実行とビルドでは捨てる
+TEST_HEAD_OPEN = "以下は「"
+TEST_HEAD_CLOSE = "」の試験"
+TEST_LIB = "試験"  # 試験のまとまりがあれば、「試験」 を 読み込んで 使う(書かなくてよい)
+# 例(#193): 「例えば （2 を 二倍する） は 4 です」。すぐ上の定義の例で、試験のときに確かめる
+KW_EXAMPLE = "例えば"
+
+
+def test_head(name: str) -> str:
+    """試験のまとまりの頭の言葉(「以下は「二倍」の試験」)"""
+    return TEST_HEAD_OPEN + name + TEST_HEAD_CLOSE
+
+
+def is_test_head(tok: "Token | None") -> bool:
+    return (tok is not None and tok.kind == "KW" and isinstance(tok.value, str)
+            and tok.value.startswith(TEST_HEAD_OPEN) and tok.value.endswith(TEST_HEAD_CLOSE))
+
+
+def test_head_name(tok: "Token") -> str:
+    return tok.value[len(TEST_HEAD_OPEN):-len(TEST_HEAD_CLOSE)]
 
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
@@ -456,6 +477,19 @@ def join_ika(tokens: list[Token]) -> list[Token]:
     i = 0
     while i < len(tokens):
         t = tokens[i]
+        # 「以下は「二倍」の試験です」「以下 は 「二倍」 の 試験 です」(#193)
+        if (t.kind == "WORD" and not t.quoted and t.value == "以下は" and i + 2 < len(tokens)
+                and tokens[i + 1].kind == "STR" and tokens[i + 2].kind == "WORD" and not tokens[i + 2].quoted
+                and tokens[i + 2].value in ("の試験", "の試験です")):
+            out.append(Token("KW", test_head(tokens[i + 1].value), t.line))
+            i += 3
+            continue
+        if (t.kind == "WORD" and not t.quoted and t.value == "以下" and i + 4 < len(tokens) and is_kw(tokens[i + 1], KW_WA)
+                and tokens[i + 2].kind == "STR" and (is_kw(tokens[i + 3], KW_NO) or is_part(tokens[i + 3], KW_NO))
+                and tokens[i + 4].kind == "WORD" and not tokens[i + 4].quoted and tokens[i + 4].value == "試験"):
+            out.append(Token("KW", test_head(tokens[i + 2].value), t.line))
+            i += 5
+            continue
         if t.kind == "WORD" and not t.quoted and (t.value in IKA_WORDS or t.value in EXT_BLOCK_WORDS):
             out.append(Token("KW", t.value, t.line))
             i += 1
@@ -1084,6 +1118,8 @@ class Define:
     body: Any  # 式 または Block
     is_function: bool
     line: int
+    test: str = ""  # 試験のまとまりか例なら、試験の名前(「二倍」「二倍するの例」)。名前で呼べず、通常の実行とビルドでは捨てる
+    example: Any = None  # 例なら (実際の式, 期待の式)
 
 
 @dataclass
@@ -1321,6 +1357,7 @@ class Import:
     line: int
     open: bool = False  # 「読み込んで 使う」: 中の名前を前置きなしでも使う
     auto: bool = False  # 書かずに自動で読み込んだ基本(成否・有無)
+    test: bool = False  # 試験のまとまりのために自動で読み込んだ「試験」(通常のビルドでは捨てる)
 
 
 @dataclass
@@ -1484,9 +1521,9 @@ def build_layout(lines: list[Line]) -> list[Node]:
 
 
 def opens_ika(ln: Line) -> bool:
-    """「… とは 以下の手順です」で終わる行か"""
+    """「… とは 以下の手順です」で終わる行か(「以下は「二倍」の試験です」だけの行も)"""
     toks = nosep(ln.tokens)
-    return bool(toks) and toks[-1].kind == "KW" and toks[-1].value in IKA_WORDS
+    return bool(toks) and toks[-1].kind == "KW" and (toks[-1].value in IKA_WORDS or is_test_head(toks[-1]) and len(toks) == 1)
 
 
 def opens_ext_block(ln: Line) -> bool:
@@ -1545,7 +1582,7 @@ def _close_one(nodes: list[Node], i: int) -> tuple[Node, int]:
     if not opens_ika(n.line):
         return n, i
     j = next((k for k, c in enumerate(n.children) if is_ijou(c.line)), None)
-    if j is not None and j < len(n.children) - 1 and all(
+    if j is not None and j < len(n.children) - 1 and not is_test_head(nosep(n.line.tokens)[-1]) and all(
             nosep(c.line.tokens)[0].kind == "KW" and nosep(c.line.tokens)[0].value in CONTINUATION_KEYWORDS
             for c in n.children[j + 1:]):
         # 「もし … ならば 以下の手順です」+ 深い行 + 「以上」の後に「そうでなければ …」(#190):
@@ -2772,6 +2809,10 @@ def parse_statement(node: Node) -> Any:
     tokens = nosep(raw)
     if len(tokens) == 1 and is_kw(tokens[0], KW_IJOU):
         raise SuruError(f"対応する「以下の手順です」のない「{KW_IJOU}」があります", tokens[0].line)
+    if any(is_test_head(t) for t in tokens):
+        return parse_test_block(node, tokens)
+    if tokens[0].kind == "WORD" and not tokens[0].quoted and tokens[0].value == KW_EXAMPLE:
+        return parse_example(node)
     if is_kw(tokens[0], KW_SOREKARA):
         rest = raw[_index_of(raw, tokens[0]) + 1 :]
         inner_node = Node(Line(node.line.indent, rest, node.line.number, node.line.closed), node.children)
@@ -2861,6 +2902,70 @@ def parse_statement(node: Node) -> Any:
             raise SuruError("「とは」の後に本体が必要です", node.line.number)
         body = parse_block(node.children)
     return Define(name, params, body, is_function, node.line.number)
+
+
+TEST_PREFIX = "《試験》"  # 試験のまとまりの、中だけで使う名前の頭(書いて呼べない名前にする)
+EXAMPLE_PREFIX = "《例》"
+
+
+def parse_test_block(node: Node, tokens: list[Token]) -> Define:
+    """「以下は「二倍」の試験です」+ 手順の文 + 「以上です」(#193)。引数のない手順の定義にする"""
+    head = tokens[0]
+    if len(tokens) != 1 or not is_test_head(head):
+        t = next(t for t in tokens if is_test_head(t))
+        raise SuruError(f"「{t.value}です」は1行に、それだけを書きます(手順の文は次の行から書き、最後に「{KW_IJOU}です」)", t.line)
+    if node.line.indent:
+        raise SuruError(f"「{head.value}です」は一番外(字下げなし)に書いてください", head.line)
+    name = test_head_name(head)
+    if not name.strip():
+        raise SuruError("試験の名前を「」の中に書いてください(「以下は「二倍」の試験です」)", head.line)
+    do = parse_do(node.children, node.line.number)
+    return Define(TEST_PREFIX + name, [], do, True, node.line.number, test=name)
+
+
+def parse_example(node: Node) -> Define:
+    """「例えば （2 を 二倍する） は 4 です」(#193)。実際 = 期待 を確かめる、引数のない定義にする"""
+    raw = flatten(node)
+    tokens = nosep(raw)
+    word = tokens[0]
+    usage = f"「{KW_EXAMPLE} （2 を 二倍する） は 4 です」のように、「{KW_EXAMPLE} 式 は 期待する値」と書きます"
+    if node.line.indent:
+        raise SuruError(f"「{KW_EXAMPLE}」の例は一番外(字下げなし)に、定義のすぐ下に書いてください", word.line)
+    rest = tokens[1:]
+    wa = find_top_level(rest, KW_WA)
+    if wa is None or wa == 0 or wa == len(rest) - 1:
+        raise SuruError(usage, word.line)
+    actual = ExprParser(rest[:wa]).parse_all()
+    expected = ExprParser(rest[wa + 1:]).parse_all()
+    body = BinOp("==", actual, expected, word.line)
+    return Define(f"{EXAMPLE_PREFIX}{node.line.number}", [], body, True, node.line.number, test="例",
+                  example=(actual, expected))
+
+
+def is_test_define(s: Any) -> bool:
+    return isinstance(s, Define) and bool(s.test)
+
+
+def drop_tests(program: list) -> list:
+    """試験のまとまりと例、それらのために読み込んだ「試験」を除く(通常のビルドと、読み込んだファイル)"""
+    return [s for s in program if not is_test_define(s) and not (isinstance(s, Import) and s.test)]
+
+
+def name_examples(statements: list) -> None:
+    """例の名前を、すぐ上の定義の名前から決める(「二倍するの例」)。同じ名前の試験のまとまりが2つあればエラー"""
+    prev = ""
+    seen: dict[str, int] = {}
+    for s in statements:
+        if not isinstance(s, Define):
+            continue
+        if s.example is not None:
+            s.test = f"{prev}の例" if prev else "例"
+        elif s.test:
+            if s.test in seen:
+                raise SuruError(f"「{s.test}」の試験は{seen[s.test]}行目にもあります(試験の名前は1つずつ違うものにしてください)", s.line)
+            seen[s.test] = s.line
+        else:
+            prev = s.name
 
 
 def _is_type_word(tok: Token) -> bool:
@@ -3357,7 +3462,16 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
             prelude = Import(load_prelude(ctx, line), line, True, auto=True)
     if _has_quasi(nodes):
         nodes = expand_quasi(nodes, [i.module for i in imports.values() if isinstance(i, Import)], cache={"ctx": ctx})
-    modules = {i.module.name for i in imports.values() if isinstance(i, Import)} | ({PRELUDE_NAME} if prelude else set())
+    test_import = None
+    first_test = next((n.line.number for n in nodes if n.line.tokens and is_test_head(nosep(n.line.tokens)[0])), None)
+    if first_test is not None:
+        # 試験のまとまりの中では「試験」の名前(一致確認する など)を前置きなしで使える(#193)
+        lib = os.path.abspath(os.path.join(LIB_DIR, TEST_LIB + SOURCE_SUFFIX))
+        opened = any(isinstance(i, Import) and i.open and i.module.path == lib for i in imports.values())
+        if not opened and ctx.path != lib:
+            test_import = Import(load_module(TEST_LIB, ctx, first_test), first_test, True, test=True)
+    modules = ({i.module.name for i in imports.values() if isinstance(i, Import)} | ({PRELUDE_NAME} if prelude else set())
+               | ({test_import.module.name} if test_import else set()))
     if modules:
         _join_in_nodes(nodes, modules)
     _qualify_type_names(nodes, ctx)
@@ -3374,6 +3488,9 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         statements = [imports[id(n)] if id(n) in imports else parse_statement(n) for n in nodes]
         if prelude is not None:
             statements.insert(0, prelude)
+        if test_import is not None:
+            statements.insert(1 if prelude is not None else 0, test_import)
+        name_examples(statements)
         _check_open_imports(statements)
         _attach_externs(statements)
         statements = attach_provisos(statements)
@@ -3950,7 +4067,7 @@ def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool
     saved_src, _POS_SRC = _POS_SRC, path
     SOURCES[path] = source
     try:
-        program = parse_program(source, sub)
+        program = drop_tests(parse_program(source, sub))  # 読み込んだファイルの試験と例は使わない(#193)
         for s in program:
             if not isinstance(s, (Define,) + TOP_LEVEL_ONLY):
                 raise SuruError("読み込むファイルには定義だけを書いてください", first_line_of(s))
@@ -5383,6 +5500,7 @@ class _Net:
 
     def read(self, v: Any, line: int, how: Any) -> Any:
         """読み込み用で読む。時間切れになった読み込み用はもう読めないので、次は作り直す"""
+        sys.stdout.flush()  # 待つ前に、それまでの表示を出しておく(コンパイルしたものと同じ)
         try:
             return how(self.reader(v, line))
         except TimeoutError:
@@ -5457,6 +5575,7 @@ def _connect(net: _Net, a: dict, line: int) -> int:
 
 
 def _accept(net: _Net, a: dict, line: int) -> int:
+    sys.stdout.flush()  # 待つ前に、それまでの表示を出しておく(コンパイルしたものと同じ)
     conn, _ = net.get(a["から"], "待受口", line).accept()
     conn.settimeout(NET_TIMEOUT)  # 何も送ってこない相手で止まらないように
     return net.add(conn)
@@ -5546,6 +5665,7 @@ def _udp_send(net: _Net, a: dict, line: int) -> int:
 
 def _udp_recv(net: _Net, a: dict, line: int) -> Record:
     """「口 から UDPバイト列受信する」: 次の便りを1つ丸ごと(中身はバイト列)。送り主の IP アドレスとポートも"""
+    sys.stdout.flush()  # 待つ前に、それまでの表示を出しておく(コンパイルしたものと同じ)
     data, addr = net.get(a["から"], "UDPの口", line).recvfrom(65536)
     return Record("UDP便", "UDP便", ("中身", "送り主", "ポート"), (data, addr[0], addr[1]))
 
@@ -7705,7 +7825,7 @@ class Repl:
         ctx = self.interp.ctx.copy()
         if base_dir is not None:
             ctx.base_dir = base_dir
-        return parse_program(source, ctx), ctx
+        return drop_tests(parse_program(source, ctx)), ctx  # 対話モードでは試験のまとまりと例を使わない(#193)
 
     def _check(self, program: list, ctx: ParseContext) -> tuple[dict, list]:
         """型を調べて、(式の文の id → 型, 新しい定義の型の宣言) を返す"""
@@ -7929,6 +8049,7 @@ NO_CHECK_FLAGS = ("--検査なし", "--no-check")  # 型の検査をせずに実
 COMPILE_FLAGS = ("--翻訳", "--compile")  # バイナリにコンパイルする(suru_compile.py)
 REPL_FLAGS = ("--対話", "-i")  # ファイルを読んでから対話モードを始める
 LINT_FLAGS = ("--点検", "--lint")  # lib/点検.suru(する で書いた点検)でファイルを調べる
+TEST_FLAGS = ("--試験", "--test")  # 試験のまとまり・例・「…試験する」を動かす(#193)
 JSON_FLAGS = ("--json", "--JSON")  # エラーと点検の知らせを1行に1つの JSON で出す
 LINT_SOURCE = "「点検」 を 読み込む\n点検内の点検実行する\n"
 
@@ -8017,6 +8138,145 @@ def lint(paths: list[str]) -> int:
     return 0
 
 
+TEST_SUFFIX = "試験する"  # 試験/ のファイルの「…試験する」(引数なし)も試験(kumu 試験 と同じ)
+SKIP_DIRS = ("出力",)
+
+
+def test_files(path: str) -> list[str]:
+    """道がファイルならそれ、フォルダなら下の .suru(出力/ と . で始まるフォルダは除く)"""
+    if not os.path.isdir(path):
+        return [path]
+    found = []
+    for root, dirs, files in os.walk(path):
+        dirs[:] = sorted(d for d in dirs if d not in SKIP_DIRS and not d.startswith("."))
+        found += [os.path.join(root, f) for f in sorted(files) if f.endswith(SOURCE_SUFFIX)]
+    return found
+
+
+def collect_tests(program: list) -> list[Define]:
+    """ファイルの試験: 試験のまとまり・例・一番外の「…試験する」(引数なし)を書いた順に"""
+    out = []
+    for s in program:
+        if isinstance(s, Define) and (s.test or s.is_function and not s.params and s.name.endswith(TEST_SUFFIX)
+                                      and MODULE_SEP not in s.name):
+            out.append(s)
+    return out
+
+
+def test_label(d: Define) -> str:
+    """試験の表示の名前: 試験のまとまりは「二倍」、例は「二倍するの例(4行)」、ほかは定義の名前"""
+    if d.example is not None:
+        return f"{d.test}({d.line}行)"
+    return d.test or d.name
+
+
+def run_one_test(interp: "Interpreter", d: Define, path: str) -> str | None:
+    """試験を1つ行う。合格なら None、不合格なら理由(試験が書いた出力は呼ぶ側が集める)"""
+    try:
+        if d.example is not None:
+            actual = interp.eval(d.example[0], interp.globals)
+            expected = interp.eval(d.example[1], interp.globals)
+            if apply_op("==", actual, expected, d.line):
+                return None
+            return (f"{path}:{d.line}: 等しくありません: 期待は {interp.format(expected)} / 実際は {interp.format(actual)}")
+        fn = interp.force(interp.globals.lookup(d.name, d.line))
+        interp.perform(interp.call(fn, {}, d.line))
+        return None
+    except SystemExit as e:
+        return "" if e.code else None
+    except SuruError as e:
+        return format_error(e, SOURCES.get(path))
+    except RecursionError:
+        return DEEP_RECURSION_MESSAGE
+
+
+def run_tests(args: list[str]) -> int:
+    """「suru --試験 ファイルかフォルダ … [名前 …]」: 試験のまとまり・例・「…試験する」を動かす。
+    道でない引数は名前の一部で、どれかを含む試験(か、それを含む道のファイル)だけを動かす。不合格があれば 1"""
+    import io
+
+    paths = [a for a in args if os.path.exists(a)]
+    filters = [a for a in args if not os.path.exists(a)]
+    if not paths:
+        print("使い方: suru --試験 ファイルかフォルダ … [名前 …]", file=sys.stderr)
+        return 2
+    files = [f for p in paths for f in test_files(p)]
+    passed = failed = 0
+    for file in files:
+        with open(file, encoding="utf-8") as f:
+            source = f.read()
+        base_dir = os.path.dirname(os.path.abspath(file))
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(buf):
+                ok = type_check(source, base_dir, file)
+            interp = Interpreter()
+            interp.ctx.base_dir = base_dir
+            interp.ctx.path = os.path.abspath(file)
+            program = parse_program(source, interp.ctx) if ok else []
+        except SuruError as e:
+            buf.write(format_error(e, source) + "\n")
+            ok = False
+        if not ok:
+            print(f"✗ {file}(読めません)")
+            print(indent_text(buf.getvalue().rstrip("\n")))
+            failed += 1
+            continue
+        tests = [d for d in collect_tests(program)
+                 if not filters or any(x in test_label(d) or x in file for x in filters)]
+        if not tests:
+            continue
+        _FFI_BASE[0] = base_dir
+        interp.load_program(program, interp.globals)
+        for d in tests:
+            with captured_output() as out:
+                reason = run_one_test(interp, d, file)
+            if reason is None:
+                print(f"✓ {file} {test_label(d)}")
+                passed += 1
+                continue
+            print(f"✗ {file} {test_label(d)}")
+            text = (out[0] + (reason + "\n" if reason else "")).rstrip("\n")
+            if text:
+                print(indent_text(text))
+            failed += 1
+    if passed == 0 and failed == 0:
+        print(f"試験が見つかりません(「以下は「名前」の試験です」・「{KW_EXAMPLE} … は … です」・「…{TEST_SUFFIX}」を書きます)",
+              file=sys.stderr)
+        return 0
+    print(f"\n合格 {passed}・不合格 {failed}")
+    return 1 if failed else 0
+
+
+@contextlib.contextmanager
+def captured_output():
+    """試験が書いた標準出力と標準エラーを集める(「低水準書込する」で直接書いたものも)。out[0] に入れる"""
+    import tempfile
+
+    out = [""]
+    sys.stdout.flush()
+    sys.stderr.flush()
+    saved = os.dup(1), os.dup(2)
+    with tempfile.TemporaryFile() as tmp:
+        os.dup2(tmp.fileno(), 1)
+        os.dup2(tmp.fileno(), 2)
+        try:
+            yield out
+        finally:
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os.dup2(saved[0], 1)
+            os.dup2(saved[1], 2)
+            os.close(saved[0])
+            os.close(saved[1])
+            tmp.seek(0)
+            out[0] = tmp.read().decode("utf-8", "replace")
+
+
+def indent_text(s: str) -> str:
+    return "    " + s.replace("\n", "\n    ")
+
+
 def type_check(source: str, base_dir: str = ".", path: str = "", as_json: bool = False) -> bool:
     """型を調べる。間違いがあれば表示して False(as_json なら1行の JSON で)"""
     from suru_check import check
@@ -8064,6 +8324,8 @@ def main(argv: list[str]) -> int:
             print("使い方: suru --点検 [--json] ファイル.suru …", file=sys.stderr)
             return 2
         return lint(paths)
+    if len(argv) >= 2 and argv[1] in TEST_FLAGS:
+        return run_tests(argv[2:])
     argv, as_json = _take_json_flag(argv)
     if len(argv) >= 2 and argv[1] in EXPAND_FLAGS:
         if len(argv) != 3:

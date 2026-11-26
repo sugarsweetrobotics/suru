@@ -12,6 +12,13 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 2. **`そうでなければ` can follow `もし … ならば 以下の手順です`.** After the procedure is closed by a deeper `以上`, a `そうでなければ …` line can come at the indent of the `もし` line. Previously the long branch had to be moved to the `そうでなければ` side (#190).
 3. **Record definitions can give field types.** Write `field は type` separated by `で`, as in `会員 とは 番号 は 数 で 名前 は 文字列 の 組`. Values are checked against the written types, and `甲`, `乙` … become the type's parameters. This is the first stage of the plan for deriving and quasi-quotes (#192).
 4. **Quasi-quotes.** `以下は【X】です` … `以上です` (top level) and `x とは 以下の【X】です` … `以上です` hand the block to `X展開する` (`文字列 を X展開する は 文字列 の 成否`, defined in a file the program reads) and put the returned Suru code in its place. `suruc` compiles the expander into a cached program. `suru --展開` and `suruc --展開` print the expanded source. `【` and `】` outside strings are now reserved for this (#192).
+5. **Tests in the same file, and examples.** A `以下は「二倍」の試験です … 以上です` block at the top level is a test that can use the file's private names, and `例えば （2 を 二倍する） は 4 です` under a definition is an example. Both are always type checked, are dropped in a normal run or build, and are ignored when the file is imported (#193).
+6. **`suru --試験 ファイルかフォルダ [名前]` runs tests.** It runs the test blocks, the examples and the top-level `…試験する` procedures of the files, and reports like `kumu 試験`. Words that are not paths select tests by part of their name (#193).
+
+### Fixed
+
+1. **The interpreter shows what it printed before it waits.** Like a compiled program, it now flushes standard output before waiting for a connection (`接続受付する`) or for data from a connection, so a server whose output goes to a pipe shows `ポート 9000 で待っています` right away (#195).
+2. **A deadlock between threads is always reported.** When two threads started waiting at almost the same moment (for example `合流する` and `通路受信する`), a compiled program could sometimes hang instead of failing with 「すべてのスレッドが待っていて、先に進めません」 (#195).
 
 ## 0.9.1
 
