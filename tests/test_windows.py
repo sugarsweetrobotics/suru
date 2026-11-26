@@ -222,3 +222,84 @@ def test_点検は_SURU_TARGET_があっても手元向けに作る(tmp_path, go
     assert r.returncode == 0, r.stderr
     built = list((tmp_path / "cache" / "suru").glob("点検-*"))
     assert built and not any(p.suffix == ".exe" for p in built)
+
+
+# --- 段階3: 標準ライブラリ ---
+
+STDLIB = """「ファイル」 を 読み込む
+「時間」 を 読み込む
+「環境」 を 読み込む
+「乱数」 を 読み込む
+「動的リンク」 を 読み込む
+「共有メモリ」 を 読み込む
+「プロセス」 を 読み込む
+「標準」 を 読み込んで 使う
+
+始める とは 以下の手順です
+  環境内のOS名取得した 結果 を 表示します
+  「日本語のフォルダ」 を ファイル内のフォルダ作成します
+  道 とは 「日本語のフォルダ/メモ.txt」
+  「1行目」 + 改行 + 「2行目」 + 改行 を 道 へ ファイル内の書出します
+  「3行目」 + 改行 を 道 へ ファイル内の追記します
+  （道 を ファイル内の行分割読込した 結果） を 表示します
+  （道 を ファイル内の存在確認した 結果） を 表示します
+  （（（道 を ファイル内の実道取得した 結果） を 取出する） の 長さ > 10） を 表示します
+  （「日本語のフォルダ」 を ファイル内のフォルダ確認した 結果） を 表示します
+  道 を ファイル内の削除します
+  （道 を ファイル内の存在確認した 結果） を 表示します
+  t とは 時間内の現在時刻取得した 結果
+  （t > 1700000000） を 表示します
+  0.2 を 時間内の待機します
+  経過 とは t を 時間内の経過秒取得した 結果
+  （経過 >= 0.2 かつ 経過 < 10） を 表示します
+  （（t を 時間内の時差取得した 結果） % 900 = 0） を 表示します
+  （（16 を 乱数内の乱数バイト列取得した 結果） を バイト長にする） を 表示します
+  h とは 「kernel32.dll」 を 動的リンク内のライブラリ開封した 結果
+  f とは h から 「GetTickCount」 を 動的リンク内の記号取得した 結果
+  （（f を 番地数値にする） != 0） を 表示します
+  h を 動的リンク内のライブラリ閉鎖します
+  m とは 「/suru-試し」 を 64 で 共有メモリ内の共有メモリ作成した 結果
+  （「共有」 を バイト列にする） を 3 で m へ 共有メモリ内の共有書込します
+  m2 とは 「/suru-試し」 を 64 で 共有メモリ内の共有メモリ接続した 結果
+  （m2 から 6 を 3 で 共有メモリ内の共有読込した 結果） を 文字列にして 表示します
+  m を 共有メモリ内の共有メモリ解除します
+  m2 を 共有メモリ内の共有メモリ解除します
+  「/suru-試し」 を 共有メモリ内の共有メモリ削除します
+  r とは （「echo」 と 「hello world」） を プロセス内の出力取得した 結果
+  r の 出力 を 表示します
+  （「exit 3」 を プロセス内の命令実行した 結果） を 表示します
+  以上です
+始める
+"""
+
+
+@pytest.mark.skipif(not WINE, reason="wine がない")
+def test_Windows_で標準ライブラリが動く(tmp_path, rt_obj, wine_env):
+    env = _cross_env(tmp_path)
+    src = tmp_path / "標準.suru"
+    src.write_text(STDLIB, encoding="utf-8")
+    r = subprocess.run([sys.executable, str(ROOT / "suru_compile.py"), str(src), "-o", str(tmp_path / "標準")],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    r = subprocess.run(["wine", str(tmp_path / "標準.exe")], capture_output=True, env=wine_env, cwd=tmp_path, timeout=180)
+    out = r.stdout.decode("utf-8").replace("\r\n", "\n")
+    assert (r.returncode, out) == (0, "Windows\n（「1行目」 と 「2行目」 と 「3行目」）\n真\n真\n真\n偽\n真\n真\n真\n16\n真\n共有\n"
+                                      "\"hello world\"\n\n3\n"), r.stderr.decode("utf-8", "replace")
+
+
+@pytest.mark.skipif(not WINE, reason="wine がない")
+@pytest.mark.parametrize("src,want", [
+    ("「セマフォ」 を 読み込む\n「試し」 を 1 で セマフォ内のセマフォ作成します\n", "セマフォ(「セマフォ」「共有箱」「読書ロック」)は Windows ではまだ使えません"),
+    ("「シグナル」 を 読み込む\n（「INT」 と 「TERM」） を シグナル内のシグナル受付します\n", "シグナル(「シグナル」)は Windows ではまだ使えません"),
+    ("「プロセス」 を 読み込む\nプロセス内の分岐します\n", "プロセスを分けること(「分岐する」など)は Windows ではまだ使えません"),
+], ids=["セマフォ", "シグナル", "分岐"])
+def test_Windows_でまだ使えないものはエラーにする(tmp_path, rt_obj, wine_env, src, want):
+    env = _cross_env(tmp_path)
+    path = tmp_path / "まだ.suru"
+    path.write_text(src, encoding="utf-8")
+    r = subprocess.run([sys.executable, str(ROOT / "suru_compile.py"), str(path), "-o", str(tmp_path / "まだ")],
+                       capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    r = subprocess.run(["wine", str(tmp_path / "まだ.exe")], capture_output=True, env=wine_env, timeout=180)
+    assert r.returncode == 1
+    assert want in r.stderr.decode("utf-8")
