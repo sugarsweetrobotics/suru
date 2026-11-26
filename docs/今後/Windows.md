@@ -1,9 +1,7 @@
 # Windows
 
-計画: 1 実行時ライブラリ(済み) → 2 suruc・kumu・インタプリタ → 3 標準ライブラリ → 4 非標準ライブラリと GUI → 5 配布。道具は MSYS2 の clang(MinGW-w64、UCRT)。
+計画: 1 実行時ライブラリ(済み) → 2 suruc・kumu・インタプリタ(済み) → 3 標準ライブラリ → 4 非標準ライブラリと GUI → 5 配布。道具は MSYS2 の clang(MinGW-w64、UCRT)。
 
-- suruc・`suru --翻訳`・kumu が Windows で .exe を作る(`-lpthread -lws2_32`、`.exe` を付ける、UTF-8 を使う印(マニフェストの activeCodePage)を windres で埋め込む)
-- インタプリタ(suru.py)の `fcntl.flock` を Windows では `msvcrt.locking` に、外部のライブラリは `名前.dll` を探す
 - 標準ライブラリのファイル・時間・環境・乱数・動的リンク・プロセス・共有メモリを、実行時ライブラリの `rt_os_…` 経由にする
 - System V のセマフォ(セマフォ・共有箱・読書ロック)とシグナルは、最初は「Windows では使えません」のエラーにする
 - 名前つきの通路を Windows の名前つきパイプで作る

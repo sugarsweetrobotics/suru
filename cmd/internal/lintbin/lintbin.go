@@ -68,6 +68,11 @@ func libFiles() []string {
 
 // Binary は点検のバイナリの道。salt は呼ぶ側の名前と版(キャッシュの名前を分ける)
 func Binary(salt string) (string, error) {
+	// 点検は手元で動かすものなので、SURU_TARGET で別の OS 向けにしていても手元向けに作る
+	if t, ok := os.LookupEnv("SURU_TARGET"); ok {
+		os.Unsetenv("SURU_TARGET")
+		defer os.Setenv("SURU_TARGET", t)
+	}
 	cc := native.FindCC()
 	if cc == "" {
 		return "", fmt.Errorf("clang がないので点検はしません")
@@ -81,7 +86,8 @@ func Binary(salt string) (string, error) {
 		h.Write(b)
 	}
 	dir := native.CacheDir()
-	exe := filepath.Join(dir, "点検-"+hex.EncodeToString(h.Sum(nil))[:16])
+	name := filepath.Join(dir, "点検-"+hex.EncodeToString(h.Sum(nil))[:16])
+	exe := native.ExePath(name)
 	if _, err := os.Stat(exe); err == nil {
 		return exe, nil
 	}
@@ -96,7 +102,7 @@ func Binary(salt string) (string, error) {
 	if serr != nil {
 		return "", fmt.Errorf("点検をコンパイルできません: %s", serr.Message)
 	}
-	tmp := fmt.Sprintf("%s.%d", exe, os.Getpid())
+	tmp := fmt.Sprintf("%s.%d", name, os.Getpid())
 	if err := os.WriteFile(tmp+".ll", []byte(ir), 0o644); err != nil {
 		return "", err
 	}
@@ -104,5 +110,5 @@ func Binary(salt string) (string, error) {
 	if err := native.Build(tmp+".ll", tmp, "-O2"); err != nil {
 		return "", err
 	}
-	return exe, os.Rename(tmp, exe)
+	return exe, os.Rename(native.ExePath(tmp), exe)
 }

@@ -142,3 +142,83 @@ def test_Windows_の_exe_で_TCP_のエコーサーバーが動く(tmp_path, rt_
     finally:
         proc.kill()
         proc.wait()
+
+
+# --- 段階2: suruc・kumu・suru --翻訳 が SURU_TARGET で Windows の .exe を作る ---
+
+HELLO = "「こんにちは、窓」 を 表示します\n"
+
+
+@pytest.fixture(scope="module")
+def go_tools(tmp_path_factory):
+    if not shutil.which("go"):
+        pytest.skip("go がない")
+    d = tmp_path_factory.mktemp("go")
+    for name in ("suruc", "kumu"):
+        subprocess.run(["go", "build", "-o", str(d / name), f"./cmd/{name}"], cwd=ROOT, check=True)
+    return d
+
+
+def _cross_env(tmp_path):
+    env = dict(os.environ, SURU_TARGET=TARGET, XDG_CACHE_HOME=str(tmp_path / "cache"))
+    env.pop("SURU_LINT_INTERP", None)
+    return env
+
+
+def _has_manifest(exe):
+    # UTF-8 のマニフェストは windres があるときだけ埋め込む
+    objdump = shutil.which(f"{TARGET}-objdump")
+    if not objdump or not shutil.which(f"{TARGET}-windres"):
+        return True
+    r = subprocess.run([objdump, "-h", str(exe)], capture_output=True, text=True)
+    return ".rsrc" in r.stdout
+
+
+def test_suruc_で_exe_を作る(tmp_path, go_tools, wine_env):
+    src = tmp_path / "窓.suru"
+    src.write_text(HELLO, encoding="utf-8")
+    r = subprocess.run([str(go_tools / "suruc"), str(src), "-o", str(tmp_path / "窓")],
+                       capture_output=True, text=True, env=_cross_env(tmp_path))
+    assert r.returncode == 0, r.stderr
+    exe = tmp_path / "窓.exe"
+    assert exe.exists() and not (tmp_path / "窓").exists()
+    assert _has_manifest(exe)
+    if WINE:
+        assert _wine(wine_env, exe) == (0, "こんにちは、窓\n")
+
+
+def test_suru_の翻訳で_exe_を作る(tmp_path, wine_env):
+    src = tmp_path / "窓.suru"
+    src.write_text(HELLO, encoding="utf-8")
+    r = subprocess.run([sys.executable, str(ROOT / "suru.py"), "--翻訳", str(src)],
+                       capture_output=True, text=True, env=_cross_env(tmp_path))
+    assert r.returncode == 0, r.stderr
+    exe = tmp_path / "窓.exe"
+    assert exe.exists()
+    assert _has_manifest(exe)
+    if WINE:
+        assert _wine(wine_env, exe) == (0, "こんにちは、窓\n")
+
+
+def test_kumu_で_exe_を作る(tmp_path, go_tools, wine_env):
+    env = _cross_env(tmp_path)
+    r = subprocess.run([str(go_tools / "kumu"), "新規", "窓あけ"], cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    proj = tmp_path / "窓あけ"
+    (proj / "本体.suru").write_text(HELLO, encoding="utf-8")
+    r = subprocess.run([str(go_tools / "kumu"), "作る"], cwd=proj, capture_output=True, text=True, env=env)
+    assert r.returncode == 0, r.stderr
+    exe = proj / "出力" / "窓あけ.exe"
+    assert exe.exists()
+    if WINE:
+        assert _wine(wine_env, exe) == (0, "こんにちは、窓\n")
+
+
+def test_点検は_SURU_TARGET_があっても手元向けに作る(tmp_path, go_tools):
+    src = tmp_path / "窓.suru"
+    src.write_text(HELLO, encoding="utf-8")
+    r = subprocess.run([sys.executable, str(ROOT / "suru.py"), "--点検", str(src)],
+                       capture_output=True, text=True, env=_cross_env(tmp_path))
+    assert r.returncode == 0, r.stderr
+    built = list((tmp_path / "cache" / "suru").glob("点検-*"))
+    assert built and not any(p.suffix == ".exe" for p in built)

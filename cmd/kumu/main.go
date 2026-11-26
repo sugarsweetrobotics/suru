@@ -231,7 +231,7 @@ func (k *kumu) build(p *Project, opt string, check bool, cb *CBuild) (string, er
 	if err != nil {
 		return "", fmt.Errorf("入口のファイル「%s」が読めません", p.Entry+compiler.SourceSuffix)
 	}
-	exe := filepath.Join(p.Root, OutDir, p.Name)
+	exe := native.ExePath(filepath.Join(p.Root, OutDir, p.Name))
 	built, err := compileTo(string(data), path, exe, opt, check, cb)
 	if err != nil {
 		return "", err
