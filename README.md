@@ -1368,6 +1368,7 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 4. **Lint is always built for your own machine.** The lint binary (`suru --点検`, `kumu 点検`, the language server) runs on your machine, so it ignores `SURU_TARGET`.
 5. **The interpreter also starts on Windows.** `suru.py` doesn't load `fcntl` on Windows, and for external libraries it looks for `<name>.dll` (`c` and `m` mean `msvcrt`). Standard library modules that call C functions are covered in "Standard library on Windows" (compiled programs only, for now).
 6. **`tests/test_windows.py` checks it.** With `SURU_TARGET=x86_64-w64-mingw32` it makes .exe files with `suruc`, `suru --翻訳` and `kumu 作る` and runs them under wine.
+7. **Linking uses lld when it is installed.** GNU ld on Windows can't read or write paths with Japanese characters (such as `出力/`), so when `ld.lld` is found the link uses `-fuse-ld=lld` (in MSYS2, `pacman -S mingw-w64-ucrt-x86_64-lld`). Without lld, the program is linked in the temp folder and then copied to its place, but C sources in folders with Japanese names still need lld.
 
 ### Standard library on Windows
 

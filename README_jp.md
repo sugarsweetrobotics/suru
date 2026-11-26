@@ -1360,6 +1360,7 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 4. **点検はいつも手元向けに作る。** 点検のバイナリ(`suru --点検`・`kumu 点検`・言語サーバー)は手元で動かすものなので、`SURU_TARGET` を見ません。
 5. **インタプリタも Windows で起動する。** `suru.py` は Windows では `fcntl` を読み込まず、外部のライブラリは `名前.dll` を探します(`c`・`m` は `msvcrt`)。C の関数を呼ぶ標準ライブラリは「Windows の標準ライブラリ」にあります(今はコンパイルしたプログラムだけ)。
 6. **`tests/test_windows.py` で確かめる。** `SURU_TARGET=x86_64-w64-mingw32` で `suruc`・`suru --翻訳`・`kumu 作る` で .exe を作り、wine で動かします。
+7. **lld があればリンクに使う。** Windows の GNU ld は日本語の道(`出力/` など)を読み書きできないので、`ld.lld` が見つかれば `-fuse-ld=lld` でリンクします(MSYS2 では `pacman -S mingw-w64-ucrt-x86_64-lld`)。lld がなければ一時フォルダでリンクしてから移しますが、日本語の名前のフォルダにある C のソースには lld が要ります。
 
 ### Windows の標準ライブラリ
 

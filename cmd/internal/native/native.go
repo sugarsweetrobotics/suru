@@ -99,9 +99,19 @@ func BuildWith(llPath, out, opt string, extra []string) error {
 	if err != nil {
 		return err
 	}
-	args := append(TargetArgs(), opt, "-w", llPath, rt, "-o", ExePath(out))
+	exe := ExePath(out)
+	linkOut, done := exe, func() error { return nil }
+	if compiler.TargetWindows() && !windowsLLD() && !isASCII(exe) {
+		// GNU ld は Windows で日本語の道に書けないので、一時フォルダに作ってから移す
+		linkOut, done = asciiTemp(exe)
+	}
+	args := append(TargetArgs(), opt, "-w", llPath, rt, "-o", linkOut)
 	args = append(append(args, extra...), compiler.LinkFlags(string(ir))...)
 	if compiler.TargetWindows() {
+		if windowsLLD() {
+			// lld は日本語の道も読み書きできる(GNU ld は Windows の ANSI の道しか扱えない)
+			args = append(args, "-fuse-ld=lld")
+		}
 		// pthread(winpthreads)は中に入れて、libwinpthread-1.dll なしで動くようにする
 		args = append(args, "-lm", "-Wl,-Bstatic", "-lpthread", "-Wl,-Bdynamic", "-lws2_32")
 		if m := manifestObject(); m != "" {
@@ -114,7 +124,39 @@ func BuildWith(llPath, out, opt string, extra []string) error {
 	if b, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("clang でのビルドに失敗しました:\n%s", b)
 	}
-	return nil
+	return done()
+}
+
+// windowsLLD は Windows 向けのリンクに lld(ld.lld)を使えるか
+func windowsLLD() bool {
+	_, err := exec.LookPath("ld.lld")
+	return err == nil
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= 0x80 {
+			return false
+		}
+	}
+	return true
+}
+
+// asciiTemp は一時フォルダの ASCII の道と、そこから dst へ移す関数
+func asciiTemp(dst string) (string, func() error) {
+	dir, err := os.MkdirTemp("", "suru-link-")
+	if err != nil {
+		return dst, func() error { return nil }
+	}
+	tmp := filepath.Join(dir, "out.exe")
+	return tmp, func() error {
+		defer os.RemoveAll(dir)
+		b, err := os.ReadFile(tmp)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(dst, b, 0o755)
+	}
 }
 
 // windowsManifest は Windows のプログラムに埋め込む印。ファイルの道などの文字を UTF-8 で扱うようにする
