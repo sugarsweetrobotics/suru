@@ -26,7 +26,7 @@ import (
 )
 
 // version はリリースのときに -ldflags "-X main.version=…" で書きかえる
-var version = "0.7.0"
+var version = "0.8.0"
 
 const usage = "使い方: suruc [--ll] [--検査 | --検査なし] [--json] [-O0|-O1|-O2|-O3] [--対象 基板] プログラム.suru [-o 出力]"
 

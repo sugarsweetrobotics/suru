@@ -4,6 +4,20 @@
 
 「する」本体(`suru`・`suruc`・`suru-ls`・`kumu` と同梱の `lib/`)の変更です。0.7.0 より前の版は [GitHub Releases](https://github.com/suru-lang/suru/releases) にあります。VS Code 拡張の版は別です。
 
+## 0.8.0
+
+### 新しいもの
+
+1. **Windows(MSYS2 の UCRT64)に対応する。** `suruc`・`kumu 作る`・`suru --翻訳` が Windows の .exe を作ります。`SURU_TARGET`(`x86_64-w64-mingw32` など)を付ければ、Linux・macOS からも作れます。道具は MSYS2 の clang と lld です(`pacman -S mingw-w64-ucrt-x86_64-clang mingw-w64-ucrt-x86_64-lld`)。作った .exe はほかの DLL が要らず、UTF-8 の道と文字をそのまま使えます(#176・#177・#180)。
+2. **標準ライブラリが Windows のプログラムで動く。** 「ファイル」・「時間」・「乱数」・「動的リンク」・「共有メモリ」・「環境」・「プロセス」(`cmd.exe` で)などが動きます。`分岐する`・`子実行する`・System V のセマフォ・「シグナル」は、呼ぶと「…は Windows ではまだ使えません」と出します(#178・#181)。
+3. **GitHub Releases に Windows 用の `suruc.exe`・`kumu.exe` を置く**(amd64・arm64、`suru-ls.exe` と一緒に)。リリースの流れが、公開の前に Windows で動かして確かめます(#182)。
+
+### 直したもの
+
+1. **点検のバイナリは、`SURU_TARGET` があっても手元向けに作る**(#177)。
+
+ライブラリの regex・sqlite・http・gui-sdl3 も Windows で試験を動かすようになり、README に MSYS2 のパッケージを書きました。
+
 ## 0.7.0
 
 ### 0.6 から移るときに直す必要があるもの
