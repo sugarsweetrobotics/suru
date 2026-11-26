@@ -2408,6 +2408,7 @@ func (c *Checker) doType(stmts []Node, i int, env *TEnv, line Pos) Type {
 	}
 	if d, ok := s.(*Define); ok {
 		local := c.inferDefs([]*Define{d}, env, nil)
+		c.checkStoredAction(d, local, stmts[i+1:])
 		if i+1 == len(stmts) {
 			return newTVar()
 		}
@@ -2521,6 +2522,110 @@ func exportedVars(sc *TEnv) map[string]any {
 // actionListMessage は手順の文の値が動作のリストのときのエラー(#151)
 const actionListMessage = "この文は動作のリストを作るだけで、行いません。" +
 	"行うには「を 実行する」を付けてください(例: （xs の それぞれ を 表示する） を 実行する)"
+
+// checkStoredAction は、手順の局所の名前に動作そのもの(「した 結果」の書き忘れ)が入っていて、
+// それを組に入れていたら、定義の行でエラーにする(#168)
+func (c *Checker) checkStoredAction(d *Define, env *TEnv, rest []Node) {
+	if d.IsFunction || len(d.Params) > 0 {
+		return
+	}
+	switch d.Body.(type) {
+	case *Lambda, *Ref:
+		return
+	}
+	var t Type
+	switch v := env.vars[d.Name].(type) {
+	case *Scheme:
+		t = v.T
+	case Type:
+		t = v
+	default:
+		return
+	}
+	if r, ok := prune(t).(*TCon); !ok || r.Name != "動作" {
+		return
+	}
+	if ctor, field, ok := c.findStored(d.Name, rest); ok {
+		c.fail(d.Line, storedActionMessage(d.Name, ctor, field, firstCallName(d.Body)))
+	}
+}
+
+// findStored は、nodes の中で名前 name をそのまま組の項目に入れているところ(形の名前, 項目の名前)。
+// 同じ名前を定義し直したら、その後は見ない
+func (c *Checker) findStored(name string, nodes []Node) (string, string, bool) {
+	for _, n := range nodes {
+		if d, ok := n.(*Define); ok && d.Name == name && len(d.Params) == 0 {
+			return c.findStored(name, nn(d.Body))
+		}
+		if ctor, field, ok := c.findStoredIn(name, n); ok {
+			return ctor, field, true
+		}
+	}
+	return "", "", false
+}
+
+func (c *Checker) findStoredIn(name string, node Node) (string, string, bool) {
+	isName := func(e Node) bool { v, ok := e.(*Var); return ok && v.Name == name }
+	switch n := node.(type) {
+	case nil:
+		return "", "", false
+	case *Construct:
+		info, _ := c.ctx.Ctors.Get(n.Ctor)
+		for k, item := range n.Items {
+			if isName(item) {
+				field := ""
+				if k < len(info.Fields) {
+					field = info.Fields[k]
+				}
+				return n.Ctor, field, true
+			}
+		}
+	case *NamedConstruct:
+		for _, f := range n.Fields {
+			if isName(f.Value) {
+				return n.Ctor, f.Name, true
+			}
+		}
+	case *Update:
+		for _, f := range n.Fields {
+			if isName(f.Value) {
+				return "", f.Name, true
+			}
+		}
+	}
+	return c.findStored(name, node.Children())
+}
+
+// firstCallName は式の中で最初に出てくる関数の呼び出しの名前(「する」を除く)。なければ空
+func firstCallName(node Node) string {
+	if node == nil {
+		return ""
+	}
+	if call, ok := node.(*Call); ok {
+		return strings.TrimSuffix(call.Name, Suru)
+	}
+	for _, ch := range node.Children() {
+		if n := firstCallName(ch); n != "" {
+			return n
+		}
+	}
+	return ""
+}
+
+// storedActionMessage は手順の局所の名前に入った動作を組に入れたときのエラー(#168)
+func storedActionMessage(name, ctor, field, call string) string {
+	where := "「" + field + "」"
+	if ctor != "" {
+		where = "「" + ctor + "」の" + where
+	}
+	run := "…した 結果"
+	if call != "" {
+		run = "…を " + call + "した 結果"
+	}
+	return "「" + name + "」には動作そのものが入っていて、行われていません(それを" + where + "に入れています)。" +
+		"動作を行った結果を使うなら「" + name + " とは " + run + "」と書いてください。" +
+		"動作のまま入れるなら、" + where + "に直接書いてください"
+}
 
 // checkActionList は、手順の文の値が動作のリストなら、行われないのでエラーにする
 func (c *Checker) checkActionList(t Type, line Pos) {

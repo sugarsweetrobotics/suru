@@ -1348,6 +1348,11 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 3. **`kumu 試験` shows the line of the failed check.** A failed `一致確認する`, `確認する` or `不合格にする` writes the place in the test file first, as in `「計算.suru」の6行目 3文字目: 等しくありません: 期待は 7 / 実際は 6`. The place is the one from "Errors inside libraries", which the new built-in `呼出場所取得する` (in 「標準」, an action) returns as a string (empty when there is none).
 4. **`kumu 新規` makes an example test.** It writes `試験/例.suru` with one test (not for microcontroller targets, which can't run tests), so `kumu 試験` works right after creating a project.
 
+### Actions stored in records from a procedure
+
+1. **Putting a procedure's local that holds an action into a record is an error at its definition.** In a procedure, `番号 とは n を 番号作成する` without 「した 結果」 binds the action itself, not its result. Since the fields of a record can hold any type, putting that local into a record (`番号 の 数値`, `中身 は 番号 の 数値`, or an update) passed the type check, and the action only failed much later, far from the cause (#168). Now the definition line gives 「「番号」には動作そのものが入っていて、行われていません(それを「数値」の「中身」に入れています)。動作を行った結果を使うなら「番号 とは …を 番号作成した 結果」と書いてください。動作のまま入れるなら、「数値」の「中身」に直接書いてください」 ("「番号」 holds the action itself, which is not carried out (it is put into 「中身」 of 「数値」); to use the result, write 「番号 とは …を 番号作成した 結果」; to store the action as is, write it directly in 「中身」 of 「数値」"). The Python and Go versions give the same error.
+2. **Storing an action on purpose is written in the record itself.** `名前 は 「a」 で 処理 は （「押した」 を 表示する） の ボタン` still passes, and so do locals that hold a function value (`…すること`) or an anonymous function.
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)
