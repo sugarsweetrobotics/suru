@@ -10,6 +10,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 
 1. **`外部の（f）`, which calls through a function pointer, can be written on one line or in a block.** `p を f で 呼出する とは 外部の（f） で 番地 を 番地 で 受け取って 無 を 返す 入出力動作です` fits on one line. Inside `以下は外部の入出力動作です` it is `p を f で 呼出する とは （f） で 番地 を 番地 で 受け取って 無 を 返します` (#189).
 2. **`そうでなければ` can follow `もし … ならば 以下の手順です`.** After the procedure is closed by a deeper `以上`, a `そうでなければ …` line can come at the indent of the `もし` line. Previously the long branch had to be moved to the `そうでなければ` side (#190).
+3. **Record definitions can give field types.** Write `field は type` separated by `で`, as in `会員 とは 番号 は 数 で 名前 は 文字列 の 組`. Values are checked against the written types, and `甲`, `乙` … become the type's parameters. This is the first stage of the plan for deriving and quasi-quotes (#192).
 
 ## 0.9.1
 

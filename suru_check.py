@@ -28,7 +28,7 @@ from suru import (
     BinOp, Block, Call, Chain, Construct, Define, Do, Each, Field, If, KW_KATSU, KW_MATAHA, Lambda,
     ListLit, Match, NamedConstruct, Neg, Not, Num, ParseContext, PBind, PCtor, PNamed, Prop, PSeq,
     PValue, Ref, RESULT, Run, Sequel, Str, SuruError, module_error, TraitDecl, TraitImpl, TypeDef, Update, Var, WO,
-    HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, Import, Module, MODULE_SEP, SOURCE_SUFFIX, _where, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
+    HOLE, TO_STRING, MAP, TypeSig, TypeVarName, TypeFun, TypeName, Import, Module, MODULE_SEP, SOURCE_SUFFIX, _where, BIND, UNIT, SHOWABLE, MAPPABLE, MONAD, SURU, TOP_LEVEL_ONLY, is_predicate,
     parse_program, collect_runs, _run_key, LIB_PRIMITIVES, GA, UNWRAP_TYPES, _call_name, TUPLE_TYPE, PRELUDE_PATH, short_type_name,
 )
 
@@ -504,6 +504,7 @@ def first_line(node: Any) -> Any:
 # 自分の型の形(型の引数)
 # ---------------------------------------------------------------------------
 
+TVAR_KEY = "\0"  # フィールドの型を書いた型の、型の引数(甲・乙 …)の印
 SELF = TCon("\0自身")  # 再帰するフィールドの型の中で「その型自身」を表す印
 
 
@@ -519,7 +520,22 @@ class Shapes:
 
     def __init__(self, ctx: ParseContext):
         self.keys: dict[str, list] = {}
+        # フィールドの型を書いた型(「番号 は 数 で … の 組」): (型名, フィールド名) → 型の書き方。
+        # この型の引数はフィールドではなく、書いた 甲・乙 …(出てきた順)で、keys には (型名, TVAR_KEY + 甲) を置く
+        self.declared: dict = {}
+        self.declared_vars: dict[str, list] = {}
+        field_types = getattr(ctx, "field_types", {})
         for _, (tname, fs) in ctx.ctors.items():
+            if tname in field_types:
+                if tname not in self.keys:
+                    vs: list = []
+                    for te in field_types[tname].values():
+                        _type_var_names(te, vs)
+                    self.declared_vars[tname] = vs
+                    self.keys[tname] = [(tname, TVAR_KEY + v) for v in vs]
+                    for f, te in field_types[tname].items():
+                        self.declared[(tname, f)] = te
+                continue
             ks = self.keys.setdefault(tname, [])
             for f in fs:
                 if (tname, f) not in ks:
@@ -537,7 +553,7 @@ class Shapes:
         """v を t にそろえると型が無限に続くとき、t の中の自分の型で、引数に v を含むものがあれば、
         そのフィールドを「自分自身を中に持つ」ことにする"""
         for n in _nodes(t):
-            if not self.is_user(n):
+            if not self.is_user(n) or n.name in self.declared_vars:
                 continue
             ps = self.params(n.name)
             for i, a in enumerate(n.args):
@@ -571,6 +587,20 @@ class Shapes:
                 found = found or ok
             _usual[tname] = usual
         return found
+
+
+def _type_var_names(te: Any, out: list) -> None:
+    """型の書き方 te の中の 甲・乙 … を、出てきた順に out に足す"""
+    if isinstance(te, TypeVarName):
+        if te.name not in out:
+            out.append(te.name)
+    elif isinstance(te, TypeFun):
+        for _, a in te.params:
+            _type_var_names(a, out)
+        _type_var_names(te.result, out)
+    elif isinstance(te, TypeName):
+        for a in te.args:
+            _type_var_names(a, out)
 
 
 def _nodes(t: Any, out: list | None = None) -> list:
@@ -986,14 +1016,16 @@ class Checker:
             return result, tvars
         return TFun([(p, self.type_of(t, tvars, sig.line)) for p, t in sig.params], result), tvars
 
-    def type_of(self, te: Any, tvars: dict, line: Any) -> Any:
-        """型の書き方(TypeName など)から型を作る"""
+    def type_of(self, te: Any, tvars: dict, line: Any, own: tuple | None = None) -> Any:
+        """型の書き方(TypeName など)から型を作る。own は (型名, その型の値の型): フィールドの型の中の、その型自身"""
         if isinstance(te, TypeVarName):
             return tvars.setdefault(te.name, TVar())
         if isinstance(te, TypeFun):
-            return TFun([(p, self.type_of(t, tvars, line)) for p, t in te.params], self.type_of(te.result, tvars, line),
-                        real=True)
-        args = [self.type_of(a, tvars, line) for a in te.args]
+            return TFun([(p, self.type_of(t, tvars, line, own)) for p, t in te.params],
+                        self.type_of(te.result, tvars, line, own), real=True)
+        if own is not None and te.name == own[0] and not te.args:
+            return own[1]  # 「左 は 木」: 同じ型の引数の、その型自身
+        args = [self.type_of(a, tvars, line, own) for a in te.args]
         if te.name == TUPLE_TYPE:
             return TCon(TUPLE_TYPE, tuple(args))
         if te.name in NUM_ALIASES:
@@ -1009,10 +1041,13 @@ class Checker:
         inst = self.fresh_type(te.name)
         keys = [k for k in self.shapes.keys[te.name] if k not in self.shapes.recursive]
         if len(args) > len(keys):
+            if te.name in self.shapes.declared_vars:
+                raise self.err(f"「{te.name}」がとる型の引数は{len(keys)}個です"
+                               f"(フィールドの型に書いた{'・'.join(self.shapes.declared_vars[te.name]) or '甲・乙 …'})", line)
             raise self.err(f"「{te.name}」がとる型の引数は{len(keys)}個です(フィールド: {'・'.join(f for _, f in keys)})", line)
         for k, a in zip(keys, args):
             self.unify_or(self.field_type(inst, k), a, line,
-                          lambda sa, sb, k=k: f"「{te.name}」の「{k[1]}」は{sa}なので、{sb}にはできません")
+                          lambda sa, sb, k=k: f"「{te.name}」の「{k[1].lstrip(TVAR_KEY)}」は{sa}なので、{sb}にはできません")
         return inst
 
     def apply_sig(self, sig: TypeSig, declared: TFun, head: TFun) -> None:
@@ -1440,6 +1475,9 @@ class Checker:
         ps = sh.params(key[0])
         if key in ps:
             return t.args[ps.index(key)]
+        if key in sh.declared:
+            tvars = {v: t.args[i] for i, v in enumerate(sh.declared_vars[key[0]])}
+            return self.type_of(sh.declared[key], tvars, self.line, (key[0], t))
         tmpl = sh.recursive[key]
         mapping: dict = {}
         for v in ftv(tmpl):
