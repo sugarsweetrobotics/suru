@@ -232,9 +232,11 @@ func buildLayout(lines []*Line) []*LNode {
 			if (!ln.Closed || opensIka(ln)) && pos < len(lines) && lines[pos].Indent > indent {
 				node.Children = block(indent + 1)
 			}
+			// 行頭が ならば/そうでなければ の行は前の文の続き。
+			// 「… ならば 以下の手順です」の後は、深い行の「以上」で閉じていれば続ける(#190)
 			first := ln.Tokens[0]
 			if len(nodes) > 0 && !ln.Closed && !nodes[len(nodes)-1].Line.Closed && first.Kind == "KW" && continuationKeywords[first.S] &&
-				!opensIka(nodes[len(nodes)-1].Line) {
+				(!opensIka(nodes[len(nodes)-1].Line) || ikaClosedDeep(nodes[len(nodes)-1])) {
 				prev := nodes[len(nodes)-1]
 				prev.Children = append(prev.Children, node)
 			} else {
@@ -254,6 +256,16 @@ func buildLayout(lines []*Line) []*LNode {
 func opensIka(ln *Line) bool {
 	ts := nosep(ln.Tokens)
 	return len(ts) > 0 && ts[len(ts)-1].Kind == "KW" && ikaWords[ts[len(ts)-1].S]
+}
+
+// ikaClosedDeep は「以下の手順です」の行で、深い行の「以上」で既に閉じているか(その後の続きの行は式の続き)
+func ikaClosedDeep(n *LNode) bool {
+	for _, c := range n.Children {
+		if isIjou(c.Line) {
+			return true
+		}
+	}
+	return false
 }
 
 // isIjou は「以上」だけの行(文)か
@@ -296,6 +308,27 @@ func closeOne(nodes []*LNode, i int) (*LNode, int) {
 	if !opensIka(n.Line) {
 		return n, i
 	}
+	if j := ijouBeforeContinuation(n); j >= 0 {
+		// 「もし … ならば 以下の手順です」+ 深い行 + 「以上」の後に「そうでなければ …」(#190):
+		// 手順の文を DO の字句にして行に入れ、続きの行を深い行として残す
+		body, rest := n.Children[:j], n.Children[j+1:]
+		if len(body) == 0 {
+			ts := nosep(n.Line.Tokens)
+			raise(n.Line.Number, "「"+ts[len(ts)-1].S+"です」と「"+KwIjou+"」の間に文がありません")
+		}
+		toks := n.Line.Tokens
+		k := -1
+		for x, t := range toks {
+			if t.Kind == "KW" && ikaWords[t.S] {
+				k = x
+			}
+		}
+		do := &Token{Kind: "DO", S: toks[k].S, Form: toks[k].S, Line: toks[k].Line, Do: body}
+		line := append(append(append([]*Token{}, toks[:k]...), do), toks[k+1:]...)
+		n.Line = &Line{n.Line.Indent, line, n.Line.Number, n.Line.Closed}
+		n.Children = rest
+		return n, i
+	}
 	if len(n.Children) > 0 {
 		if isIjou(n.Children[len(n.Children)-1].Line) {
 			n.Children = n.Children[:len(n.Children)-1]
@@ -323,6 +356,27 @@ func closeOne(nodes []*LNode, i int) (*LNode, int) {
 		raise(n.Line.Number, "「"+ts[len(ts)-1].S+"です」と「"+KwIjou+"」の間に文がありません")
 	}
 	return n, i
+}
+
+// ijouBeforeContinuation は、深い行の「以上」の後に続きの行(ならば・そうでなければ)だけがあれば、その「以上」の位置を返す(なければ -1)
+func ijouBeforeContinuation(n *LNode) int {
+	j := -1
+	for k, c := range n.Children {
+		if isIjou(c.Line) {
+			j = k
+			break
+		}
+	}
+	if j < 0 || j == len(n.Children)-1 {
+		return -1
+	}
+	for _, c := range n.Children[j+1:] {
+		ts := nosep(c.Line.Tokens)
+		if len(ts) == 0 || ts[0].Kind != "KW" || !continuationKeywords[ts[0].S] {
+			return -1
+		}
+	}
+	return j
 }
 
 func flatten(node *LNode) []*Token {

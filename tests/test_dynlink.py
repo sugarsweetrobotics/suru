@@ -114,3 +114,65 @@ def test_外部の番地の間違い(tmp_path, source, message):
             r = subprocess.run(cmd + [str(src), "-o", str(tmp_path / "prog")], capture_output=True, text=True, timeout=60)
             assert r.returncode != 0
             assert message in r.stderr
+
+
+# 「外部の（f）」を1行の型付きの形とまとまりに書く(#189)
+ONE_LINE_PROG = """「動的リンク」 を 読み込んで 使う
+
+s を f で 一行長さ計測する とは 外部の（f） で 文字列 を 番地 で 受け取って 数 を 返します
+
+以下は外部の関数です
+  s を f で まとまり長さ計測する とは （f） で 文字列 を 番地 で 受け取って 数 を 返します
+  x を f で まとまり余弦にする とは 外部の（f） で 小数 を 番地 で 受け取って 小数 を 返します
+以上です
+
+以下は外部の入出力動作です
+  f を 番地呼出する とは （f） で 番地 を 受け取って 整数 を 返します
+以上です
+
+試す とは 以下の手順です
+  me とは 自分取得した 結果
+  strlen とは me から 「strlen」 を 記号取得した 結果
+  （「あいう」 を strlen で 一行長さ計測する） を 表示する
+  （「abc」 を strlen で まとまり長さ計測する） を 表示する
+  getpid とは me から 「getpid」 を 記号取得した 結果
+  pid とは getpid を 番地呼出した 結果
+  （pid > 0） を 表示する
+  以上です
+試す
+"""
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_番地で呼ぶ関数を1行とまとまりで書く(tmp_path, kind):
+    r = subprocess.run(build(ONE_LINE_PROG, tmp_path / kind, kind), capture_output=True, text=True, timeout=60)
+    assert (r.returncode, r.stdout) == (0, "9\n3\n真\n"), r.stderr
+
+
+def test_番地で呼ぶ関数は今までの2行の書き方と同じ構文木():
+    import suru
+    two = suru.parse_program("番地 を 番地 で 呼出する は 無 を 返す 入出力動作\np を f で 呼出する とは 外部の（f）\n")
+    one = suru.parse_program("p を f で 呼出する とは 外部の（f） で 番地 を 番地 で 受け取って 無 を 返す 入出力動作です\n")
+    block = suru.parse_program("以下は外部の入出力動作です\n"
+                               "  p を f で 呼出する とは （f） で 番地 を 番地 で 受け取って 無 を 返します\n以上です\n")
+    sigs = lambda ss: [(s.name, s.params, s.result) for s in ss if isinstance(s, suru.TypeSig)]  # noqa: E731
+    externs = lambda ss: [(s.name, s.params, s.body.symbol, s.body.pointer) for s in ss  # noqa: E731
+                          if isinstance(s, suru.Define)]
+    assert sigs(one) == sigs(two) == sigs(block)
+    assert externs(one) == externs(two) == externs(block) == [("呼出する", [("を", "p"), ("で", "f")], "", "f")]
+
+
+@pytest.mark.parametrize("source, message", [
+    ("以下は外部の関数です\n  文字列 を 番地 で 計測する は （f） で 数 を 返します\n以上です\n",
+     "番地で呼ぶ「（f）」は、名前を付けた定義の形で書きます"),
+    ("s を f で 計測する とは 外部の（g） で 文字列 を 番地 で 受け取って 数 を 返します\n",
+     "「外部の（g）」の「g」は「計測する」の引数ではありません"),
+    ("s を f で 計測する とは 外部の（f） で 文字列 を 数 で 受け取って 数 を 返します\n",
+     "「外部の（f）」の「f」は型の宣言で 番地 にしてください"),
+], ids=["短い形", "名前", "型"])
+def test_番地で呼ぶ関数の1行の形の間違い(tmp_path, source, message):
+    src = tmp_path / "prog.suru"
+    src.write_text(source, encoding="utf-8")
+    r = subprocess.run([sys.executable, str(ROOT / "suru.py"), "--検査", str(src)], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 1
+    assert message in r.stderr

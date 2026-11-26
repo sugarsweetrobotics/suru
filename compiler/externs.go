@@ -142,13 +142,14 @@ func joinStrings(xs []string, sep string) string {
 	return out
 }
 
-// extSplit は「「f」（…） で 型」を「「f」（…）」と型に分ける(合わなければ ok = false)
+// extSplit は「「f」（…） で 型」を「「f」（…）」と型に分ける(合わなければ ok = false)。番地で呼ぶ「（f）」も(#189)
 func extSplit(after []*Token) (ext, typ []*Token, ok bool) {
-	if len(after) < 2 || after[0].Kind != "STR" {
-		return nil, nil, false
-	}
 	k := 1
-	if after[k].Kind == "LP" {
+	if isPointerExt(after) {
+		k = 3
+	} else if len(after) < 2 || after[0].Kind != "STR" {
+		return nil, nil, false
+	} else if after[k].Kind == "LP" {
 		k = closeParenAfter(after, k)
 		if k < 0 {
 			return nil, nil, false
@@ -158,6 +159,11 @@ func extSplit(after []*Token) (ext, typ []*Token, ok bool) {
 		return nil, nil, false
 	}
 	return after[:k], after[k+1:], true
+}
+
+// isPointerExt は「（f） …」(番地で呼ぶ外部の関数 #189)で始まるか
+func isPointerExt(after []*Token) bool {
+	return len(after) >= 4 && after[0].Kind == "LP" && after[1].Kind == "WORD" && after[2].Kind == "RP"
 }
 
 func isExternWord(t *Token) bool { return t.Kind == "WORD" && t.S == KwExtern && !t.Quoted }
@@ -203,6 +209,10 @@ func externBlockLine(ln *Line, word string) []*Line {
 	before, after := ts[:wa[0]], ts[wa[0]+1:]
 	name := extName(before)
 	if name == nil || len(after) < 3 || after[0].Kind != "STR" || !isPartS(after[1], "で") {
+		if name != nil && len(after) >= 3 && after[0].Kind == "LP" && after[1].Kind == "WORD" && after[2].Kind == "RP" {
+			raise(after[0].Line, "番地で呼ぶ「（"+after[1].S+"）」は、名前を付けた定義の形で書きます"+
+				"(「p を f で 呼出する とは （f） で 番地 を 番地 で 受け取って 無 を 返します」)")
+		}
 		if name != nil && len(after) >= 2 && after[0].Kind == "STR" && after[1].Kind == "LP" {
 			raise(after[1].Line, "C に渡す引数を並べて書くときは、名前を付けた定義の形で書きます"+
 				"(「r を 読取する とは 「SDL_RenderReadPixels」（r と 0） で 番地 を 受け取って 番地 を 返します」)")
