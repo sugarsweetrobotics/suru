@@ -38,11 +38,29 @@ func expanderSource(stem, fname string) string {
 		"展開実行する\n"
 }
 
-// InstallExpander は compiler が準クォートを展開できるようにする(suruc・kumu・suru-ls が呼ぶ)
-func InstallExpander() { compiler.Expander = runExpander }
+// deriverSource は導出の関数 fname(ファイル stem の中)に型の記述 desc(する の式のソース)を渡して動かす入口
+func deriverSource(stem, fname, desc string) string {
+	return "「導出」 を 読み込んで 使う\n" +
+		"「" + stem + "」 を 読み込む\n" +
+		"\n" +
+		"導出実行する は 数 を 返す 入出力動作\n" +
+		"導出実行する とは 以下の手順です\n" +
+		"  もし （" + desc + " を " + stem + compiler.ModuleSep + fname + "） が\n" +
+		"    s の 成功 ならば 「成功:」 + s を 続表示する\n" +
+		"    e の 失敗 ならば 「失敗:」 + e を 続表示する\n" +
+		"以上です\n" +
+		"\n" +
+		"導出実行する\n"
+}
+
+// InstallExpander は compiler が準クォートの展開と導出をできるようにする(suruc・kumu・suru-ls が呼ぶ)
+func InstallExpander() {
+	compiler.Expander = runExpander
+	compiler.Deriver = runDeriver
+}
 
 func runExpander(mod *compiler.Module, fname, body string) (bool, string, error) {
-	exe, err := expanderBinary(mod, fname)
+	exe, err := expanderBinary(mod, expanderSource(mod.Name, fname))
 	if err != nil {
 		return false, "", err
 	}
@@ -56,7 +74,20 @@ func runExpander(mod *compiler.Module, fname, body string) (bool, string, error)
 		return false, "", err
 	}
 	f.Close()
-	cmd := exec.Command(exe, f.Name())
+	return runDriver(exe, f.Name())
+}
+
+func runDeriver(mod *compiler.Module, fname, desc string) (bool, string, error) {
+	exe, err := expanderBinary(mod, deriverSource(mod.Name, fname, desc))
+	if err != nil {
+		return false, "", err
+	}
+	return runDriver(exe)
+}
+
+// runDriver は展開・導出の入口のバイナリを動かし、「成功:」「失敗:」に続く結果を読む
+func runDriver(exe string, args ...string) (bool, string, error) {
+	cmd := exec.Command(exe, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
@@ -76,15 +107,15 @@ func runExpander(mod *compiler.Module, fname, body string) (bool, string, error)
 	return false, "", fmt.Errorf("展開の関数の出力が読めません: %q", out)
 }
 
-// expanderBinary は展開の関数を動かすバイナリの道。同じ IR なら前に作ったものを使う
-func expanderBinary(mod *compiler.Module, fname string) (string, error) {
+// expanderBinary は展開・導出の関数を動かす入口 src のバイナリの道。同じ IR なら前に作ったものを使う
+func expanderBinary(mod *compiler.Module, src string) (string, error) {
 	// 展開は手元で動かすものなので、SURU_TARGET で別の OS 向けにしていても手元向けに作る
 	if t, ok := os.LookupEnv("SURU_TARGET"); ok {
 		os.Unsetenv("SURU_TARGET")
 		defer os.Setenv("SURU_TARGET", t)
 	}
 	base := filepath.Dir(mod.Path)
-	ir, serr := compiler.CompileSource(expanderSource(mod.Name, fname), base, filepath.Join(base, "\x00展開の入口.suru"), true)
+	ir, serr := compiler.CompileSource(src, base, filepath.Join(base, "\x00展開の入口.suru"), true)
 	if serr != nil {
 		return "", fmt.Errorf("展開の関数をコンパイルできません: %s", serr.Message)
 	}
