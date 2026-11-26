@@ -2831,7 +2831,9 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 		}
 	}
 	if hasQuasi(nodes) {
+		quasiScope = nodes
 		nodes = expandQuasi(nodes, mods, 0, true, ctx)
+		quasiScope = nil
 	}
 	var prelude *Import
 	if !ctx.InPrelude && !hasPreludeImport(imports) {
@@ -3372,16 +3374,19 @@ var quasiFailLine = regexp.MustCompile(`(?s)^([0-9]+)行目[:：][ \t　]*(.*)$`
 
 func hasQuasi(nodes []*LNode) bool {
 	for _, n := range nodes {
-		if n.Line.HasQuasi || hasQuasi(n.Children) {
+		if n.Line.HasQuasi || n.Line.Derive != nil || hasQuasi(n.Children) {
 			return true
 		}
 	}
 	return false
 }
 
-// findExpander は【name】の展開の関数「name展開する」を、読み込んだファイルから探す
-func findExpander(name string, mods []*Module, line Pos) (*Module, string) {
-	fname := name + quasiSuffix
+// findExpander は【name】の展開の関数「name展開する」(derive なら導出の関数「name導出する」)を、読み込んだファイルから探す
+func findExpander(name string, mods []*Module, line Pos, derive bool) (*Module, string) {
+	fname, kind, arg := name+quasiSuffix, "展開", "文字列"
+	if derive {
+		fname, kind, arg = name+deriveSuffix, "導出", "型記述"
+	}
 	var found []*Module
 	for _, m := range mods {
 		if m.Private[fname] {
@@ -3395,22 +3400,22 @@ func findExpander(name string, mods []*Module, line Pos) (*Module, string) {
 		}
 	}
 	if len(found) == 0 {
-		raise(line, "【"+name+"】の展開の関数「"+fname+"」が、読み込んだファイルにありません"+
-			"(「文字列 を "+fname+" は 文字列 の 成否」を定義したファイルを読み込んでください)")
+		raise(line, "【"+name+"】の"+kind+"の関数「"+fname+"」が、読み込んだファイルにありません"+
+			"(「"+arg+" を "+fname+" は 文字列 の 成否」を定義したファイルを読み込んでください)")
 	}
 	if len(found) > 1 {
 		var names []string
 		for _, m := range found {
 			names = append(names, "「"+m.Name+"」")
 		}
-		raise(line, "【"+name+"】の展開の関数「"+fname+"」が"+strings.Join(names, "と")+"の両方にあります")
+		raise(line, "【"+name+"】の"+kind+"の関数「"+fname+"」が"+strings.Join(names, "と")+"の両方にあります")
 	}
 	return found[0], fname
 }
 
 // runExpander は【name】の中身を展開の関数に渡し、返した する のソースを返す
 func runExpander(name, body string, mods []*Module, line Pos) string {
-	mod, fname := findExpander(name, mods, line)
+	mod, fname := findExpander(name, mods, line, false)
 	if Expander == nil {
 		raise(line, "【"+name+"】: この道具では準クォートを展開できません")
 	}
@@ -3436,6 +3441,10 @@ func runExpander(name, body string, mods []*Module, line Pos) string {
 func expandQuasi(nodes []*LNode, mods []*Module, depth int, top bool, ctx *ParseContext) []*LNode {
 	var out []*LNode
 	for _, n := range nodes {
+		if n.Line.Derive != nil {
+			out = append(out, expandDerive(n, nodes, mods, depth, top, ctx)...)
+			continue
+		}
 		if !n.Line.HasQuasi {
 			n.Children = expandQuasi(n.Children, mods, depth, false, ctx)
 			out = append(out, n)
@@ -3487,6 +3496,212 @@ func expandQuasi(nodes []*LNode, mods []*Module, depth int, top bool, ctx *Parse
 		out = append(out, n)
 	}
 	return out
+}
+
+// --- 導出(#192): 「会員 は 【JSON】 と 【表】 を 導出する」 ---
+
+// Deriver は導出の関数 fname(読み込んだファイル mod の中)に、型の記述(する の式のソース desc)を渡して動かす
+var Deriver func(mod *Module, fname, desc string) (ok bool, out string, err error)
+
+// quasiScope は展開しているファイルの一番外の行(導出する型の定義を探す)
+var quasiScope []*LNode
+
+// expandDerive は導出の行を、導出の関数が返した定義にする(suru.py の _expand_derive と同じ)
+func expandDerive(n *LNode, scope []*LNode, mods []*Module, depth int, top bool, ctx *ParseContext) []*LNode {
+	tname, line := n.Line.Tokens[0].S, n.Line.Number
+	names := n.Line.Derive
+	if !top || n.Line.Indent != 0 {
+		raise(line, "「"+tname+" は 【"+strings.Join(names, "】 と 【")+"】 を 導出する」は一番外(字下げなし)にだけ書けます")
+	}
+	if depth >= quasiMaxDepth {
+		raisef(line, "【%s】の展開が深すぎます(展開したコードの中の準クォートが%d回続きました)", names[0], quasiMaxDepth)
+	}
+	desc := typeDescription(tname, [][]*LNode{scope, quasiScope}, line, ctx)
+	var srcs []string
+	for _, x := range names {
+		if src := runDeriver(tname, x, desc, mods, line); strings.TrimSpace(src) != "" {
+			srcs = append(srcs, strings.TrimRight(src, "\n"))
+		}
+	}
+	src := strings.Join(srcs, "\n")
+	if depth == 0 && QuasiRecord != nil && QuasiRecord.Ctx == ctx {
+		QuasiRecord.Items = append(QuasiRecord.Items, QuasiExpansion{line.Line, line.Line, src, -1})
+	}
+	var made []*LNode
+	if strings.TrimSpace(src) != "" {
+		made = buildLayout(must(splitSourceLinesAt(src, line)))
+	}
+	made = expandQuasi(made, mods, depth+1, true, ctx)
+	for _, m := range made {
+		if _, _, ok := importTarget(m); ok {
+			raise(line, "【"+names[0]+"】の導出したコードには、読み込みの文を書けません")
+		}
+	}
+	return made
+}
+
+// runDeriver は型の記述を導出の関数に渡し、返した する のソースを返す
+func runDeriver(tname, name, desc string, mods []*Module, line Pos) string {
+	mod, fname := findExpander(name, mods, line, true)
+	if Deriver == nil {
+		raise(line, "【"+name+"】: この道具では導出できません")
+	}
+	savedFile := curPosFile
+	curPosFile = ""
+	ok, out, err := Deriver(mod, fname, desc)
+	curPosFile = savedFile
+	if err != nil {
+		raise(line, "【"+name+"】の導出の関数「"+fname+"」が止まりました: "+err.Error())
+	}
+	if !ok {
+		raise(line, "【"+name+"】で「"+tname+"」を導出できません: "+out)
+	}
+	return out
+}
+
+// typeDescription は tname の型の記述(lib/導出.suru の 型記述 の値)を、する の式のソースにする。型は同じファイルで定義したもの
+func typeDescription(tname string, scopes [][]*LNode, line Pos, ctx *ParseContext) string {
+	var tds []*TypeDef
+	var td *TypeDef
+	for _, nodes := range scopes {
+		for _, n := range nodes {
+			if n.Line.HasQuasi || n.Line.Derive != nil {
+				continue
+			}
+			if d := tryParseTypedef(n); d != nil {
+				tds = append(tds, d)
+				if td == nil && d.Name == tname {
+					td = d
+				}
+			}
+		}
+	}
+	if td == nil {
+		raise(line, "「"+tname+"」の型の定義がこのファイルにありません(導出できるのは同じファイルで定義した型です)")
+	}
+	hasFields := false
+	for _, c := range td.Ctors {
+		if len(c.Fields) > 0 {
+			hasFields = true
+		}
+	}
+	if td.FieldTypes == nil && hasFields {
+		raise(line, "「"+tname+"」のフィールドに型が書かれていないので導出できません"+
+			"(「"+tname+" とは 番号 は 数 で 名前 は 文字列 の 組」のように書きます)")
+	}
+	// 型の名前を確かめるために、このファイルの型を(まだ集めていないので)ここで集める
+	tmp := *ctx
+	tmp.Types = ctx.Types.Copy()
+	for _, d := range tds {
+		if !tmp.Types.Has(d.Name) {
+			var cs []string
+			for _, c := range d.Ctors {
+				cs = append(cs, c.Name)
+			}
+			tmp.Types.Set(d.Name, cs)
+		}
+	}
+	saved := curCtx
+	curCtx = &tmp
+	types := map[string]Node{}
+	for _, ft := range td.FieldTypes {
+		types[ft.Name] = parseTypeAll(ft.Toks, td.Line)
+	}
+	curCtx = saved
+	var tvars []string
+	var ctors []string
+	for _, c := range td.Ctors {
+		var fs []string
+		for _, f := range c.Fields {
+			typeVarsOf(types[f], &tvars)
+			fs = append(fs, "（欄名 は "+descStr(f)+" で 欄型 は "+typeForm(types[f])+" の 欄記述）")
+		}
+		ctors = append(ctors, "（形名 は "+descStr(c.Name)+" で 欄群 は "+descList(fs)+" の 形記述）")
+	}
+	var vs []string
+	for _, v := range tvars {
+		vs = append(vs, descStr(v))
+	}
+	return "（型名 は " + descStr(tname) + " で 型引数 は " + descList(vs) + " で 形群 は " + descList(ctors) + " の 型記述）"
+}
+
+func descStr(s string) string { return "「" + s + "」" }
+
+func descList(xs []string) string {
+	switch len(xs) {
+	case 0:
+		return "空"
+	case 1:
+		return "（" + xs[0] + " を 空 に 挿入する）"
+	}
+	return "（" + strings.Join(xs, " と ") + "）"
+}
+
+// typeForm は型を 型式 の値のソースにする
+func typeForm(t Node) string {
+	switch x := t.(type) {
+	case *TypeVarName:
+		return "（型式名 は " + descStr(x.Name) + " で 型式引数 は 空 の 名型）"
+	case *TypeName:
+		var as []string
+		for _, a := range x.Args {
+			as = append(as, typeForm(a))
+		}
+		return "（型式名 は " + descStr(x.Name) + " で 型式引数 は " + descList(as) + " の 名型）"
+	}
+	return "（型式文 は " + descStr(typeText(t)) + " の 他型）"
+}
+
+// typeText は型の書き方(lib/導出.suru の 型式文にする と同じ)
+func typeText(t Node) string {
+	switch x := t.(type) {
+	case *TypeVarName:
+		return x.Name
+	case *TypeName:
+		if len(x.Args) == 0 {
+			return x.Name
+		}
+		if len(x.Args) == 1 {
+			inner := typeText(x.Args[0])
+			if a, ok := x.Args[0].(*TypeName); ok && len(a.Args) > 0 {
+				inner = "（" + inner + "）"
+			}
+			return inner + " の " + x.Name
+		}
+		var as []string
+		for _, a := range x.Args {
+			as = append(as, typeText(a))
+		}
+		return "（" + strings.Join(as, " と ") + "） の " + x.Name
+	case *TypeFun:
+		var ps []string
+		for _, p := range x.Params {
+			ps = append(ps, typeText(p.Type)+" "+p.Part)
+		}
+		return "（" + strings.Join(ps, " ") + " 受け取って " + typeText(x.Result) + " を 返すこと）"
+	}
+	return ""
+}
+
+func typeVarsOf(t Node, out *[]string) {
+	switch x := t.(type) {
+	case *TypeVarName:
+		for _, v := range *out {
+			if v == x.Name {
+				return
+			}
+		}
+		*out = append(*out, x.Name)
+	case *TypeName:
+		for _, a := range x.Args {
+			typeVarsOf(a, out)
+		}
+	case *TypeFun:
+		for _, p := range x.Params {
+			typeVarsOf(p.Type, out)
+		}
+		typeVarsOf(x.Result, out)
+	}
 }
 
 // reindent は展開した行の字下げを base からにする(字下げの差はそのまま)
