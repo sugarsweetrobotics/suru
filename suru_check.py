@@ -2426,6 +2426,35 @@ def _t_reverse(c, a, line):
     return a[WO]
 
 
+def _sort_fun():
+    a = TVar()
+    return TFun([(WO, lst(a))], lst(a))
+
+
+@prim("整列する", {WO: True}, _sort_fun)
+def _t_sort(c, a, line):
+    c.need_kind(a[WO], ("リスト",), line, "「整列する」の「を」はリスト")
+    elem = TVar()
+    _need(c, a, WO, lst(elem), line, "整列する")
+    c.need_kind(elem, ("数", "文字列"), line, "「整列する」のリストの要素は数か文字列")
+    return a[WO]
+
+
+def _sort_by_fun():
+    a, k = TVar(), TVar()
+    return TFun([(WO, lst(a)), ("で", TFun([(WO, a)], k))], lst(a))
+
+
+@prim("基準整列する", {WO: True, "で": True}, _sort_by_fun)
+def _t_sort_by(c, a, line):
+    c.need_kind(a[WO], ("リスト",), line, "「基準整列する」の「を」はリスト")
+    elem = TVar()
+    _need(c, a, WO, lst(elem), line, "基準整列する")
+    key = c.apply(a["で"], [elem], line, "「基準整列する」の「で」")
+    c.need_kind(key, ("数", "文字列"), line, "「基準整列する」の「で」の関数の値は数か文字列")
+    return a[WO]
+
+
 def _slice(name):
     def fn(c, a, line):
         c.need_kind(a["から"], ("文字列", "リスト"), line, f"「{name}」の「から」は文字列かリスト")

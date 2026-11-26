@@ -433,7 +433,8 @@ If you define a function with the same name as a built-in, your definition is us
 | `xs から 2 を 番目取得する` | The 2nd element |
 | `xs が x を 含有である` | Whether x is an element (for strings, whether it contains the substring) |
 | `xs から x を 除去する`, `xs を 一意にする` | The list without x, the list without duplicates |
-| `xs を 整列する` | In ascending order (a list of numbers) |
+| `xs を 整列する` | In ascending order (a list of numbers or a list of strings) |
+| `xs を f で 基準整列する` | In ascending order of the number or string f gives for each element |
 | `（1 と 2） と （3 と 4） を 連結する` | （1 と 2 と 3 と 4） |
 | `xs から 偶数であること で 計数する` | The number of matching elements |
 | `xs が 偶数であること で 全部真である` / `一部真である` | Whether all / any match |
@@ -1310,6 +1311,12 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 
 1. **The interpreter also runs recursion about 200,000 levels deep.** Previously Python's recursion limit was 10000, and Suru recursion stopped at about 3000 levels (the standard `整列する` stopped on a reversed list of 2000 items). From Python 3.12, calling a Python function no longer uses the C stack, so the limit is now 1,000,000 (one Suru level is roughly 3 to 4 Python levels) (#152). Stopping takes about 1GB of memory and a few seconds. Up to Python 3.11 it stays at 10000 so the C stack doesn't overflow.
 2. **When it stops, it is a Suru error.** Previously the Python traceback (over 1MB) was printed as is. When running a file and with `--検査`, it now prints `エラー: 再帰が深すぎます(もっと深い再帰は、suruc か suru --翻訳 でコンパイルすると動きます)` ("recursion too deep; deeper recursion works when compiled with suruc or suru --翻訳"), the same as the interactive mode, and with `--json` it prints JSON (`line` and `column` are `null`).
+
+### Sorting (整列する and 基準整列する)
+
+1. **`整列する` is a builtin stable merge sort.** It was a quicksort written in Suru in `lib/標準.suru`. Because lists are arrays, each step copied the list, and a sorted list of 40000 numbers took a long time (and on the interpreter, a reversed list of 2000 items exceeded the recursion limit) (#153). It now takes O(n log n) in the interpreter, `suruc` and `suru --翻訳`. Equal elements keep their original order.
+2. **Lists of strings can be sorted too.** `（「b」 と 「a」） を 整列する` gives `（「a」 と 「b」）`. Strings compare the same way as 「<」 (by character code). Elements must be all numbers or all strings; other element types are type errors (「「整列する」のリストの要素は数か文字列です」).
+3. **`基準整列する` sorts by a key.** `xs を f で 基準整列する` sorts in ascending order of the value f returns for each element, which must be a number or a string. For example, `（「bb」 と 「a」 と 「ccc」） を （s を 受け取って s の 長さ を 返すこと） で 基準整列する` gives `（「a」 と 「bb」 と 「ccc」）`. f is called once per element. For descending order, use a key like `0 - x`, or `逆順にする` after sorting.
 
 ### Guide for AI
 
