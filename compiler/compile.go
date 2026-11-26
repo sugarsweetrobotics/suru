@@ -481,13 +481,14 @@ type Compiler struct {
 	modules     map[string]*scope
 	initFg      *fnGen
 	ffiDecls    map[string]string // 外部の関数の名前 → declare の行
+	ffiWhere    map[string]Pos    // 外部の関数の名前 → 初めに宣言した位置
 	linkLibs    []string          // リンクするライブラリ(ExternLib.Path)
 }
 
 func newCompiler(ctx *ParseContext, source string) *Compiler {
 	return &Compiler{ctx: ctx, source: source, cstrings: map[string]string{}, partArrays: map[string]string{},
 		ptrArrays: map[string]string{}, strValues: map[string]string{}, floatValues: map[uint64]string{},
-		globalCache: map[string]string{}, modules: map[string]*scope{}, ffiDecls: map[string]string{}}
+		globalCache: map[string]string{}, modules: map[string]*scope{}, ffiDecls: map[string]string{}, ffiWhere: map[string]Pos{}}
 }
 
 func (c *Compiler) uid() int {
@@ -1081,7 +1082,13 @@ func (c *Compiler) externBody(name string, params []Param, ext *Extern) genBody 
 	if ext.Pointer == "" {
 		decl := "declare " + ret + " @" + ext.Symbol + "(" + strings.Join(ps, ", ") + ")"
 		if prev, ok := c.ffiDecls[ext.Symbol]; ok && prev != decl {
-			raise(ext.Line, "外部の関数「"+ext.Symbol+"」が違う型で2回宣言されています")
+			first := c.ffiWhere[ext.Symbol]
+			raise(ext.Line, "外部の関数「"+ext.Symbol+"」が違う型で2回宣言されています"+
+				"(もう1つは"+fileOf(first)+where(first)+")。"+
+				"C の関数1つにつき、引数と値の型は1通りにそろえてください")
+		}
+		if _, ok := c.ffiDecls[ext.Symbol]; !ok {
+			c.ffiWhere[ext.Symbol] = ext.Line
 		}
 		c.ffiDecls[ext.Symbol] = decl
 	}
