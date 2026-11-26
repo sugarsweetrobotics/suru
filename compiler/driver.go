@@ -18,8 +18,11 @@ func LinkFlags(ir string) []string {
 		if strings.HasPrefix(line, LinkMark) {
 			lib := strings.TrimPrefix(line, LinkMark)
 			if filepath.IsAbs(lib) {
-				flags = append(flags, lib, "-Wl,-rpath,"+filepath.Dir(lib))
-			} else if lib != "c" {
+				flags = append(flags, lib)
+				if !TargetWindows() { // Windows の DLL は .exe と同じフォルダか PATH から探す
+					flags = append(flags, "-Wl,-rpath,"+filepath.Dir(lib))
+				}
+			} else if lib != "c" && !(TargetWindows() && windowsNoLibs[lib]) {
 				flags = append(append(flags, pkgConfigLinkFlags(lib)...), "-l"+lib)
 			}
 		}

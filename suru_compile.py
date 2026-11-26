@@ -1218,6 +1218,34 @@ def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check
         raise err from None
 
 
+def target() -> str:
+    """作るプログラムの対象(clang の --target)。SURU_TARGET で別の OS 向けに作れる(Go 版の compiler.Target と同じ)"""
+    return (os.environ.get("SURU_TARGET") or "").strip()
+
+
+def target_windows() -> bool:
+    """Windows 向けに作るか(Go 版の compiler.TargetWindows と同じ)"""
+    t = target()
+    if not t:
+        return sys.platform == "win32"
+    return "windows" in t or "mingw" in t
+
+
+WINDOWS_NO_LIBS = {"dl", "rt", "pthread"}  # Windows にはなく C の標準のライブラリに入っているものと、作るときに必ず入れる pthread
+
+
+def target_args() -> list[str]:
+    t = target()
+    return [f"--target={t}"] if t else []
+
+
+def exe_path(out: str) -> str:
+    """作るプログラムの道。Windows 向けなら .exe を付ける(Go 版の native.ExePath と同じ)"""
+    if target_windows() and os.path.splitext(out)[1].lower() != ".exe":
+        return out + ".exe"
+    return out
+
+
 def find_cc() -> str | None:
     for name in (os.environ.get("CC"), "clang"):
         if name and shutil.which(name):
@@ -1228,13 +1256,13 @@ def find_cc() -> str | None:
 def runtime_object(cc: str) -> str:
     """実行時ライブラリをコンパイルしたもの(中身が変わらなければ作り直さない)"""
     with open(RUNTIME, "rb") as f:
-        digest = hashlib.sha256(f.read() + cc.encode()).hexdigest()[:16]
+        digest = hashlib.sha256(f.read() + (cc + "\0" + target()).encode()).hexdigest()[:16]
     cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"), "suru")
     obj = os.path.join(cache, f"suru_rt-{digest}.o")
     if not os.path.exists(obj):
         os.makedirs(cache, exist_ok=True)
         tmp = f"{obj}.{os.getpid()}.tmp"
-        r = subprocess.run([cc, "-O2", "-w", "-c", RUNTIME, "-o", tmp], capture_output=True, text=True)
+        r = subprocess.run([cc, *target_args(), "-O2", "-w", "-c", RUNTIME, "-o", tmp], capture_output=True, text=True)
         if r.returncode != 0:
             raise S.SuruError("実行時ライブラリのコンパイルに失敗しました:\n" + r.stderr)
         os.replace(tmp, obj)
@@ -1253,6 +1281,8 @@ def _pkgconfig_link_flags(lib: str) -> list[str]:
     d = S._pkgconfig_libdir(lib)
     if not d or _standard_lib_dir(d):
         return []
+    if target_windows():
+        return [f"-L{d}"]
     return [f"-L{d}", f"-Wl,-rpath,{d}"]
 
 
@@ -1266,8 +1296,10 @@ def link_flags(ll_path: str) -> list[str]:
             if line.startswith(LINK_MARK):
                 lib = line[len(LINK_MARK):].rstrip("\n")
                 if os.path.isabs(lib):
-                    flags += [lib, f"-Wl,-rpath,{os.path.dirname(lib)}"]
-                elif lib != "c":
+                    flags.append(lib)
+                    if not target_windows():  # Windows の DLL は .exe と同じフォルダか PATH から探す
+                        flags.append(f"-Wl,-rpath,{os.path.dirname(lib)}")
+                elif lib != "c" and not (target_windows() and lib in WINDOWS_NO_LIBS):
                     flags += _pkgconfig_link_flags(lib) + [f"-l{lib}"]
     return flags
 
@@ -1276,10 +1308,55 @@ def build(ll_path: str, out: str, opt: str = "-O2") -> None:
     cc = find_cc()
     if cc is None:
         raise S.SuruError("バイナリを作るには clang が必要です(LLVM IR だけなら --ll を付けてください)")
-    cmd = [cc, opt, "-w", ll_path, runtime_object(cc), "-o", out] + link_flags(ll_path) + ["-lm", "-lpthread"]
+    cmd = [cc, *target_args(), opt, "-w", ll_path, runtime_object(cc), "-o", exe_path(out)] + link_flags(ll_path)
+    if target_windows():
+        # pthread(winpthreads)は中に入れて、libwinpthread-1.dll なしで動くようにする(Go 版と同じ)
+        cmd += ["-lm", "-Wl,-Bstatic", "-lpthread", "-Wl,-Bdynamic", "-lws2_32"]
+        m = manifest_object()
+        if m:
+            cmd.append(m)
+    else:
+        cmd += ["-lm", "-lpthread"]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise S.SuruError("clang でのビルドに失敗しました:\n" + r.stderr)
+
+
+# Windows のプログラムに埋め込む印。ファイルの道などの文字を UTF-8 で扱うようにする(Go 版の windowsManifest と同じ)
+WINDOWS_MANIFEST = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+    </windowsSettings>
+  </application>
+</assembly>
+"""
+
+
+def manifest_object() -> str | None:
+    """WINDOWS_MANIFEST をリソースにしたオブジェクト(windres で作り、置いておく)。windres がなければ None"""
+    tools = ([f"{target()}-windres"] if target() else []) + ["llvm-windres", "windres"]
+    tool = next((t for t in tools if shutil.which(t)), None)
+    if tool is None:
+        return None
+    digest = hashlib.sha256((WINDOWS_MANIFEST + "\0" + tool).encode()).hexdigest()[:16]
+    cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"), "suru")
+    d = os.path.join(cache, f"manifest-{digest}")
+    obj = os.path.join(d, "manifest.o")
+    if os.path.exists(obj):
+        return obj
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "suru.manifest"), "w", encoding="utf-8") as f:
+        f.write(WINDOWS_MANIFEST)
+    with open(os.path.join(d, "manifest.rc"), "w", encoding="utf-8") as f:
+        f.write('1 24 "suru.manifest"\n')
+    tmp = f"manifest.o.{os.getpid()}.tmp"
+    r = subprocess.run([tool, "-O", "coff", "-i", "manifest.rc", "-o", tmp], cwd=d, capture_output=True)
+    if r.returncode != 0:
+        return None
+    os.replace(os.path.join(d, tmp), obj)
+    return obj
 
 
 USAGE = "使い方: python3 suru_compile.py [--ll] [--検査なし] [--json] プログラム.suru [-o 出力]"

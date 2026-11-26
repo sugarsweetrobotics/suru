@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/suru-lang/suru/cmd/internal/lintbin"
+	"github.com/suru-lang/suru/cmd/internal/native"
 	"github.com/suru-lang/suru/compiler"
 )
 
@@ -133,7 +134,7 @@ func (k *kumu) test(p *Project, filters []string, opt string, check bool, cb *CB
 		if err := os.WriteFile(runPath, []byte(src), 0o644); err != nil {
 			return k.fail(err)
 		}
-		exe := filepath.Join(runDir, "実行")
+		exe := native.ExePath(filepath.Join(runDir, "実行"))
 		if _, err := compileTo(src, runPath, exe, opt, check, cb); err != nil {
 			fmt.Fprintf(k.stdout, "✗ %s(作れません)\n%s\n", rel, indent(strings.TrimPrefix(err.Error(), "エラー: ")))
 			failed += len(names)

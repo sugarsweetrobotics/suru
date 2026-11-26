@@ -11,7 +11,6 @@ from __future__ import annotations
 
 __version__ = "0.7.0"
 
-import fcntl
 import math
 import os
 import stat
@@ -21,6 +20,17 @@ import unicodedata
 import dataclasses
 from dataclasses import dataclass, field
 from typing import Any
+
+if sys.platform == "win32":
+    fcntl = None
+else:
+    import fcntl
+
+
+def _lock_fd(fd: int, lock: bool) -> None:
+    """ファイルを、ほかの人が書かないように止める(lock)・止めるのをやめる。Windows では名前つきの通路がないので何もしない"""
+    if fcntl is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX if lock else fcntl.LOCK_UN)
 
 # ---------------------------------------------------------------------------
 # 例外
@@ -5272,7 +5282,7 @@ class _PipeChan:
         data = len(d).to_bytes(4, "little") + d
         # 名前つきなら書く人が何人もいるので、1つの値を書き終えるまでほかの人を待たせる
         if self.path is not None:
-            fcntl.flock(self.w, fcntl.LOCK_EX)
+            _lock_fd(self.w, True)
         try:
             while data:
                 data = data[os.write(self.w, data):]
@@ -5282,7 +5292,7 @@ class _PipeChan:
             raise SuruError(f"通路に送れませんでした({e.strerror})", line) from None
         finally:
             if self.path is not None:
-                fcntl.flock(self.w, fcntl.LOCK_UN)
+                _lock_fd(self.w, False)
         return x
 
     def _read(self, n: int, line: int) -> bytes:
@@ -5585,6 +5595,13 @@ def _pkgconfig_lib_file(name: str) -> str | None:
     return None
 
 
+def _default_lib_file(name: str) -> str:
+    """見つからなかったライブラリの、OS ごとのふつうのファイル名"""
+    if sys.platform == "win32":
+        return f"{name}.dll"
+    return f"lib{name}.so"
+
+
 def _ffi_lib(path: str, line: int) -> Any:
     """ライブラリを開く(同じものは一度だけ)。短い名前(「m」)は OS の探し方で探し、なければ pkg-config で"""
     import ctypes
@@ -5592,7 +5609,9 @@ def _ffi_lib(path: str, line: int) -> Any:
 
     if path in _FFI_LIBS:
         return _FFI_LIBS[path]
-    found = path if os.path.isabs(path) else ctypes.util.find_library(path) or _pkgconfig_lib_file(path) or f"lib{path}.so"
+    if sys.platform == "win32" and path in ("c", "m", "dl", "rt", "pthread"):
+        path = "msvcrt"  # C の標準のライブラリは1つにまとまっている
+    found = path if os.path.isabs(path) else ctypes.util.find_library(path) or _pkgconfig_lib_file(path) or _default_lib_file(path)
     try:
         lib = ctypes.CDLL(found, use_errno=True)
     except OSError as e:
@@ -5720,7 +5739,9 @@ def _ffi_symbol(ext: Extern, line: int) -> Any:
     own = _project_c_lib(_FFI_BASE[0], line)
     if own is not None and hasattr(own, ext.symbol):
         return getattr(own, ext.symbol)
-    proc = _FFI_LIBS.setdefault("\0プロセス", ctypes.CDLL(None, use_errno=True))  # libc などリンク済みのもの
+    if "\0プロセス" not in _FFI_LIBS:  # libc などリンク済みのもの(Windows では C の標準のライブラリ)
+        _FFI_LIBS["\0プロセス"] = ctypes.CDLL("msvcrt" if sys.platform == "win32" else None, use_errno=True)
+    proc = _FFI_LIBS["\0プロセス"]
     if hasattr(proc, ext.symbol):
         return getattr(proc, ext.symbol)
     where = "・".join(f"「{p}」" for p in ext.libs) or "読み込んだライブラリ"
@@ -7403,24 +7424,31 @@ def lint_binary() -> str | None:
     with open(suru_compile.RUNTIME, "rb") as f:
         h.update(f.read())
     cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"), "suru")
-    exe = os.path.join(cache, f"点検-{h.hexdigest()[:16]}")
-    if os.path.exists(exe):
-        return exe
+    # 点検は手元で動かすものなので、SURU_TARGET で別の OS 向けにしていても手元向けに作る(Go 版の lintbin と同じ)
+    saved_target = os.environ.pop("SURU_TARGET", None)
     try:
-        os.makedirs(cache, exist_ok=True)
-        ir = suru_compile.compile_source(LINT_SOURCE, LIB_DIR, os.path.join(LIB_DIR, "点検実行.suru"), True)
-        ll = f"{exe}.{os.getpid()}.ll"
-        with open(ll, "w", encoding="utf-8") as f:
-            f.write(ir)
-        tmp = f"{exe}.{os.getpid()}.tmp"
-        suru_compile.build(ll, tmp)
-        os.remove(ll)
-        os.replace(tmp, exe)
-    except Exception as e:  # suru_compile は suru を別のモジュールとして読み込むので、名前で見分ける
-        if type(e).__name__ != "SuruError" and not isinstance(e, OSError):
-            raise
-        return None
-    return exe if os.path.exists(exe) else None
+        name = os.path.join(cache, f"点検-{h.hexdigest()[:16]}")
+        exe = suru_compile.exe_path(name)
+        if os.path.exists(exe):
+            return exe
+        try:
+            os.makedirs(cache, exist_ok=True)
+            ir = suru_compile.compile_source(LINT_SOURCE, LIB_DIR, os.path.join(LIB_DIR, "点検実行.suru"), True)
+            ll = f"{name}.{os.getpid()}.ll"
+            with open(ll, "w", encoding="utf-8") as f:
+                f.write(ir)
+            tmp = f"{name}.{os.getpid()}.tmp"
+            suru_compile.build(ll, tmp)
+            os.remove(ll)
+            os.replace(suru_compile.exe_path(tmp), exe)
+        except Exception as e:  # suru_compile は suru を別のモジュールとして読み込むので、名前で見分ける
+            if type(e).__name__ != "SuruError" and not isinstance(e, OSError):
+                raise
+            return None
+        return exe if os.path.exists(exe) else None
+    finally:
+        if saved_target is not None:
+            os.environ["SURU_TARGET"] = saved_target
 
 
 def lint(paths: list[str]) -> int:

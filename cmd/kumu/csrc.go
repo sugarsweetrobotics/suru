@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/suru-lang/suru/cmd/internal/native"
+	"github.com/suru-lang/suru/compiler"
 )
 
 // プロジェクトと依存の C のソースを一緒に作る。
@@ -121,7 +122,11 @@ func PrepareC(p *Project, deps []Resolved, stderr io.Writer) (*CBuild, error) {
 				return nil, err
 			}
 			tmp := fmt.Sprintf("%s.%d.tmp", obj, os.Getpid())
-			args := append([]string{"-O2", "-fPIC", "-c", path, "-o", tmp}, cflags...)
+			args := append(native.TargetArgs(), "-O2", "-c", path, "-o", tmp)
+			if !compiler.TargetWindows() { // Windows の DLL にしないので要らない(clang は受け付けない)
+				args = append(args, "-fPIC")
+			}
+			args = append(args, cflags...)
 			if out, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
 				return nil, fmt.Errorf("「%s」のCソース「%s」のコンパイルに失敗しました:\n%s", u.name, src, out)
 			}
@@ -142,7 +147,7 @@ func cSourceKey(cc, path string, cflags []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fmt.Fprintf(h, "%s\x00%s\x00%d:%s", cc, strings.Join(cflags, "\x00"), len(data), data)
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%d:%s", cc, compiler.Target(), strings.Join(cflags, "\x00"), len(data), data)
 	headers, _ := filepath.Glob(filepath.Join(filepath.Dir(path), "*.h"))
 	sort.Strings(headers)
 	for _, hp := range headers {

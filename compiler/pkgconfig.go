@@ -65,6 +65,8 @@ func hasSharedLib(dir, name string) bool {
 	exts := []string{".so", ".dylib", ".a"}
 	if runtime.GOOS == "darwin" {
 		exts = []string{".dylib", ".so", ".a"}
+	} else if runtime.GOOS == "windows" {
+		exts = []string{".dll.a", ".a", ".lib"} // MinGW の DLL を使うためのライブラリ(DLL そのものは bin にある)
 	}
 	for _, ext := range exts {
 		if _, err := os.Stat(filepath.Join(dir, "lib"+name+ext)); err == nil {
@@ -90,6 +92,9 @@ func pkgConfigLinkFlags(name string) []string {
 	dir := PkgConfigLibDir(name)
 	if dir == "" || standardLibDir(dir) {
 		return nil
+	}
+	if TargetWindows() {
+		return []string{"-L" + dir}
 	}
 	return []string{"-L" + dir, "-Wl,-rpath," + dir}
 }

@@ -1347,10 +1347,19 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 
 ### Windows の実行時ライブラリ
 
-1. **実行時ライブラリ(`runtime/suru_rt.c`)は Windows(MinGW-w64)向けにも作れる。** `clang --target=x86_64-w64-mingw32` で作り、`-lpthread -lws2_32` を付けてリンクします。スレッドは MinGW-w64 の winpthreads をそのまま使い、違うところだけを `#ifdef _WIN32` で分けています(GC の領域は `VirtualAlloc`、ソケットは Winsock2、画面への表示は起動時に UTF-8 にします)。`suruc`・`kumu` が Windows 用の .exe を作るのは次の段階です(計画は `docs/今後/Windows.md`)。
+1. **実行時ライブラリ(`runtime/suru_rt.c`)は Windows(MinGW-w64)向けにも作れる。** `clang --target=x86_64-w64-mingw32` で作り、`-lpthread -lws2_32` を付けてリンクします。スレッドは MinGW-w64 の winpthreads をそのまま使い、違うところだけを `#ifdef _WIN32` で分けています(GC の領域は `VirtualAlloc`、ソケットは Winsock2、画面への表示は起動時に UTF-8 にします)。`suruc`・`kumu` で Windows 用の .exe を作るのは「Windows 向けのプログラムを作る」にあります(残りの計画は `docs/今後/Windows.md`)。
 2. **ソケットから受け取るのは、どの OS でも自前の読み口で。** Windows のソケットは `FILE` にできないので、`recv` でまとめて読んで1文字ずつ・まとめて渡す読み口(`SockIn`)にしました。Linux・macOS でも同じものを使います。待つ時間(`待機時間設定する`)も OS ごとの形で設定します。
 3. **Windows でまだ使えないものは、分かるエラーにする。** 名前つきの通路(FIFO)と呼び戻しの番地は「Windows ではまだ使えません」と出します。呼び戻しの入口は Linux・macOS の呼び出し規約で引数を受け取るためです。
 4. **`tests/test_windows.py` で確かめる。** MinGW-w64 があれば Windows 向けに実行時ライブラリを作り、wine があれば作った .exe を動かして、計算・スレッドと GC・100 万段の再帰・TCP のエコーサーバーが Linux と同じに動くかを見ます(Ubuntu では `apt install mingw-w64 wine`)。どちらもなければ飛ばします。
+
+### Windows 向けのプログラムを作る
+
+1. **`suruc`・`suru --翻訳`・`kumu 作る` が Windows の .exe を作る。** Windows では Windows 向けに作ります。ほかの OS でも、環境変数 `SURU_TARGET`(`x86_64-w64-mingw32` など)を付けると clang の `--target` に渡し、その OS 向けに作ります。名前には `.exe` を付けます(`-o 窓` なら `窓.exe`、`kumu 作る` なら `出力/名前.exe`)。道具は MSYS2 の clang(MinGW-w64)です。
+2. **作った .exe はほかの DLL なしで動く。** winpthreads は中に入れ、Winsock2(`-lws2_32`)を足します。ライブラリが Linux 向けに書く `dl`・`rt`・`pthread` は Windows では飛ばし、rpath も書きません。
+3. **Windows でもファイルの道や文字は UTF-8。** `windres`(`x86_64-w64-mingw32-windres`・`llvm-windres`・`windres`)があれば、使う文字コードを UTF-8 にする印(マニフェスト)を .exe に埋め込みます。日本語のファイル名も C の関数のままで扱えます。印は一度だけ作ってキャッシュに置きます。
+4. **点検はいつも手元向けに作る。** 点検のバイナリ(`suru --点検`・`kumu 点検`・言語サーバー)は手元で動かすものなので、`SURU_TARGET` を見ません。
+5. **インタプリタも Windows で起動する。** `suru.py` は Windows では `fcntl` を読み込まず、外部のライブラリは `名前.dll` を探します(`c`・`m` は `msvcrt`)。POSIX の関数を使う標準ライブラリ(ファイル・プロセスなど)は、まだ Windows 向けにリンクできません。これは次の段階です。
+6. **`tests/test_windows.py` で確かめる。** `SURU_TARGET=x86_64-w64-mingw32` で `suruc`・`suru --翻訳`・`kumu 作る` で .exe を作り、wine で動かします。
 
 ## ライセンス
 

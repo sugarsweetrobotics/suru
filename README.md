@@ -1355,10 +1355,19 @@ C引数 とは 「-I${ROS_PREFIX}/include/rcl」
 
 ### Runtime library on Windows
 
-1. **The runtime library (`runtime/suru_rt.c`) also builds for Windows (MinGW-w64).** Build it with `clang --target=x86_64-w64-mingw32` and link with `-lpthread -lws2_32`. Threads use MinGW-w64's winpthreads as they are, and only the parts that differ are split with `#ifdef _WIN32` (GC memory with `VirtualAlloc`, sockets with Winsock2, and console output switched to UTF-8 at startup). Making `suruc` and `kumu` produce Windows .exe files is the next stage (the plan is in `docs/今後/Windows.md`).
+1. **The runtime library (`runtime/suru_rt.c`) also builds for Windows (MinGW-w64).** Build it with `clang --target=x86_64-w64-mingw32` and link with `-lpthread -lws2_32`. Threads use MinGW-w64's winpthreads as they are, and only the parts that differ are split with `#ifdef _WIN32` (GC memory with `VirtualAlloc`, sockets with Winsock2, and console output switched to UTF-8 at startup). How `suruc` and `kumu` make Windows .exe files is in "Building programs for Windows" (the remaining plan is in `docs/今後/Windows.md`).
 2. **Receiving from sockets uses our own reader on every OS.** A Windows socket can't be made into a `FILE`, so receiving goes through a reader (`SockIn`) that reads in chunks with `recv` and hands out one character or a block at a time. Linux and macOS use the same reader. Timeouts (`待機時間設定する`) are set in each OS's own form.
 3. **What doesn't work on Windows yet gives a clear error.** Named channels (FIFOs) and callback addresses say 「Windows ではまだ使えません」 ("not available on Windows yet"). Callback entry points receive arguments in the Linux/macOS calling convention.
 4. **`tests/test_windows.py` checks it.** With MinGW-w64 it builds the runtime library for Windows, and with wine it runs the built .exe and checks that arithmetic, threads with GC, a million-deep recursion and the TCP echo server behave the same as on Linux (on Ubuntu, `apt install mingw-w64 wine`). Without them the tests are skipped.
+
+### Building programs for Windows
+
+1. **`suruc`, `suru --翻訳` and `kumu 作る` make Windows .exe files.** On Windows they build for Windows; on other OSes, setting the environment variable `SURU_TARGET` (for example `x86_64-w64-mingw32`) passes it to clang's `--target` and builds for that OS. The name gets `.exe` added (`-o 窓` makes `窓.exe`; `kumu 作る` makes `出力/<name>.exe`). The tools are MSYS2's clang (MinGW-w64).
+2. **A built .exe needs no extra DLLs.** winpthreads is linked in, and Winsock2 (`-lws2_32`) is added. `dl`, `rt` and `pthread`, which libraries list for Linux, are skipped on Windows, and no rpath is written.
+3. **File paths and text are UTF-8 on Windows too.** When `windres` (`x86_64-w64-mingw32-windres`, `llvm-windres` or `windres`) is available, the .exe gets a manifest that sets the active code page to UTF-8, so Japanese file names work with the C functions as they are. It is built once and cached.
+4. **Lint is always built for your own machine.** The lint binary (`suru --点検`, `kumu 点検`, the language server) runs on your machine, so it ignores `SURU_TARGET`.
+5. **The interpreter also starts on Windows.** `suru.py` doesn't load `fcntl` on Windows, and for external libraries it looks for `<name>.dll` (`c` and `m` mean `msvcrt`). Standard library modules that use POSIX functions (files, processes and so on) don't link for Windows yet; that is the next stage.
+6. **`tests/test_windows.py` checks it.** With `SURU_TARGET=x86_64-w64-mingw32` it makes .exe files with `suruc`, `suru --翻訳` and `kumu 作る` and runs them under wine.
 
 ## License
 
