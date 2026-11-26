@@ -1772,6 +1772,7 @@ class Checker:
             return self.bind(m, elem, k, r.line, f"「{name}した 結果」: {{t}}は動作ではありません", env)
         if isinstance(s, Define):
             local = self.infer_defs([s], env)
+            self.check_stored_action(s, local, stmts[i + 1:])
             if i + 1 == len(stmts):
                 return TVar()
             return self.do_type(stmts, i + 1, local, line)
@@ -1783,6 +1784,19 @@ class Checker:
             return out
         k = self.do_type(stmts, i + 1, env, line)
         return self.bind(v, TVar(), k, first_line(s) or line, "手順の途中の文の値({t})は動作ではありません", env)
+
+    def check_stored_action(self, d: Define, env: TEnv, rest: list) -> None:
+        """手順の局所の名前に動作そのもの(「した 結果」の書き忘れ)が入っていて、それを組に入れていたら、
+        定義の行でエラーにする(#168)"""
+        if d.is_function or d.params or isinstance(d.body, (Lambda, Ref)):
+            return
+        v = env.vars.get(d.name)
+        t = prune(v.t if isinstance(v, Scheme) else v)
+        if not (isinstance(t, TCon) and t.name == "動作"):
+            return
+        hit = find_stored(d.name, rest, self.ctx)
+        if hit is not None:
+            raise self.err(stored_action_message(d.name, hit[0], hit[1], first_call_name(d.body)), d.line)
 
     def check_action_list(self, t: Any, line: Any) -> None:
         """手順の文の値が動作のリストなら、行われないのでエラーにする(#151)"""
@@ -1830,6 +1844,66 @@ def exported_vars(scope: TEnv) -> dict:
 
 ACTION_LIST_MESSAGE = ("この文は動作のリストを作るだけで、行いません。"
                        "行うには「を 実行する」を付けてください(例: （xs の それぞれ を 表示する） を 実行する)")
+
+
+def find_stored(name: str, nodes: Any, ctx: ParseContext) -> tuple | None:
+    """nodes の中で、名前 name をそのまま組の項目に入れているところ (形の名前, 項目の名前)。
+    同じ名前を定義し直したら、その後は見ない"""
+    if isinstance(nodes, (list, tuple)):
+        for n in nodes:
+            if isinstance(n, Define) and n.name == name and not n.params:
+                return find_stored(name, n.body, ctx)
+            hit = find_stored(name, n, ctx)
+            if hit is not None:
+                return hit
+        return None
+    node = nodes
+    if isinstance(node, Construct):
+        fields = ctx.ctors.get(node.ctor, ("", []))[1]
+        for k, item in enumerate(node.items):
+            if isinstance(item, Var) and item.name == name:
+                return node.ctor, fields[k] if k < len(fields) else ""
+    elif isinstance(node, NamedConstruct):
+        for f, e in node.fields:
+            if isinstance(e, Var) and e.name == name:
+                return node.ctor, f
+    elif isinstance(node, Update):
+        for f, e in node.fields:
+            if isinstance(e, Var) and e.name == name:
+                return "", f
+    if isinstance(node, dict):
+        return find_stored(name, list(node.values()), ctx)
+    if hasattr(node, "__dataclass_fields__"):
+        return find_stored(name, [getattr(node, f) for f in node.__dataclass_fields__], ctx)
+    return None
+
+
+def first_call_name(node: Any) -> str:
+    """式の中で最初に出てくる関数の呼び出しの名前(「する」を除く)。なければ空"""
+    if isinstance(node, Call):
+        return node.name[: -len(SURU)] if node.name.endswith(SURU) else node.name
+    if isinstance(node, (list, tuple)):
+        items = node
+    elif isinstance(node, dict):
+        items = list(node.values())
+    elif hasattr(node, "__dataclass_fields__"):
+        items = [getattr(node, f) for f in node.__dataclass_fields__]
+    else:
+        return ""
+    for x in items:
+        n = first_call_name(x)
+        if n:
+            return n
+    return ""
+
+
+def stored_action_message(name: str, ctor: str, field: str, call: str) -> str:
+    """手順の局所の名前に入った動作を組に入れたときのエラー(#168)"""
+    where = f"「{ctor}」の「{field}」" if ctor else f"「{field}」"
+    run = f"…を {call}した 結果" if call else "…した 結果"
+    return (f"「{name}」には動作そのものが入っていて、行われていません(それを{where}に入れています)。"
+            f"動作を行った結果を使うなら「{name} とは {run}」と書いてください。"
+            f"動作のまま入れるなら、{where}に直接書いてください")
 
 
 def unknown_hint(name: str, env: TEnv, checker: Any) -> str:
