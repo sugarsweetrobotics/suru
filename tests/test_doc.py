@@ -57,8 +57,8 @@ def test_library_files():
         src = path.read_text(encoding="utf-8")
         module, names = doc_comments(src, parse_program(src))
         if path.name == "通信.suru":
-            assert module.startswith("「する」の通信ライブラリ(TCP)")
-            assert names["UDP便"].startswith("受け取った便り。")
+            assert module.startswith("「する」の通信ライブラリです(TCP と UDP)。")
+            assert names["UDP便"].startswith("受け取った便りです。")
 
 
 # --- suru --文書(段階2) ---
