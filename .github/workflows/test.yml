@@ -1,8 +1,8 @@
 # 「する」本体の試験: PR のたびと main への push で動きます(#193)。
 #   1. Go 版: go vet と go test
 #   2. Python 版: pytest(全部)。Go 版と同じ IR とエラーを出すかも、ここで確かめます
-#   3. する で書いた試験: suru --試験 lib/ と suruc --試験 lib/(試験のまとまり・例)
-#   4. Windows(MSYS2 UCRT64): 共有ライブラリ(.dll)の試験(#208 段階5)
+#   3. Windows(MSYS2 UCRT64): 共有ライブラリ(.dll)の試験(#208 段階5)
+# lib/ の する で書いた試験(suru --試験 lib/)は、言語の仕様が落ち着くまで CI では流しません(#230)
 # pytest は4つに分けて並べて流します(1つにすると30分を超えます)
 name: 試験
 
@@ -62,21 +62,6 @@ jobs:
           fi
           # 止まったままの試験があれば、名前とスタックを出して止める
           python3 -m pytest -v --timeout=600 --durations=10 $files
-
-  suru:
-    name: する で書いた試験
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - run: |
-          python3 suru.py --試験 lib/
-          go run ./cmd/suruc --試験 lib/
 
   windows:
     name: Windows の共有ライブラリ

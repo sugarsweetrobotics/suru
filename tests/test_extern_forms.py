@@ -170,7 +170,7 @@ blank.suru:19:1: 定義の間の空行: 「五倍する」の定義は、前の�
 @pytest.mark.parametrize("kind", KINDS)
 def test_点検の定義の間の空行(kind, tmp_path):
     (tmp_path / "blank.suru").write_text(BLANK, encoding="utf-8")
-    env = dict(os.environ, XDG_CACHE_HOME=str(tmp_path / "cache"))
+    env = dict(os.environ)  # 点検のバイナリはいつものキャッシュを共有する(#230)
     if kind == "interp":
         env["SURU_LINT_INTERP"] = "1"
     else:

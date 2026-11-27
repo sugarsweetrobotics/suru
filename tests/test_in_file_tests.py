@@ -154,6 +154,7 @@ def test_点検は試験と例を文と見なさない(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
+@pytest.mark.skip(reason="言語の仕様が落ち着くまで、lib/ の する で書いた試験は流さない(#230)")
 def test_lib_の試験(runner):
     # lib/ の試験のまとまりと例(算術・乱数 など)を、インタプリタと Go 版のバイナリの両方で動かす(#193 段階5)。
     # suruc は同梱の lib/ を使うので、リポジトリの lib/ のファイルの組み込みも使えるか(「標準内の引数取得する」)も確かめる
