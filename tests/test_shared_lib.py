@@ -26,8 +26,9 @@ EXE = ".exe" if WIN else ""
 
 
 def rpath(d: pathlib.Path) -> list[str]:
-    """共有ライブラリを探す所を実行ファイルに書く引数(Windows では DLL を .exe と同じフォルダから探すので要らない)"""
-    return [] if WIN else [f"-Wl,-rpath,{d}"]
+    """共有ライブラリを探す所を実行ファイルに書く引数。Windows では DLL を .exe と同じフォルダから探すので要らず、
+    代わりに日本語の道も読める lld でリンクする(GNU ld は Windows の ANSI の道しか扱えない)"""
+    return ["-fuse-ld=lld"] if WIN else [f"-Wl,-rpath,{d}"]
 
 LIB = """数 を 二倍する は 数 を 返す
 x を 二倍する とは x * 2 です
@@ -487,7 +488,7 @@ def test_例_Go(keisan):
     if shutil.which("go") is None:
         pytest.skip("go がありません")
     env = {**os.environ, "CGO_ENABLED": "1", "CGO_CFLAGS": f"-I{keisan}",
-           "CGO_LDFLAGS": " ".join([f"-L{keisan}", "-lkeisan", *rpath(keisan)])}
+           "CGO_LDFLAGS": " ".join([f"-L{keisan}", "-lkeisan", *([] if WIN else rpath(keisan))])}
     subprocess.run(["go", "build", "-o", str(keisan / ("main_go" + EXE)), "."], cwd=EXAMPLES / "go", env=env, check=True)
     r = subprocess.run([str(keisan / ("main_go" + EXE))], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
@@ -582,7 +583,7 @@ SEQ_HOST = r"""
 #define ERR (seq_last_error() ? seq_last_error() : "ok")
 
 static void *work(void *arg) {
-    long k = (long)arg;
+    long k = (long)(intptr_t)arg;
     for (int64_t i = 0; i < 2000; i++) {
         int64_t xs[3] = {i, k, 1};
         if (goukei(xs, 3) != i + k + 1) return "goukei";
@@ -679,7 +680,7 @@ int main(void) {
     seq_release(NULL);
 
     pthread_t th[6];
-    for (long i = 0; i < 6; i++) pthread_create(&th[i], NULL, work, (void *)i);
+    for (long i = 0; i < 6; i++) pthread_create(&th[i], NULL, work, (void *)(intptr_t)i);
     for (int i = 0; i < 6; i++) {
         void *res;
         pthread_join(th[i], &res);
