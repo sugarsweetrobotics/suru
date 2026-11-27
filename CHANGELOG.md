@@ -15,6 +15,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 ### Fixed
 
 1. **A quasi-quote head written in a comment is no longer read as code.** A line like `# 例: 道群 とは 以下の【道】です` (or with `＃`/`※` before `とは`) used to start a quasi-quote and then fail with 「中身は頭より深く字下げして…」. The interpreter, `suruc` and `suru --点検` now treat it as a comment (#192).
+2. **`suru --点検` reads type declarations with `と` between parameter types.** `lib/構文.suru` now reads `数 を 数 と 数 と 数 で 三回転和にする は 数` (a list whose items have their own types, added in #119) like `suru.py`, instead of failing on the whole file.
 
 ## 0.10.1
 
