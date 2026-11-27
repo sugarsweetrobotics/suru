@@ -1550,6 +1550,45 @@ suruc --試験 計算.suru 二倍       # the same with the Go compiler, only te
 5. **`kumu 試験` runs them too.** Before the files in `試験/`, it runs the test blocks and examples in the project's source files (not `組.suru`, `試験/` or `出力/`), one binary per file, linked with the project's `Cソース`.
 6. **`lib/` is tested this way.** `lib/算術.suru`, `lib/乱数.suru` and the formatting functions of `lib/標準.suru` have examples and test blocks, and the CI runs `suru --試験 lib/` and `suruc --試験 lib/` on every pull request, next to pytest and `go test`. pytest and `go test` stay for testing the interpreter and the compilers themselves.
 
+### Calling from other languages (shared libraries)
+
+Functions written in Suru can now be used from Python, C, C++, Go, Rust and any other language that can call the C calling convention. `suruc --共有ライブラリ` builds a shared library (.so, .dylib). The plan is #208, and this is its stage 1.
+
+```suru
+数 を 二倍する は 数 を 返す
+x を 二倍する とは x * 2 です
+
+文字列 を 挨拶文にする は 文字列 を 返す
+名前 を 挨拶文にする とは 「こんにちは、」 + 名前 + 「さん」 です
+
+以下は外部に出す関数です
+  二倍する は 「nibai」
+  挨拶文にする は 「aisatsu」
+以上です
+```
+
+```sh
+suruc --共有ライブラリ 計算.suru -o libkeisan.so
+```
+
+```python
+import ctypes
+lib = ctypes.CDLL("./libkeisan.so")
+lib.nibai.argtypes = [ctypes.c_int64]
+lib.nibai.restype = ctypes.c_int64
+print(lib.nibai(21))   # 42
+```
+
+1. **Between `以下は外部に出す関数です` and `以上です`, write one exported function and its C name per line.** `二倍する は 「nibai」` exports `二倍する`, defined in this file, as the C function `nibai`. It can only be written at the top level. In the punctuation style it is `以下は外部に出す関数です。二倍するは、「nibai」。以上です。`, and it can also be split with spaces as `以下 は 外部 に 出す 関数 です`.
+2. **Types come from the type declaration.** An exported function needs a type declaration. The arguments become C arguments in the order written in the definition (`hikizan(a, b)` for `a を b から 引き算する`). The type mapping is the same as for foreign functions: `数` is `int64_t`, `整数` `int`, `小数` `double`, `単精度` `float`, `真偽` `int` (0 or 1), `文字列` `const char *` (UTF-8), `番地` `void *` and `無` `void` (values only). Lists, records, functions and byte sequences can't be passed yet. A function whose value is an action (`… を 返す 入出力動作`) is carried out when called.
+3. **Rules for C names.** A name starts with a letter or `_` and contains only letters, digits and `_`. Names starting with `rt_`, `suru_` or `gc_`, and `main`, can't be used because they clash with the runtime library. The same name as a foreign function used in the same file, or writing the same function or the same C name twice in the block, is also an error.
+4. **Build with `suruc --共有ライブラリ FILE.suru -o libkeisan.so`.** Without `-o` the name is `lib` + the file name (`libkeisan.so`), and without an extension `.so` is added on Linux and `.dylib` on macOS. The Python version builds the same with `suru --翻訳 --共有ライブラリ`. Only definitions can be written at the top level of the file (statements such as printing are an error, so that loading the library doesn't do anything). A file without `以下は外部に出す関数です` is an error too. When building an executable or in the interpreter, the block is skipped.
+5. **Helper functions.** `keisan_init`, `keisan_last_error` and `keisan_free`, prefixed with the library's name (`keisan` for `libkeisan.so`), are exported too. Give `-o` a name of only letters, digits and `_`. String values are `malloc`ed copies, so the caller frees them with `keisan_free`. `keisan_init` initializes and returns 0 (without it, initialization happens on the first call).
+6. **Runtime errors don't stop the process.** A runtime error inside an exported function (dividing by 0, a number beyond ±2^62 and so on) doesn't end the caller's process; the function returns 0 (NULL). `keisan_last_error()` is the error message of the last function called on that thread (`32行目 16文字目: 0 で割ることはできません`), or NULL if there was none.
+7. **They can be called from any thread.** They run on the caller's thread and stack (very deep recursion is limited by the caller's stack size). A thread is registered with the runtime library on its first call, and the GC looks at its stack only while a call is running. Several threads can call at the same time. Nesting also works: an exported function calls a foreign function, which calls an exported function again.
+8. **Other names are hidden.** The runtime library's names aren't visible from outside, so two Suru shared libraries can be loaded together, and a Suru executable can load one with `外部の「./libkeisan.so」 を 読み込む`, without clashes (each has its own GC).
+9. **Not yet.** Header generation and examples for other languages (stage 2), lists, records and byte sequences (stage 3), kumu (stage 4) and Windows .dll (stage 5) are later stages of #208. The example is `examples/export.suru`.
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)

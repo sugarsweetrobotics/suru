@@ -57,6 +57,8 @@ const (
 	KwIkaExt     = "以下は外部の関数"
 	KwIkaExtIONo = "以下の外部の入出力動作"
 	KwIkaExtNo   = "以下の外部の関数"
+	// 他の言語に出す関数のまとまり: 「以下は外部に出す関数です」+ 1行に1つ「二倍する は 「nibai」」+ 「以上です」(#208)
+	KwIkaExport = "以下は外部に出す関数"
 
 	WO        = "を"
 	GA        = "が"
@@ -99,7 +101,7 @@ var keywords = setOf(
 	KwTo, KwTowa, KwNo, KwGa, KwIf, KwThen, KwElse, KwLambda, KwReturn, KwProviso,
 	KwKa, KwWa, KwToiu, KwKumi, KwSeishitsu, KwSorekara, KwKatsu, KwMataha, Desu, KwHensu, KwHensuPolite,
 	KwImport, KwImportPolit, KwImportTe, KwUse, KwUsePolite, KwIjou, KwIka, KwIkaIO,
-	KwIkaExtIO, KwIkaExt, KwIkaExtIONo, KwIkaExtNo,
+	KwIkaExtIO, KwIkaExt, KwIkaExtIONo, KwIkaExtNo, KwIkaExport,
 )
 var kanjiKeywords = setOf(KwKumi, KwSeishitsu, KwIjou)
 var ikaWords = setOf(KwIka, KwIkaIO)
@@ -607,7 +609,7 @@ func joinIka(tokens []*Token) []*Token {
 			i += 4
 			continue
 		}
-		if t.Kind == "WORD" && !t.Quoted && (ikaWords[t.S] || extBlockWords[t.S]) {
+		if t.Kind == "WORD" && !t.Quoted && (ikaWords[t.S] || extBlockWords[t.S] || t.S == KwIkaExport) {
 			out = append(out, tok("KW", t.S, t.Line))
 			continue
 		}
@@ -620,6 +622,20 @@ func joinIka(tokens []*Token) []*Token {
 			i += 4
 			continue
 		}
+		// 「以下 は 外部 に 出す 関数」「以下 は 外部に出す関数」(#208)
+		if t.Kind == "WORD" && !t.Quoted && t.S == "以下" && i+2 < len(tokens) && isKw(tokens[i+1], KwWa) &&
+			isPlainWord(tokens[i+2], "外部に出す関数") {
+			out = append(out, tok("KW", KwIkaExport, t.Line))
+			i += 2
+			continue
+		}
+		if t.Kind == "WORD" && !t.Quoted && t.S == "以下" && i+5 < len(tokens) && isKw(tokens[i+1], KwWa) &&
+			isPlainWord(tokens[i+2], "外部") && isPartS(tokens[i+3], "に") && isPlainWord(tokens[i+4], "出す") &&
+			isPlainWord(tokens[i+5], "関数") {
+			out = append(out, tok("KW", KwIkaExport, t.Line))
+			i += 5
+			continue
+		}
 		if t.Kind == "WORD" && !t.Quoted && t.S == "以下" && i+2 < len(tokens) && isKw(tokens[i+1], KwNo) &&
 			tokens[i+2].Kind == "WORD" && !tokens[i+2].Quoted && ikaWords["以下の"+tokens[i+2].S] {
 			out = append(out, tok("KW", "以下の"+tokens[i+2].S, t.Line))
@@ -630,6 +646,8 @@ func joinIka(tokens []*Token) []*Token {
 	}
 	return out
 }
+
+func isPlainWord(t *Token, s string) bool { return t.Kind == "WORD" && !t.Quoted && t.S == s }
 
 func joinModuleNames(tokens []*Token, modules map[string]bool) ([]*Token, error) {
 	var out []*Token
@@ -709,7 +727,9 @@ var operatorChars = func() map[rune]bool {
 	return m
 }()
 
-var mixedWords = []string{"受け取って", "返すこと", KwHensuPolite, KwHensu, "長さ", "残り", KwImportPolit, KwImport, KwImportTe, KwUsePolite, KwUse}
+// 「外部に出す関数」は句読点の書き方の「以下は外部に出す関数です。」(#208)
+var mixedWords = []string{"受け取って", "返すこと", KwHensuPolite, KwHensu, "長さ", "残り", KwImportPolit, KwImport, KwImportTe, KwUsePolite, KwUse,
+	"外部に出す関数"}
 var mixedNames = []string{"畳み込み"}
 var mixedAll = append(append([]string{}, mixedWords...), mixedNames...)
 var mixedNameSet = setOf(mixedNames...)

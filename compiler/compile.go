@@ -24,6 +24,9 @@ var ffiIR = map[string]string{"i64": "i64", "f64": "double", "f32": "float", "i3
 // LinkMark は IR の中の、リンクするライブラリの印(ビルドで読む)
 const LinkMark = "; suru-link: "
 
+// ExportMark は IR の中の、外部に出す関数の C の名前の印(共有ライブラリを作るときに読む、#208)
+const ExportMark = "; suru-export: "
+
 var partIDs = map[string]int{"を": 0, "に": 1, "で": 2, "から": 3, "へ": 4, "より": 5, "が": 6}
 var opIDs = map[string]int{"+": 0, "-": 1, "*": 2, "/": 3, "%": 4, "^": 5, "<": 6, ">": 7, "<=": 8, ">=": 9, "==": 10, "!=": 11}
 
@@ -96,6 +99,7 @@ declare i64 @rt_do_result(i64)
 declare i64 @rt_std(ptr)
 declare i64 @rt_global_cached(ptr, ptr, i32)
 declare void @rt_top(i64)
+declare i64 @rt_export(ptr, i32, ptr, ptr, ptr, i32)
 declare i32 @rt_enter(i32)
 declare void @rt_leave(i32)
 declare void @rt_top_unwrap(i64)
@@ -483,6 +487,7 @@ type Compiler struct {
 	ffiDecls    map[string]string // 外部の関数の名前 → declare の行
 	ffiWhere    map[string]Pos    // 外部の関数の名前 → 初めに宣言した位置
 	linkLibs    []string          // リンクするライブラリ(ExternLib.Path)
+	exports     []string          // 外部に出す関数の C の名前(#208)
 }
 
 func newCompiler(ctx *ParseContext, source string) *Compiler {
@@ -1621,6 +1626,73 @@ func (c *Compiler) module(program []Node, path string) *scope {
 	return sc
 }
 
+// exportCodes は外部に出す関数の C の型 → rt_export に渡す型の字
+var exportCodes = map[string]string{"i64": "l", "i32": "i", "f64": "d", "f32": "f", "bool": "b", "str": "s", "ptr": "p", "void": "v"}
+
+// exportWrappers は「以下は外部に出す関数です」の関数を、C の呼び出し規約の関数として出す(#208)。
+// 引数を i64 の並びに置いて rt_export に渡し、実行時ライブラリが値に直して呼ぶ(初期化・スレッド・エラーもそこで扱う)
+func (c *Compiler) exportWrappers(program []Node, sc *scope) {
+	for _, s := range program {
+		e, ok := s.(*Export)
+		if !ok {
+			continue
+		}
+		b := sc.vars[e.Name]
+		c.exports = append(c.exports, e.Symbol)
+		n := len(e.Params)
+		var params []string
+		codes := ""
+		for k, t := range e.Params {
+			params = append(params, fmt.Sprintf("%s %%a%d", ffiIR[t], k))
+			codes += exportCodes[t]
+		}
+		codes += exportCodes[e.Result]
+		if e.Action {
+			codes += "!"
+		}
+		ret := ffiIR[e.Result]
+		lines := []string{fmt.Sprintf("define %s @%s(%s) {", ret, e.Symbol, strings.Join(params, ", ")), "entry:"}
+		slots := n
+		if slots == 0 {
+			slots = 1
+		}
+		lines = append(lines, fmt.Sprintf("  %%s = alloca [%d x i64]", slots))
+		for k, t := range e.Params {
+			p := fmt.Sprintf("%%p%d", k)
+			lines = append(lines, fmt.Sprintf("  %s = getelementptr [%d x i64], ptr %%s, i64 0, i64 %d", p, slots, k))
+			switch t {
+			case "i64":
+				lines = append(lines, fmt.Sprintf("  store i64 %%a%d, ptr %s", k, p))
+			case "i32", "bool":
+				lines = append(lines, fmt.Sprintf("  %%x%d = sext i32 %%a%d to i64", k, k), fmt.Sprintf("  store i64 %%x%d, ptr %s", k, p))
+			case "f64":
+				lines = append(lines, fmt.Sprintf("  store double %%a%d, ptr %s", k, p))
+			case "f32":
+				lines = append(lines, fmt.Sprintf("  %%x%d = fpext float %%a%d to double", k, k), fmt.Sprintf("  store double %%x%d, ptr %s", k, p))
+			default: // str・ptr
+				lines = append(lines, fmt.Sprintf("  store ptr %%a%d, ptr %s", k, p))
+			}
+		}
+		lines = append(lines, fmt.Sprintf("  %%r = call i64 @rt_export(ptr %s, i32 %d, ptr %s, ptr %%s, ptr %s, i32 %d)",
+			b.g, n, c.cstr(codes), c.cstr(e.Name), posOf(e.Line)))
+		switch e.Result {
+		case "void":
+			lines = append(lines, "  ret void")
+		case "i64":
+			lines = append(lines, "  ret i64 %r")
+		case "i32", "bool":
+			lines = append(lines, "  %v = trunc i64 %r to i32", "  ret i32 %v")
+		case "f64":
+			lines = append(lines, "  %v = bitcast i64 %r to double", "  ret double %v")
+		case "f32":
+			lines = append(lines, "  %d = bitcast i64 %r to double", "  %v = fptrunc double %d to float", "  ret float %v")
+		default:
+			lines = append(lines, "  %v = inttoptr i64 %r to ptr", "  ret ptr %v")
+		}
+		c.functions = append(c.functions, strings.Join(lines, "\n")+"\n}")
+	}
+}
+
 func (c *Compiler) globalFunction(d *Define, sc *scope, ini *fnGen) string {
 	info := c.newInfo(d.Name, d.Params)
 	c.genFunction(d.Name, d.Params, exprBody{d.Body}, sc, nil, info, true)
@@ -1635,6 +1707,7 @@ func (c *Compiler) compile(program []Node, path string) string {
 		ini.call("void", "@rt_def_ctor", fmt.Sprintf("ptr %s, ptr %s, i32 %d, ptr %s", c.cstr(ctor), c.cstr(info.Type), len(info.Fields), c.ptrs(info.Fields)))
 	}
 	sc := c.module(program, path)
+	c.exportWrappers(program, sc)
 	top := newScope(sc, ini)
 	for _, s := range program {
 		if _, ok := s.(*Define); ok || isTopLevelOnly(s) {
@@ -1664,6 +1737,9 @@ func (c *Compiler) compile(program []Node, path string) string {
 	b.WriteString("; 「する」のコンパイラが作った LLVM IR\n")
 	for _, lib := range c.linkLibs {
 		b.WriteString(LinkMark + lib + "\n")
+	}
+	for _, sym := range c.exports {
+		b.WriteString(ExportMark + sym + "\n")
 	}
 	b.WriteString(decls)
 	syms := make([]string, 0, len(c.ffiDecls))

@@ -4,6 +4,12 @@
 
 「する」本体(`suru`・`suruc`・`suru-ls`・`kumu` と同梱の `lib/`)の変更です。0.7.0 より前の版は [GitHub Releases](https://github.com/suru-lang/suru/releases) にあります。VS Code 拡張の版は別です。
 
+## 次の版
+
+### 新しいもの
+
+1. **他の言語から呼べる共有ライブラリを作る。** `以下は外部に出す関数です` … `二倍する は 「nibai」` … `以上です` で出す関数と C の名前を書き、`suruc --共有ライブラリ 計算.suru -o libkeisan.so`(Python 版は `suru --翻訳 --共有ライブラリ`)で .so・.dylib を作ります。型は型の宣言から決まり(数・整数・小数・単精度・真偽・文字列・番地・無)、Python の ctypes や C などから呼べます。実行時エラーは 0 を返して `keisan_last_error()` で読め、どのスレッドからでも呼べます。#208 の段階1です。
+
 ## 0.10.1
 
 ### 直したもの

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	suru "github.com/suru-lang/suru"
@@ -59,23 +60,29 @@ func ExePath(out string) string {
 }
 
 // RuntimeObject は実行時ライブラリをコンパイルしたもの(中身が変わらなければ作り直さない)
-func RuntimeObject(cc string) (string, error) {
+func RuntimeObject(cc string) (string, error) { return runtimeObject(cc, "suru_rt-", nil) }
+
+// libFlags は共有ライブラリの形の実行時ライブラリ(main なし、名前を隠す)を作る引数(#208)
+var libFlags = []string{"-DSURU_LIB", "-fPIC", "-fvisibility=hidden"}
+
+func runtimeObject(cc, prefix string, flags []string) (string, error) {
 	sum := sha256.Sum256(append(append([]byte{}, suru.Runtime...), []byte(cc+"\x00"+compiler.Target())...))
 	digest := hex.EncodeToString(sum[:])[:16]
 	dir := CacheDir()
-	obj := filepath.Join(dir, "suru_rt-"+digest+".o")
+	obj := filepath.Join(dir, prefix+digest+".o")
 	if _, err := os.Stat(obj); err == nil {
 		return obj, nil
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	src := filepath.Join(dir, "suru_rt-"+digest+".c")
+	src := filepath.Join(dir, prefix+digest+".c")
 	if err := os.WriteFile(src, suru.Runtime, 0o644); err != nil {
 		return "", err
 	}
 	tmp := fmt.Sprintf("%s.%d.tmp", obj, os.Getpid())
-	out, err := exec.Command(cc, append(TargetArgs(), "-O2", "-w", "-c", "-x", "c", src, "-o", tmp)...).CombinedOutput()
+	args := append(append(TargetArgs(), flags...), "-O2", "-w", "-c", "-x", "c", src, "-o", tmp)
+	out, err := exec.Command(cc, args...).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("実行時ライブラリのコンパイルに失敗しました:\n%s", out)
 	}
@@ -125,6 +132,120 @@ func BuildWith(llPath, out, opt string, extra []string) error {
 		return fmt.Errorf("clang でのビルドに失敗しました:\n%s", b)
 	}
 	return done()
+}
+
+// LibPrefix は共有ライブラリの道から、補助の関数の頭の名前を決める(libkeisan.so → keisan)。C の名前にできなければエラー
+func LibPrefix(out string) (string, error) {
+	base := filepath.Base(out)
+	for _, ext := range []string{".so", ".dylib", ".dll"} {
+		if strings.HasSuffix(base, ext) {
+			base = strings.TrimSuffix(base, ext)
+			break
+		}
+	}
+	base = strings.TrimPrefix(base, "lib")
+	ok := base != ""
+	for i, c := range base {
+		alpha := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'
+		if !(alpha || (i > 0 && c >= '0' && c <= '9')) {
+			ok = false
+		}
+	}
+	if !ok {
+		return "", fmt.Errorf("共有ライブラリの名前「%s」から補助の関数の名前(「名前_last_error」など)を作れません。"+
+			"-o には英字・数字・「_」だけの名前を付けてください(「-o libkeisan.so」)", filepath.Base(out))
+	}
+	return base, nil
+}
+
+// LibPath は共有ライブラリの道。拡張子がなければ OS に合わせて付ける(.so・.dylib・.dll)
+func LibPath(out string) string {
+	ext := ".so"
+	if compiler.TargetWindows() {
+		ext = ".dll"
+	} else if targetDarwin() {
+		ext = ".dylib"
+	}
+	switch filepath.Ext(out) {
+	case ".so", ".dylib", ".dll":
+		return out
+	}
+	return out + ext
+}
+
+func targetDarwin() bool {
+	t := compiler.Target()
+	if t == "" {
+		return runtime.GOOS == "darwin"
+	}
+	return strings.Contains(t, "apple") || strings.Contains(t, "darwin")
+}
+
+// libShim は補助の関数(頭の名前_init・_last_error・_free)を出す小さな C のファイルの中身
+func libShim(prefix string) string {
+	return "#define E __attribute__((visibility(\"default\")))\n" +
+		"int rt_lib_init(void);\nconst char *rt_lib_last_error(void);\nvoid rt_lib_free(void *);\n" +
+		"E int " + prefix + "_init(void) { return rt_lib_init(); }\n" +
+		"E const char *" + prefix + "_last_error(void) { return rt_lib_last_error(); }\n" +
+		"E void " + prefix + "_free(void *p) { rt_lib_free(p); }\n"
+}
+
+// BuildShared は llPath の LLVM IR を、共有ライブラリの形の実行時ライブラリとつないで共有ライブラリにする(#208)。
+// 外に見せるのは、出す関数と補助の関数だけ(実行時ライブラリの名前は隠すので、する のライブラリが2つあってもぶつからない)
+func BuildShared(llPath, out, opt string) (string, error) {
+	cc := FindCC()
+	if cc == "" {
+		return "", fmt.Errorf("共有ライブラリを作るには clang が必要です(LLVM IR だけなら --ll を付けてください)")
+	}
+	if compiler.TargetWindows() {
+		return "", fmt.Errorf("Windows の共有ライブラリ(.dll)はまだ作れません")
+	}
+	lib := LibPath(out)
+	prefix, err := LibPrefix(lib)
+	if err != nil {
+		return "", err
+	}
+	rt, err := runtimeObject(cc, "suru_rt_lib-", libFlags)
+	if err != nil {
+		return "", err
+	}
+	ir, err := os.ReadFile(llPath)
+	if err != nil {
+		return "", err
+	}
+	syms := append(compiler.ExportSymbols(string(ir)), prefix+"_init", prefix+"_last_error", prefix+"_free")
+	dir, err := os.MkdirTemp("", "suru-lib-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(dir)
+	shim := filepath.Join(dir, "shim.c")
+	if err := os.WriteFile(shim, []byte(libShim(prefix)), 0o644); err != nil {
+		return "", err
+	}
+	args := append(TargetArgs(), opt, "-w", "-fPIC", llPath, rt, shim, "-o", lib)
+	if targetDarwin() {
+		list := filepath.Join(dir, "exports.txt")
+		var b strings.Builder
+		for _, s := range syms {
+			b.WriteString("_" + s + "\n")
+		}
+		if err := os.WriteFile(list, []byte(b.String()), 0o644); err != nil {
+			return "", err
+		}
+		args = append(args, "-dynamiclib", "-Wl,-install_name,@rpath/"+filepath.Base(lib), "-Wl,-exported_symbols_list,"+list)
+	} else {
+		script := filepath.Join(dir, "exports.map")
+		if err := os.WriteFile(script, []byte("{\n  global:\n    "+strings.Join(syms, ";\n    ")+";\n  local: *;\n};\n"), 0o644); err != nil {
+			return "", err
+		}
+		args = append(args, "-shared", "-Wl,--version-script="+script)
+	}
+	args = append(append(args, compiler.LinkFlags(string(ir))...), "-lm", "-lpthread")
+	if b, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("clang でのビルドに失敗しました:\n%s", b)
+	}
+	return lib, nil
 }
 
 // windowsLLD は Windows 向けのリンクに lld(ld.lld)を使えるか
