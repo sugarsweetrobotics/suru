@@ -20,11 +20,13 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 10. **`kumu 試験` also runs the test blocks and examples in the project's source files.** Each source file (other than `組.suru` and the files in `試験/` and `出力/`) with tests becomes one test binary, linked with the project's C sources, and runs in the project folder. `kumu 試験 名前` selects them by name as before (#193).
 11. **The interactive mode (REPL) reads quasi-quotes and deriving.** It waits for `以上です` before running a `以下は【X】です` block, and finds expanders, derivers and types from earlier inputs, so `「道」 を 読み込む` and `会員 とは …` can be typed before the line that uses them (#192).
 12. **The tools read test blocks and examples.** `lib/字句.suru` and `lib/構文.suru` (and so `suru --点検`) read `以下は「二倍」の試験です … 以上です` and `例えば … は … です` like `suru.py`, so files in `lib/` can now have tests. The language server lists test blocks and examples in the outline by their test names (`二倍`, `二倍するの例(4行)`), and the VS Code grammar highlights the test head and `例えば` (#193).
+13. **`lib/` has tests in the same file.** `lib/算術.suru`, `lib/乱数.suru` and the number and string formatting of `lib/標準.suru` now have examples and test blocks, which `suru --試験 lib/` and `suruc --試験 lib/` run on every PR. `suru --試験` on a file of `lib/` itself (such as `lib/標準.suru`) can use that file's built-in primitives. The language server shows a definition's examples when hovering over its name (#193).
 
 ### Fixed
 
 1. **The interpreter shows what it printed before it waits.** Like a compiled program, it now flushes standard output before waiting for a connection (`接続受付する`) or for data from a connection, so a server whose output goes to a pipe shows `ポート 9000 で待っています` right away (#195).
 2. **A deadlock between threads is always reported.** When two threads started waiting at almost the same moment (for example `合流する` and `通路受信する`), a compiled program could sometimes hang instead of failing with 「すべてのスレッドが待っていて、先に進めません」 (#195).
+3. **A program inside the repository's `lib/` folder could not use `標準内の…` built-ins when compiled with `suruc`.** The compiled program stopped with 「「標準内の引数取得する」は定義されていません」 because `lib/標準.suru` was read from that folder instead of the bundled copy. Now a file with the same contents as the bundled one gets the same built-ins (#193).
 
 The VS Code extension 0.10.0 highlights quasi-quotes (`以下は【X】です` … `以上です`, with the block left uncolored as another language), `【X】` and `導出する`.
 

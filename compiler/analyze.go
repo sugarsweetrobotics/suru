@@ -41,6 +41,7 @@ type TestSymbol struct {
 	Label   string
 	Line    int
 	Example bool
+	Of      string // 例なら、すぐ上の定義の名前(「二倍する」)
 }
 
 // Definition は名前を定義したところ(File が "" なら本体)
@@ -134,7 +135,7 @@ func AnalyzeFile(source, baseDir, path string) (a *Analysis) {
 				a.Statements = append(a.Statements, l.Line)
 			}
 			if d, ok := s.(*Define); ok && d.Test != "" {
-				a.Tests = append(a.Tests, TestSymbol{testLabel(d), d.Line.Line, d.Example != nil})
+				a.Tests = append(a.Tests, TestSymbol{testLabel(d), d.Line.Line, d.Example != nil, strings.TrimSuffix(d.Test, "の例")})
 			}
 		}
 		remember := func(c *Checker) {

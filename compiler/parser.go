@@ -3308,7 +3308,7 @@ func moduleNames(m *Module) map[string]bool {
 			names[d.Name] = true
 		}
 	}
-	for _, b := range libPrimitives(m.Path) {
+	for _, b := range mainLibPrimitives(m.Path) {
 		names[b.Name] = true
 	}
 	return names

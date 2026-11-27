@@ -1520,7 +1520,7 @@ func (c *Compiler) module(program []Node, path string) *scope {
 	sc := newScope(nil, nil)
 	c.modules[path] = sc
 	ini := c.initFg
-	for _, b := range libPrimitives(path) {
+	for _, b := range mainLibPrimitives(path) {
 		g := c.newGlobal("gp")
 		v := ini.call("i64", "@rt_std", "ptr "+c.cstr(b.Name))
 		ini.emit(fmt.Sprintf("store i64 %s, ptr %s", v, g))

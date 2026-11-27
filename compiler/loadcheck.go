@@ -239,7 +239,7 @@ func (l *loader) loadModule(m *Module, envs map[string]*env) *env {
 	}
 	e := newEnv()
 	envs[m.Path] = e
-	for _, b := range libPrimitives(m.Path) {
+	for _, b := range mainLibPrimitives(m.Path) {
 		e.set(b.Name)
 	}
 	l.loadProgram(m.Program, e, envs)

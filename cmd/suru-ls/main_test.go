@@ -324,4 +324,9 @@ func TestTestSymbols(t *testing.T) {
 	if h := result(t, msgs, 2); !strings.Contains(h, "二倍する は （数 を 受け取って 数 を 返すこと）") {
 		t.Fatalf("試験のまとまりの中のホバー: %s", h)
 	}
+	// 定義のホバーには、その定義の例を見せる
+	msgs = talk(t, open(uri, src), at(3, "textDocument/hover", uri, 1, 5))
+	if h := result(t, msgs, 3); !strings.Contains(h, "例:\\n```suru\\n例えば （2 を 二倍する） は 4 です\\n```") {
+		t.Fatalf("例を見せるホバー: %s", h)
+	}
 }
