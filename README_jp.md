@@ -66,6 +66,7 @@ kumu 取得           # 依存を取ってきて 組.lock を書く(fetch。作�
 kumu 試験           # ソースのファイルの試験と、試験/ の「…試験する」を動かす(test。kumu 試験 二倍 で名前の一部から選ぶ)
 kumu 点検           # プロジェクトの全部のファイルを点検する(check)
 kumu 公開           # 確かめてから Git のタグ v版 を付ける(publish。push は自分で)
+kumu 文書           # 公開の名前の API ドキュメントを docs/api に書く(doc。--雛形 で Sphinx と Read the Docs の設定を書く)
 ```
 
 試験は、試すコードと同じファイルに、試験のまとまりと例として書けます(「同じファイルの試験と例」)。
@@ -1631,7 +1632,20 @@ suru --文書 --json lib/算術.suru           # 同じ中身を1ファイル1�
 2. **1つの名前に出すもの。** 書いた型の宣言(型と性質なら定義。字下げして続けた行も)、関数なら使い方(`x を 二倍する`。パターンのない定義の引数の名前から作ります)、説明(「定義の説明」)、その定義の例(`例えば … は … です`)です。型の宣言を書いていない関数と値には、型を出しません。`以下は外部の…です` のまとまりの中の宣言は、その1行です。
 3. **Markdown の形。** 頭はファイルの名前の `# 「算術」`、その下にファイルの説明、名前ごとに `## 名前` の節です。コードは ` ```suru ` で囲むので、Sphinx の MyST でも読めます。`--json` は `file`・`module`・`description`・`items`(`name`・`kind`(関数・値・型・性質)・`line`・`signature`・`usage`・`description`・`examples`)の JSON です。
 4. **`--出力 フォルダ` でファイルに書く。** ファイルごとに `名前.md`(`--json` なら `名前.json`)を書きます。なければ全部を画面に出します。読めないファイル(構文のエラー、読み込むファイルが見つからないなど)はエラーを出して飛ばし、終了コードは 1 です。
-5. **Python 版と Go 版は同じものを出す。** `tests/test_doc.py` が、`lib/` の全部のファイルで両方の Markdown と JSON が同じかを確かめます。Sphinx の設定と `kumu 文書`、Read the Docs への公開は、この後の段階です。
+5. **Python 版と Go 版は同じものを出す。** `tests/test_doc.py` が、`lib/` の全部のファイルで両方の Markdown と JSON が同じかを確かめます。`kumu 文書` と Read the Docs への公開は「kumu 文書 と Read the Docs」にあります。
+
+### kumu 文書 と Read the Docs
+
+```sh
+kumu 文書 --雛形    # docs/conf.py・docs/index.md・docs/requirements.txt・docs/_ext/suru_lexer.py・.readthedocs.yaml を書く
+kumu 文書           # docs/api/ にファイルごとの API のページ(Markdown)を書く
+pip install -r docs/requirements.txt && sphinx-build docs docs/_build   # 手元で HTML にする
+```
+
+1. **`kumu 文書` はプロジェクトの一番上のファイルを文書にする。** 依存を取ってきてから(`取得` と同じ)、プロジェクトのフォルダの一番上にある `.suru`(`組.suru` を除く)を `suru --文書` と同じ形で `docs/api/名前.md` に書きます。`試験/` や `例/` の下のファイルは API ではないので見ません。`--出力 フォルダ` で書く場所を、`--json` で JSON を選べます(#209)。
+2. **`kumu 文書 --雛形` は Sphinx と Read the Docs の設定を書く。** Sphinx は MyST(Markdown)で読み、`language = "ja"`(日本語の検索)、テーマは furo です。`docs/_ext/suru_lexer.py` は する のコードに色を付ける Pygments の lexer で、`conf.py` が登録します。プロジェクトの名前は書いたときに入れ、版はビルドのたびに `組.suru` から読みます。`index.md` には、プロジェクトと同じ名前のファイル(なければ入口のファイル)の頭の注釈を入れます。今あるファイルは変えず、`.gitignore` に `/docs/api/` と `/docs/_build/` を足します。
+3. **Read the Docs はリポジトリをつなぐだけ。** `.readthedocs.yaml` はビルドのたびに、雛形を書いた kumu と同じ版の Linux 用の kumu を GitHub Releases から取ってきて `kumu 文書 --出力 docs/api` を流し、それから Sphinx で HTML にします。作ったページはコミットしません。readthedocs.org で GitHub のリポジトリを取り込めば、push とタグごとに公開されます。
+4. **フォルダの名前は docs。** 日本語のフォルダの名前(`試験/` など)にそろえず、Read the Docs と Sphinx の道具がふつう使う `docs/` にしました。
 
 ## ライセンス
 
