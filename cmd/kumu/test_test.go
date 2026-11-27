@@ -149,3 +149,32 @@ func TestTestBlocksInSources(t *testing.T) {
 		t.Errorf("選んだ試験: rc=%d %s", rc, out)
 	}
 }
+
+func TestTestSkipsNestedProjects(t *testing.T) {
+	// 自分の 組.suru を持つ下のフォルダ(例/ のプロジェクトなど)は別のプロジェクトなので、試験も点検も中を見ない
+	if native.FindCC() == "" {
+		t.Skip("clang がない")
+	}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("KUMU_HOME", t.TempDir())
+	dir := t.TempDir()
+	k, _, errb := newKumu(dir)
+	if rc := k.run([]string{"新規", "計算"}); rc != 0 {
+		t.Fatal(errb)
+	}
+	root := filepath.Join(dir, "計算")
+	os.Remove(filepath.Join(root, "試験", "例.suru"))
+	os.WriteFile(filepath.Join(root, "部品.suru"), []byte("数 を 二倍する は 数\nx を 二倍する とは x * 2\n例えば （2 を 二倍する） は 4 です\n"), 0o644)
+	// 下のプロジェクトは、根にない依存「蔵」を読み込む(根の依存では読めない)
+	sub := filepath.Join(root, "例", "使い方")
+	os.MkdirAll(sub, 0o755)
+	os.WriteFile(filepath.Join(sub, "組.suru"), []byte("名前 とは 「使い方」\n版 とは 「0.1.0」\n入口 とは 「本体」\n"), 0o644)
+	os.WriteFile(filepath.Join(sub, "本体.suru"), []byte("「蔵」 を 読み込む\n1 を 表示する\n"), 0o644)
+	k, out, errb := newKumu(root)
+	if rc := k.run([]string{"試験"}); rc != 0 || !strings.Contains(out.String(), "合格 1・不合格 0") || strings.Contains(out.String(), "使い方") {
+		t.Fatalf("下のプロジェクトを集めた: rc=%d\n%s%s", rc, out, errb)
+	}
+	if files, _ := suruFiles(root); len(files) != 3 {
+		t.Errorf("集めたファイル: %v", files)
+	}
+}

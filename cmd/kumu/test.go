@@ -40,6 +40,12 @@ func suruFiles(dir string) ([]string, error) {
 		if e.IsDir() && path != dir && (e.Name() == OutDir || strings.HasPrefix(e.Name(), ".")) {
 			return filepath.SkipDir
 		}
+		// 自分の 組.suru を持つ下のフォルダは別のプロジェクトなので、その中は集めない(例/ や結合試験/ のプロジェクト)
+		if e.IsDir() && path != dir {
+			if _, err := os.Stat(filepath.Join(path, ConfigName)); err == nil {
+				return filepath.SkipDir
+			}
+		}
 		if !e.IsDir() && strings.HasSuffix(e.Name(), compiler.SourceSuffix) {
 			files = append(files, path)
 		}
