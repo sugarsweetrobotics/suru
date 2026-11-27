@@ -17,6 +17,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 7. **Deriving.** `会員 は 【JSON】 と 【表】 を 導出する` hands a description of the type (`型記述` from the new `lib/導出.suru`) to `JSON導出する` and `表導出する` from a file the program reads, and puts the definitions they return in place of the line. The type must be defined in the same file with field types (#192).
 8. **`suruc --試験 ファイルかフォルダ [名前]` runs the same tests with the Go compiler.** Each file becomes one test binary (built with -O0 unless another -O is given), and each test runs in its own process. The output is the same as `suru --試験` (#193).
 9. **Deriving JSON.** `会員 は 【JSON】 を 導出する` defines `会員JSON化する` and `会員JSON復元する` (`（会員 と 文字列） の 成否`). Records become objects, and types with several forms get a `形` item. Fields can be `数`, `文字列`, `真偽`, `JSON`, `X の リスト` and other types that derive 【JSON】 (#192).
+10. **`kumu 試験` also runs the test blocks and examples in the project's source files.** Each source file (other than `組.suru` and the files in `試験/` and `出力/`) with tests becomes one test binary, linked with the project's C sources, and runs in the project folder. `kumu 試験 名前` selects them by name as before (#193).
 
 ### Fixed
 
