@@ -13,11 +13,12 @@ kumu 追加 github.com/suru-lang/sqlite
 「蔵」 を 読み込んで 使う
 「SQLite」 を 読み込んで 使う
 
-主処理する とは 入出力手順
+主処理する とは 以下の手順です
   db とは 「店.db」 を SQLite駆動 で DB開封した 結果
   db に 「CREATE TABLE IF NOT EXISTS 品 (名前 TEXT, 値段 REAL)」 を DB実行する
   db を DB閉鎖する
   「以上です」 を 表示する
+  以上です
 
 主処理する
 ```
@@ -41,7 +42,7 @@ kumu fetches the dependencies of a library too (for example, `github.com/suru-la
 | [gui-sdl3](https://github.com/suru-lang/gui-sdl3) | `「画面」` | windows, shapes and Japanese text with SDL3, and Elm-like widgets | 0.9.1 | [docs](https://gui-sdl3.readthedocs.io/en/latest/) |
 | [python](https://github.com/suru-lang/python) | `「Python」` | runs Python code and scripts in the same process (embedded libpython) and gets values back | 0.9.1 | [README](https://github.com/suru-lang/python/blob/main/README.md) |
 
-"—" means the README asks for no particular version. 「蔵」, 「台帳」 and the drivers fit together: the same program runs on SQLite, PostgreSQL or MySQL by changing the driver.
+"—" means the README asks for no particular version. 「蔵」, 「台帳」 and the drivers fit together: the same program runs on SQLite, PostgreSQL or MySQL by changing the driver. The same list is on the [website](https://suru-lang.github.io/libraries.html).
 
 ## Web framework 屋台
 
@@ -53,7 +54,7 @@ kumu fetches the dependencies of a library too (for example, `github.com/suru-la
 「屋台」 を 読み込んで 使う
 「標準」 を 読み込んで 使う
 
-文脈 を 品表示する は HTTP内の応答 の 動作
+文脈 を 品表示する は HTTP内の応答 を 返す 入出力動作
 c を 品表示する とは 「品 」 + （c から 「番号」 を 道引数取得する） + 「 です」 を 文字返答する
 
 道群 とは 以下の【道】です
@@ -65,7 +66,7 @@ c を 品表示する とは 「品 」 + （c から 「番号」 を 道引数
 
 ## ROS 2
 
-[rclsuru](https://github.com/suru-lang/rclsuru) is a ROS 2 client library for Suru (`「rclsuru」`). Its README and [API docs](https://rclsuru.readthedocs.io/en/latest/) describe it.
+[rclsuru](https://github.com/suru-lang/rclsuru) is a ROS 2 client library for Suru (`「rclsuru」`). Start with the [short tutorial](https://suru-lang.github.io/rclsuru.html) on the website; its README and [API docs](https://rclsuru.readthedocs.io/en/latest/) describe the rest.
 
 ## Tools written in Suru
 
