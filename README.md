@@ -1662,6 +1662,18 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build   # 手元
 1. **`kumu 新規 店 --対象 web` creates a web app for 屋台 ([suru-lang/web](https://github.com/suru-lang/web)).** `組.suru` depends on `github.com/suru-lang/web@0.1.0`. `店.suru` has the routes (【道】) and handlers, and `本体.suru` reads it and opens the server on port 8080. The pages are in `画面/` (a layout and a top page), static files are in `公開/`, and `試験/道.suru` tests the routes without starting a server. `kumu 実行` runs it, `kumu 試験` runs the tests, and `kumu 作る` makes the binary `出力/店`. The binary reads `画面/` and `公開/` from the folder it runs in, so ship those folders with it. `kumu 初期化 --対象 web` writes the same files into the current folder and keeps files that already exist.
 2. **`web` is not a microcontroller target.** `--対象 web` only chooses the skeleton, so `組.suru` gets no `対象` line and the app is built for this computer. The app's name must not be the name of a standard library or of 屋台 and its dependencies (屋台, HTTP, 雛形, 台帳, 蔵), because the routes file is loaded by that name.
 
+### Documentation of Suru itself (Read the Docs)
+
+```sh
+python suru.py --文書 --出力 docs/api lib   # 標準ライブラリの API のページを作る
+pip install -r docs/requirements.txt && sphinx-build docs docs/_build
+```
+
+1. **This repository is published on Read the Docs too.** It has `docs/conf.py` (Sphinx + MyST, `language = "ja"`, furo) and `.readthedocs.yaml`, which on every build runs `python suru.py --文書 --出力 docs/api lib` to make the API pages of every file in `lib/`. Unlike a kumu project there are no dependencies, so kumu is not used (#209).
+2. **What it contains.** The standard library API, the built-in functions (the table of "Built-in functions" in README_jp.md is included), `docs/AIの手引き.md` and `docs/ライブラリを公開する.md`. `docs/今後/` and `docs/リリース.md` are not for users, so they are left out. The version is read from `__version__` in `suru.py`.
+3. **Same highlighting as the kumu scaffold.** It uses `cmd/kumu/docs_template/suru_lexer.py`. `suru-誤り` code (the examples in the AI guide that fail the check) is highlighted the same way.
+4. **Parameters of external functions are "…".** Functions in an `以下は外部の…です` block have no parameter names, so their usage is written like `… を 正弦にする`.
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)

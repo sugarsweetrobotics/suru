@@ -22,6 +22,7 @@ myst_heading_anchors = 3
 exclude_patterns = ["_build"]
 html_theme = "furo"
 html_title = f"「{project}」 {release}"
+html_show_copyright = False  # 持ち主を書くなら copyright = "…" にして、この行を消します
 highlight_language = "suru"
 
 

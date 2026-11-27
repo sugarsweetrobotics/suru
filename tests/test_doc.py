@@ -176,3 +176,12 @@ def test_go_version_gives_the_same_documents(tmp_path):
         go = subprocess.run([str(exe), "--文書", *args, "lib"], cwd=ROOT, capture_output=True, text=True)
         assert py.returncode == 0 and go.returncode == 0, py.stderr + go.stderr
         assert py.stdout == go.stdout
+
+
+def test_docs_site_includes_readme_section():
+    """docs/組み込み関数.md が README_jp.md から取り込む節の見出しがある(見出しを変えたら docs も直す)"""
+    readme = (ROOT / "README_jp.md").read_text(encoding="utf-8")
+    page = (ROOT / "docs" / "組み込み関数.md").read_text(encoding="utf-8")
+    for marker in ("### 組み込み関数", "## 決めたこと"):
+        assert f'"{marker}"' in page
+        assert "\n" + marker in readme

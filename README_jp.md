@@ -1656,6 +1656,18 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build   # 手元
 1. **`kumu 新規 店 --対象 web` で、屋台([suru-lang/web](https://github.com/suru-lang/web))のウェブアプリを作る。** `組.suru` は `github.com/suru-lang/web@0.1.0` に依存します。`店.suru` に道(【道】)と処理を書き、`本体.suru` がそれを読み込んで 8080 番でサーバーを開きます。頁は `画面/`(枠とトップの頁)、静的ファイルは `公開/` に置き、`試験/道.suru` はサーバーを立てずに道を確かめます。`kumu 実行` で動かし、`kumu 試験` で試験し、`kumu 作る` でバイナリ `出力/店` を作ります。バイナリは動かしたフォルダの `画面/` と `公開/` を読むので、一緒に置きます。`kumu 初期化 --対象 web` は今のフォルダに同じファイルを書き、今あるファイルはそのままにします。
 2. **`web` はマイコンの対象ではない。** `--対象 web` は雛形を選ぶだけなので、`組.suru` に `対象` の行は書かず、この計算機向けに作ります。道のファイルをアプリの名前で読み込むので、標準のライブラリや屋台とその依存(屋台・HTTP・雛形・台帳・蔵)と同じ名前は使えません。
 
+### 本体のドキュメント(Read the Docs)
+
+```sh
+python suru.py --文書 --出力 docs/api lib   # 標準ライブラリの API のページを作る
+pip install -r docs/requirements.txt && sphinx-build docs docs/_build
+```
+
+1. **このリポジトリも Read the Docs で公開する。** `docs/conf.py`(Sphinx + MyST、`language = "ja"`、furo)と `.readthedocs.yaml` があり、ビルドのたびに `python suru.py --文書 --出力 docs/api lib` で `lib/` の全部のファイルの API のページを作ります。kumu のプロジェクトと違って依存がないので、kumu は使いません(#209)。
+2. **載せるもの。** 標準ライブラリの API、組み込み関数(README_jp.md の「組み込み関数」の表を取り込みます)、`docs/AIの手引き.md`、`docs/ライブラリを公開する.md` です。`docs/今後/` と `docs/リリース.md` は使う人向けではないので載せません。版は `suru.py` の `__version__` から読みます。
+3. **色付けは kumu の雛形と同じ。** `cmd/kumu/docs_template/suru_lexer.py` を使います。`suru-誤り` のコード(AI の手引きの、検査でエラーになる例)も同じ色付けです。
+4. **外部の関数の引数は「…」。** `以下は外部の…です` のまとまりの中の関数は引数に名前がないので、使い方は `… を 正弦にする` のように書きます。
+
 ## ライセンス
 
 - 本体(`suru.py`・`suru_check.py`・`suru_compile.py`、Go 版の `compiler/`・`cmd/`): [GPL-3.0-or-later](LICENSE)

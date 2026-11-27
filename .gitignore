@@ -7,3 +7,5 @@ dist/
 editors/vscode/node_modules/
 editors/vscode/server/
 *.vsix
+/docs/api/
+/docs/_build/
