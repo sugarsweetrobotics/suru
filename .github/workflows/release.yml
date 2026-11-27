@@ -1,6 +1,7 @@
 # 「する」本体のリリース: v0.1.0 のようなタグを push すると動きます。
 #   1. 版がそろっているか調べて、テストする
-#   2. PyPI 用の wheel と sdist、OS ごとの suruc・suru-ls・kumu を作る(macOS と Windows で動かして確かめる)
+#   2. PyPI 用の wheel と sdist、OS ごとの suruc・suru-ls・kumu を作る(macOS と Windows で動かして確かめる)。
+#      OS ごとの wheel(suruc・suru-ls・kumu 入り)も作り、Linux・macOS・Windows で pip で入れて確かめる
 #   3. GitHub Releases に置く
 #   4. PyPI に公開する(Trusted Publishing。トークンは要りません)
 #   5. Homebrew の tap(リポジトリの持ち主の homebrew-suru)の formula を新しくする
@@ -160,10 +161,76 @@ jobs:
           ../kumu.exe 作る
           ../kumu.exe 試験
 
+  # 純 Python の wheel に suruc・kumu・suru-ls を入れて、OS ごとの wheel を作る(pip で入れても速く動くように)
+  wheels:
+    name: OS ごとの wheel
+    needs: [check, python, binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: bin/
+      - run: |
+          pip install twine
+          python3 packaging/platform_wheels.py dist/*-py3-none-any.whl bin/ wheels/
+          python3 -m twine check wheels/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: platform-wheels
+          path: wheels/
+
+  # OS ごとの wheel を pip で入れて、suru と一緒に suruc・kumu が入るかを確かめる
+  smoke-wheels:
+    name: wheel を入れる(${{ matrix.os }})
+    needs: [check, python, wheels]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: platform-wheels
+          path: wheels/
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: wheels/
+      - run: |
+          python -m pip install --no-index --find-links wheels suru-lang
+          suru --version
+          suruc --version
+          kumu --version
+          suru-ls --version
+          # 純 Python ではなく、この OS の wheel が選ばれたこと
+          PYTHONIOENCODING=utf-8 python -m pip show -f suru-lang > files.txt  # 日本語のファイル名があるので
+          grep suruc files.txt
+          # clang があればコンパイルして、なければ(作れなければ)インタプリタで動かす。どちらでも同じ出力
+          printf '1 と 2 を 加算して 表示する\n' > t.suru
+          test "$(suru t.suru | tr -d '\r')" = 3
+          test "$(suru t.suru | tr -d '\r')" = 3
+          test "$(suru --インタプリタ t.suru | tr -d '\r')" = 3
+
   release:
     name: GitHub Releases
     if: needs.check.outputs.publish == 'true'
-    needs: [check, python, binaries, smoke-macos, smoke-windows]
+    needs: [check, python, binaries, smoke-macos, smoke-windows, smoke-wheels]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -195,6 +262,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: python-dist
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: platform-wheels
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
 

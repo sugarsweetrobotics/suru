@@ -6,6 +6,10 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 
 ## Unreleased
 
+### New
+
+1. **Fast with pip too.** PyPI gets wheels for Linux, macOS and Windows that also install `suruc`, `suru-ls` and `kumu`. `suru prog.suru` compiles the program into a cache and runs it when a C compiler (clang) is available (fib(25): from 1.57 s down to 0.08 s from the second run). Add `--インタプリタ` to run it the old way. Without a C compiler it uses the interpreter. Checking and `--翻訳` also use the bundled `suruc`. `suruc --実行` does the same (#229).
+
 ### Fixed
 
 1. **`kumu 文書 --雛形` also adds `__pycache__/` to `.gitignore`.** Sphinx writes `docs/_ext/__pycache__/` when it loads the lexer, and it was easy to commit by mistake (#209).

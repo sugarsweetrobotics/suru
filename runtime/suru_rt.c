@@ -791,6 +791,56 @@ int32_t rt_enter(int32_t pos) {
 }
 void rt_leave(int32_t old) { call_pos = old; }
 
+/* JSON の文字列にして足す(Python の json.dumps(ensure_ascii=False) と同じ書き方) */
+static void json_quote(Buf *b, const char *s) {
+    buf_cat(b, "\"");
+    for (const unsigned char *p = (const unsigned char *)(s ? s : ""); *p; p++) {
+        switch (*p) {
+        case '"': buf_cat(b, "\\\""); break;
+        case '\\': buf_cat(b, "\\\\"); break;
+        case '\n': buf_cat(b, "\\n"); break;
+        case '\r': buf_cat(b, "\\r"); break;
+        case '\t': buf_cat(b, "\\t"); break;
+        case '\b': buf_cat(b, "\\b"); break;
+        case '\f': buf_cat(b, "\\f"); break;
+        default:
+            if (*p < 0x20) buf_printf(b, "\\u%04x", *p);
+            else buf_add(b, (const char *)p, 1);
+        }
+    }
+    buf_cat(b, "\"");
+}
+
+/* 読み込んだファイルの名前を、suru(インタプリタ)の --json と同じく絶対の道にする。
+   プログラムのファイル main と同じフォルダにあればその道、なければ名前のまま */
+static const char *json_file_path(const char *main, const char *name) {
+#ifdef _WIN32
+    const char sep = '\\';
+#else
+    const char sep = '/';
+#endif
+    static char out[4096];
+    char dir[4096] = "";
+    const char *slash = strrchr(main, '/');
+#ifdef _WIN32
+    const char *bs = strrchr(main, '\\');
+    if (bs && (!slash || bs > slash)) slash = bs;
+    int absolute = main[0] == '/' || main[0] == '\\' || (main[0] && main[1] == ':');
+#else
+    int absolute = main[0] == '/';
+#endif
+    if (!absolute && !getcwd(dir, sizeof dir)) return name;
+    if (slash) {
+        size_t n = strlen(dir);
+        snprintf(dir + n, sizeof dir - n, "%s%.*s", n ? (char[]){sep, 0} : "", (int)(slash - main), main);
+    }
+    snprintf(out, sizeof out, "%s%c%s", dir, sep, name);
+    FILE *f = fopen(out, "rb");
+    if (!f) return name;
+    fclose(f);
+    return out;
+}
+
 __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
     fflush(stdout);
     int line = pos & 0xfffff, col = (pos >> 20) & 0x7ff;
@@ -833,6 +883,26 @@ __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
         try_top = f->prev;
         call_pos = f->cpos;
         longjmp(f->jb, 1);
+    }
+    /* suru --json で動かしたとき(#229): suru(インタプリタ)と同じ1行の JSON にする。値はプログラムのファイルの道 */
+    const char *json_path = getenv("SURU_ERROR_JSON");
+    if (json_path) {
+        Buf j = {0};
+        buf_cat(&j, "{\"file\":");
+        if (line && fname) json_quote(&j, json_file_path(json_path, fname));
+        else json_quote(&j, json_path);
+        if (line) buf_printf(&j, ",\"line\":%d", line);
+        else buf_cat(&j, ",\"line\":null");
+        if (line && col) buf_printf(&j, ",\"column\":%d", col);
+        else buf_cat(&j, ",\"column\":null");
+        buf_cat(&j, ",\"kind\":\"実行\",\"rule\":null,\"message\":");
+        Buf m = {0};
+        buf_cat(&m, msg);
+        buf_cat(&m, lib_where);
+        json_quote(&j, m.s);
+        buf_cat(&j, "}");
+        fprintf(stderr, "%s\n", j.s);
+        exit(1);
     }
     /* 該当する行と位置の印 */
     if (line) {
