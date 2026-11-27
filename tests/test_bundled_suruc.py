@@ -182,6 +182,13 @@ def test_interpreter_flag_and_fallbacks(tmp_path, real_suruc):
     second = _run([str(prog)], no_cc)
     assert second.stdout == "3\n" and second.stderr == ""
     assert _runs(cache) == []
+    # C コンパイラが実行時ライブラリを作れなければ、1回だけ知らせてインタプリタで
+    broken = {**env, "CC": "false"}
+    first = _run([str(prog)], broken)
+    assert first.stdout == "3\n" and "実行時ライブラリを作れなかった" in first.stderr
+    second = _run([str(prog)], broken)
+    assert second.stdout == "3\n" and second.stderr == ""
+    assert _runs(cache) == []
     # kumu の Cソース を使うプロジェクトもインタプリタで(suruc はつながない)
     proj = tmp_path / "proj"
     proj.mkdir()

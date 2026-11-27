@@ -221,6 +221,11 @@ jobs:
           # 純 Python ではなく、この OS の wheel が選ばれたこと
           python -m pip show -f suru-lang > files.txt
           grep suruc files.txt
+          # clang があればコンパイルして、なければ(作れなければ)インタプリタで動かす。どちらでも同じ出力
+          printf '1 と 2 を 加算して 表示する\n' > t.suru
+          test "$(suru t.suru | tr -d '\r')" = 3
+          test "$(suru t.suru | tr -d '\r')" = 3
+          test "$(suru --インタプリタ t.suru | tr -d '\r')" = 3
 
   release:
     name: GitHub Releases

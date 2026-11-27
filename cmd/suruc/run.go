@@ -104,6 +104,9 @@ func prepareRun(src string, o runOptions, prepareOnly bool) (string, int) {
 	} else if usesCSources(baseDir) {
 		reason = "kumu の Cソース・リンク引数を使うプロジェクトです(kumu 作る で作れます)"
 	}
+	if reason == "" && !toolchainWorks(cc, prepareOnly) {
+		reason = "C コンパイラ「" + cc + "」で実行時ライブラリを作れません"
+	}
 	if reason != "" {
 		if prepareOnly {
 			if cc == "" {
@@ -202,6 +205,26 @@ func usesCSources(baseDir string) bool {
 		}
 	}
 	return false
+}
+
+// toolchainWorks は cc で実行時ライブラリを作れるか(作れなかったことはキャッシュに覚えて、次からは試さない)。
+// 作れないとき、suru(prepareOnly)は1回だけ知らせてインタプリタで動かす
+func toolchainWorks(cc string, prepareOnly bool) bool {
+	sum := sha256.Sum256([]byte(version + "\x00" + cc + "\x00" + compiler.Target() + "\x00" + runtime.GOOS + "/" + runtime.GOARCH))
+	mark := filepath.Join(native.CacheDir(), "cc-failed-"+hex.EncodeToString(sum[:])[:16])
+	if _, err := os.Stat(mark); err == nil {
+		return false
+	}
+	if _, err := native.RuntimeObject(cc); err != nil {
+		if prepareOnly {
+			fmt.Fprintf(os.Stderr, "お知らせ: C コンパイラ「%s」で実行時ライブラリを作れなかったので、インタプリタで動かします(%s を消すと、もう一度試します)。\n%v\n", cc, mark, err)
+		}
+		if os.MkdirAll(filepath.Dir(mark), 0o755) == nil {
+			os.WriteFile(mark, []byte(err.Error()), 0o644)
+		}
+		return false
+	}
+	return true
 }
 
 // hintOnce は C コンパイラがないことを、1回だけ知らせる(印をキャッシュに置く)
