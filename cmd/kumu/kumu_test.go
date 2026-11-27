@@ -173,7 +173,7 @@ func TestCommands(t *testing.T) {
 
 // 共有ライブラリのプロジェクト(#208 段階4): 新規 --共有ライブラリ・作る・試験・実行できない・ライブラリ名
 func TestSharedLibProject(t *testing.T) {
-	if native.FindCC() == "" || runtime.GOOS == "windows" {
+	if native.FindCC() == "" {
 		t.Skip("共有ライブラリを作れない")
 	}
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
@@ -196,6 +196,12 @@ func TestSharedLibProject(t *testing.T) {
 	st1, err := os.Stat(lib)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		// Windows では呼ぶ側のリンク用の import ライブラリもできる(段階5)
+		if _, err := os.Stat(lib + ".a"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	h, err := os.ReadFile(header)
 	if err != nil || !strings.Contains(string(h), "int64_t nibai(int64_t a1);") || !strings.Contains(string(h), "char *aisatsu(const char *a1);") {
