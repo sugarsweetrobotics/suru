@@ -145,6 +145,19 @@ def build() -> dict:
             "name": "entity.name.function.suru",
             "match": f"(?<=^|[\\s　（）()]|{suru.MODULE_SEP}){word_char}+?{forms}(?=$|[\\s　（）()])",
         },
+        # 導出「会員 は 【JSON】 と 【表】 を 導出する」の【JSON】と「導出する」(#192)
+        "quasi-name": {
+            "match": "(【)([^【】 　]+)(】)",
+            "captures": {
+                "1": {"name": "punctuation.definition.tag.suru"},
+                "2": {"name": "entity.name.tag.suru"},
+                "3": {"name": "punctuation.definition.tag.suru"},
+            },
+        },
+        "derive": {
+            "name": "keyword.other.declaration.suru",
+            "match": f"{not_before}導出(?:する|します)(?=[ 　]*。?[ 　]*(?:[#＃].*)?$)",
+        },
         "kanji-keyword": {
             "patterns": [
                 # 「以下の手順です」「以下 の 入出力手順」と、閉じる「以上」
@@ -194,9 +207,26 @@ def build() -> dict:
 
     def rules(call_rule):
         return [{"include": f"#{k}"} for k in
-                ["comment", "test", "string", "quoted-name", "import", "module", "lambda", "returns", "builtin", call_rule,
+                ["comment", "test", "string", "quoted-name", "quasi-name", "import", "module", "lambda", "returns", "builtin",
+                 "derive", call_rule,
                  "kanji-keyword", "number", "operator", "punctuation", "hiragana", "name"]]
 
+    # 準クォート「以下は【道】です … 以上です」「x とは 以下の【SQL】です … 以上です」(#192)。
+    # 中身はほかの言語なので色を付けず、頭と同じ字下げの「以上です」で閉じる
+    patterns["quasi"] = {
+        "begin": "^([ 　]*)(.*?)(以下[ 　]*[のは][ 　]*)(?=【[^【】 　]+】[ 　]*(?:です)?[ 　]*。?[ 　]*(?:[#＃].*)?$)",
+        "beginCaptures": {
+            "2": {"patterns": [{"include": "#spaced-call"}, {"include": "#hiragana"}, {"include": "#name"}]},
+            "3": {"name": "keyword.control.suru"},
+        },
+        "end": "^\\1(以上)(?:[ 　]*です)?",
+        "endCaptures": {"1": {"name": "keyword.control.suru"}},
+        "patterns": [
+            {"begin": "\\G", "end": "$", "patterns": [{"include": "#quasi-name"}, {"include": "#kanji-keyword"},
+                                                       {"include": "#comment"}]},
+            {"name": "meta.embedded.block.suru", "match": ".+"},
+        ],
+    }
     # 「。」か「、」を含む行(文字列・『』・コメントの中は数えない)は句読点の書き方、それ以外は空白の書き方
     patterns["punct-line"] = {
         "begin": "^(?=(?:" + STRING + "|『[^』]*』|[^「『#＃※。、])*[。、])",
@@ -209,7 +239,7 @@ def build() -> dict:
         "scopeName": "source.suru",
         "comment": "editors/vscode/make_grammar.py が作るファイルです。直接編集しないでください",
         "fileTypes": ["suru"],
-        "patterns": [{"include": "#punct-line"}] + rules("spaced-call"),
+        "patterns": [{"include": "#quasi"}, {"include": "#punct-line"}] + rules("spaced-call"),
         "repository": patterns,
     }
 

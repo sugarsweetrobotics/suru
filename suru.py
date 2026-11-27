@@ -9,7 +9,7 @@
 """
 from __future__ import annotations
 
-__version__ = "0.9.1"
+__version__ = "0.10.0"
 
 import contextlib
 import re
@@ -849,6 +849,7 @@ QUASI_OPEN, QUASI_CLOSE = "【", "】"
 _QUASI_TOP = re.compile(r"^以下[ \t　]*は[ \t　]*【([^【】 \t　]+)】[ \t　]*(?:です)?[ \t　]*。?[ \t　]*(?:#.*)?$")
 _QUASI_EXPR = re.compile(r"^(.*?[^ \t　])[ \t　]*とは[ \t　]*以下[ \t　]*の[ \t　]*【([^【】 \t　]+)】[ \t　]*(?:です)?[ \t　]*。?[ \t　]*(?:#.*)?$")
 _QUASI_END = re.compile(r"^以上[ \t　]*(?:です)?[ \t　]*。?[ \t　]*(?:#.*)?$")
+QUASI_UNCLOSED = "を閉じる「以上です」がありません"  # 対話モードは、このエラーなら続きの行を待つ
 QUASI_SUFFIX = "展開する"  # 【道】の展開の関数は「道展開する」
 QUASI_MAX_DEPTH = 20  # 展開したコードの中の準クォートを展開する深さの上限
 # 導出(#192): 「会員 は 【JSON】 と 【表】 を 導出する」。【JSON】の導出の関数は「JSON導出する」
@@ -898,7 +899,7 @@ def _quasi_block(raws: list[str], k: int, indent: int, name: str) -> tuple[str, 
         body.append(raw)
         j += 1
     else:
-        raise SuruError(f"「以下は【{name}】です」を閉じる「以上です」がありません", Pos(k + 1))
+        raise SuruError(f"「以下は【{name}】です」{QUASI_UNCLOSED}", Pos(k + 1))
     while body and not body[-1].strip():
         body.pop()
     while body and not body[0].strip():
@@ -1439,12 +1440,17 @@ class ParseContext:
         self.in_prelude = False  # 基本.suru そのものを読んでいる(基本を自動で読み込まない)
         # 読み込んだファイル(lib/ のものを除く)を解析しているときは「部品内の」。そのファイルの型と形の名前に付ける
         self.qualify = ""
+        # 対話モード: 前の入力で読み込んだファイル(準クォートと導出の関数を探す)と、前の入力の型の定義の行(新しい順)
+        self.session_modules: list = []
+        self.session_nodes: list = []
 
     def copy(self) -> "ParseContext":
         c = ParseContext(self.ctors, self.types, self.base_dir, self.modules)
         c.packages = self.packages
         c.path = self.path
         c.field_types = dict(self.field_types)
+        c.session_modules = self.session_modules
+        c.session_nodes = self.session_nodes
         return c
 
     def resolve_field_types(self, tds: list) -> None:
@@ -3474,8 +3480,9 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         if line is not None:
             prelude = Import(load_prelude(ctx, line), line, True, auto=True)
     if _has_quasi(nodes):
-        nodes = expand_quasi(nodes, [i.module for i in imports.values() if isinstance(i, Import)],
-                             cache={"ctx": ctx, "nodes": nodes})
+        found = [i.module for i in imports.values() if isinstance(i, Import)]
+        found += [m for m in ctx.session_modules if all(m.path != f.path for f in found)]
+        nodes = expand_quasi(nodes, found, cache={"ctx": ctx, "nodes": nodes + ctx.session_nodes})
     test_import = None
     first_test = next((n.line.number for n in nodes if n.line.tokens and is_test_head(nosep(n.line.tokens)[0])), None)
     if first_test is not None:
@@ -7935,7 +7942,9 @@ class Repl:
             return False
         try:
             lines = split_lines(text)
-        except SuruError:
+        except SuruError as e:
+            if QUASI_UNCLOSED in e.message:
+                return False  # 「以下は【道】です」の「以上です」がまだない
             lines = []
         if _ika_open(lines):
             return False  # 「以下の手順です」の「以上」がまだない
@@ -7998,6 +8007,7 @@ class Repl:
         self.interp.ctx = ctx
         self.kept = [s for s in self.kept if not (isinstance(s, (Define, TypeSig)) and s.name in names)]
         self.kept += [s for s in program if isinstance(s, REPL_KEEP)]
+        self._remember(source, program)
         for n in names:
             if n in self.defined:
                 self.defined.remove(n)
@@ -8013,6 +8023,17 @@ class Repl:
 
         self.interp.run_program(program, emit_stmt=show)
         return True
+
+    def _remember(self, source: str, program: list) -> None:
+        """次の入力の準クォートと導出のために、読み込んだファイルと型の定義の行を覚える"""
+        ctx = self.interp.ctx
+        for s in program:
+            if isinstance(s, Import) and all(m.path != s.module.path for m in ctx.session_modules):
+                ctx.session_modules = ctx.session_modules + [s.module]
+        tds = [n for n in build_layout(split_lines(source))
+               if n.line.quasi is None and n.line.derive is None and try_parse_typedef(n) is not None]
+        if tds:
+            ctx.session_nodes = tds + ctx.session_nodes
 
     # --- コマンド --------------------------------------------------------
 
