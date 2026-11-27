@@ -190,7 +190,8 @@ func libShim(prefix string) string {
 		"E void " + prefix + "_free(void *p) { rt_lib_free(p); }\n"
 }
 
-// BuildShared は llPath の LLVM IR を、共有ライブラリの形の実行時ライブラリとつないで共有ライブラリにする(#208)。
+// BuildShared は llPath の LLVM IR を、共有ライブラリの形の実行時ライブラリとつないで共有ライブラリにし、
+// 同じ所に C のヘッダ(頭の名前.h)も書く(#208)。
 // 外に見せるのは、出す関数と補助の関数だけ(実行時ライブラリの名前は隠すので、する のライブラリが2つあってもぶつからない)
 func BuildShared(llPath, out, opt string) (string, error) {
 	cc := FindCC()
@@ -245,7 +246,15 @@ func BuildShared(llPath, out, opt string) (string, error) {
 	if b, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("clang でのビルドに失敗しました:\n%s", b)
 	}
+	if err := os.WriteFile(HeaderPath(lib, prefix), []byte(compiler.ExportHeader(string(ir), prefix)), 0o644); err != nil {
+		return "", err
+	}
 	return lib, nil
+}
+
+// HeaderPath は共有ライブラリと同じ所に置く C のヘッダの道(libkeisan.so → keisan.h、#208 段階2)
+func HeaderPath(lib, prefix string) string {
+	return filepath.Join(filepath.Dir(lib), prefix+".h")
 }
 
 // windowsLLD は Windows 向けのリンクに lld(ld.lld)を使えるか

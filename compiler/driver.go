@@ -33,13 +33,8 @@ func LinkFlags(ir string) []string {
 // ExportSymbols は IR の始めの「; suru-export: 」の行から、外部に出す関数の C の名前を読む(#208)
 func ExportSymbols(ir string) []string {
 	var out []string
-	for _, line := range strings.Split(ir, "\n") {
-		if !strings.HasPrefix(line, ";") {
-			break
-		}
-		if strings.HasPrefix(line, ExportMark) {
-			out = append(out, strings.TrimPrefix(line, ExportMark))
-		}
+	for _, e := range Exports(ir) {
+		out = append(out, e.Symbol)
 	}
 	return out
 }
