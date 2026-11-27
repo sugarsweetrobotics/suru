@@ -3,6 +3,7 @@
 
 import base64
 import hashlib
+import hmac
 import pathlib
 import socket
 import subprocess
@@ -54,6 +55,16 @@ SHA1 = ('「標準」 を 読み込んで 使う\n「ハッシュ」 を 読み�
 SHA1_OUT = ("".join(hashlib.sha1(s.encode()).hexdigest() + "\n" for s in SAMPLES)
             + "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\n000f10ff\n")
 
+SHA256 = ('「標準」 を 読み込んで 使う\n「ハッシュ」 を 読み込む\n'
+          + "".join(f'「{s}」 を バイト列にして ハッシュ内のSHA256にして ハッシュ内の十六進表記にする\n' for s in SAMPLES))
+SHA256_OUT = "".join(hashlib.sha256(s.encode()).hexdigest() + "\n" for s in SAMPLES)
+
+HMAC_CASES = [("Jefe", "what do ya want for nothing?"), ("", ""), ("鍵" * 30, "長い鍵(64 バイトより長い)"), ("k" * 64, LONG)]
+HMAC = ('「標準」 を 読み込んで 使う\n「ハッシュ」 を 読み込む\n'
+        + "".join(f'（「{m}」 を バイト列にする） を （「{k}」 を バイト列にする） で ハッシュ内のHMACSHA256にして ハッシュ内の十六進表記にする\n'
+                  for k, m in HMAC_CASES))
+HMAC_OUT = "".join(hmac.new(k.encode(), m.encode(), hashlib.sha256).hexdigest() + "\n" for k, m in HMAC_CASES)
+
 
 def run_both(source: str, tmp_path: pathlib.Path) -> list[str]:
     """インタプリタとバイナリの出力"""
@@ -70,8 +81,9 @@ def run_both(source: str, tmp_path: pathlib.Path) -> list[str]:
     return outs
 
 
-@pytest.mark.parametrize("source, want", [(BITS, BITS_OUT), (BASE64, BASE64_OUT), (SHA1, SHA1_OUT)],
-                         ids=["ビット演算", "Base64", "SHA-1"])
+@pytest.mark.parametrize("source, want", [(BITS, BITS_OUT), (BASE64, BASE64_OUT), (SHA1, SHA1_OUT),
+                                            (SHA256, SHA256_OUT), (HMAC, HMAC_OUT)],
+                         ids=["ビット演算", "Base64", "SHA-1", "SHA-256", "HMAC-SHA256"])
 def test_インタプリタとバイナリで同じ(source, want, tmp_path):
     for out in run_both(source, tmp_path):
         assert out == want
