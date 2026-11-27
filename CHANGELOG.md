@@ -16,6 +16,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 6. **kumu builds shared libraries.** Write `種類 とは 「共有ライブラリ」` in 組.suru and `kumu 作る` writes `出力/libNAME.so` (or `.dylib`) and `出力/NAME.h` (`ライブラリ名 とは 「…」` sets NAME when the project name isn't ASCII). `kumu 新規 NAME --共有ライブラリ` creates a library project with a test. A library whose code doesn't use self-recursion now also builds at `-O0`. This is stage 4 of #208.
 7. **Shared libraries on Windows.** `suruc --共有ライブラリ` (and kumu) now builds a `.dll` on Windows (MSYS2 UCRT64), together with the import library `libNAME.dll.a` for linking and the header. Only the exported and helper functions are exported. The shared library tests run on Windows in CI. This is stage 5 of #208.
 8. **`docs/AIの手引き.md` explains shared libraries.** A new section shows how to export functions, the type mapping, errors and kumu, and the remaining ideas are listed in `docs/今後/共有ライブラリ.md`. This is stage 6 of #208.
+9. **Fast with pip too.** PyPI gets wheels for Linux, macOS and Windows that also install `suruc`, `suru-ls` and `kumu`. `suru prog.suru` compiles the program into a cache and runs it when a C compiler (clang) is available (fib(25): from 1.57 s down to 0.08 s from the second run). Add `--インタプリタ` to run it the old way. Without a C compiler it uses the interpreter. Checking and `--翻訳` also use the bundled `suruc`. `suruc --実行` does the same (#229).
 
 ### Fixed
 

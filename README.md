@@ -20,7 +20,7 @@ python3 -m pytest tests               # tests
 
 | Method | How to install | What you get |
 |---|---|---|
-| pip | `pip install suru-lang` | `suru` |
+| pip | `pip install suru-lang` | `suru`, plus `suruc`, `suru-ls`, `kumu` on Linux, macOS and Windows |
 | Homebrew (macOS, Linux) | `brew install suru-lang/suru/suru` | `suru`, `suruc`, `suru-ls`, `kumu` |
 | Binaries | `suru-VERSION-OS-CPU.tar.gz` (`.zip` for Windows) from [GitHub Releases](https://github.com/suru-lang/suru/releases) | `suruc`, `suru-ls`, `kumu` |
 | VS Code | Search for 「する」 in the Extensions view | The extension (bundles `suru-ls`) |
@@ -31,11 +31,12 @@ Building binaries (`suru --翻訳`, `suruc`) needs clang on your machine, whiche
 
 ```sh
 pip install suru-lang   # for the latest repository: pip install git+https://github.com/suru-lang/suru (or pip install . in a cloned folder)
-suru examples/basic.suru          # same as python3 suru.py (--検査, --検査なし and --翻訳 work too)
+suru examples/basic.suru          # compiles and runs it (--検査, --検査なし and --翻訳 work too)
+suru --インタプリタ examples/basic.suru   # run it with the Python interpreter instead
 suru --version
 ```
 
-The standard library (`lib/標準.suru`) and the compiler's runtime library (`runtime/suru_rt.c`) are installed along with it. `--翻訳` needs clang separately.
+The standard library (`lib/標準.suru`) and the compiler's runtime library (`runtime/suru_rt.c`) are installed along with it. On Linux (x86_64, aarch64), macOS and Windows, pip also installs `suruc`, `suru-ls` and `kumu`, and `suru` then runs programs at native speed: it compiles the program with `suruc` into a cache and runs the binary (from the second run on, it starts the cached binary right away). This needs clang; without it, `suru` runs the program with the Python interpreter as before (see "Running fast with pip"). `--翻訳` also needs clang.
 
 ### Fast compiler (Go version)
 
@@ -1681,6 +1682,15 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build
 2. **The page labels are English.** `suru --文書` writes `Usage:` and `Examples:`, and the sites made by `docs/conf.py` and `kumu 文書 --雛形` use `language = "en"`. The title of each page is still the file name (`# 「算術」`).
 3. **A test keeps them English.** `tests/test_doc.py` fails when a description in `lib/` has hiragana outside `…` and 「…」, and when a public definition (except in 字句・構文・点検) has no description.
 4. **Merged cases show "…" too.** A function written case by case (its parameter becomes `（を）`) shows its usage as `… を 最大値にする`.
+
+### Running fast with pip
+
+1. **pip puts `suruc` in the wheel.** Besides the pure Python wheel, PyPI has wheels for Linux (x86_64 and aarch64, glibc and musl), macOS (x86_64 and arm64) and Windows (x64 and arm64) that also contain `suruc`, `suru-ls` and `kumu`, like ruff and uv. pip picks the one for your machine and installs the three commands next to `suru`. Other machines and Pyodide (the web playground) use the pure Python wheel. The wheels are built by `packaging/platform_wheels.py` (`docs/リリース.md`).
+2. **`suru prog.suru` compiles and runs.** When `suruc` was installed next to `suru` and there is a C compiler (`$CC` or clang), `suru` compiles the program with `-O0` into the cache (`~/.cache/suru/run`, or `$XDG_CACHE_HOME/suru/run`) and runs the binary. The key is the `suruc` version, the options and the LLVM IR, which contains every loaded file (including the standard library and dependencies), so a change to any of them rebuilds it. The second run starts the cached binary right away. Binaries unused for 30 days are deleted. Standard input and output, arguments and the exit code are passed through, and `--json` also prints runtime errors as one line of JSON.
+3. **When it stays on the interpreter.** `--インタプリタ` (`--interpreter`) or `SURU_INTERPRETER=1` runs the Python interpreter as before. The REPL, programs in kumu projects that use `Cソース` or `リンク引数` (`suruc` doesn't link them; use `kumu 作る`), and machines without a C compiler also use the interpreter. Without a C compiler, `suru` says once how to install clang. `python3 suru.py` in the repository always uses the interpreter (`SURU_SURUC=path` makes it use a given `suruc`).
+4. **Checking uses `suruc` too.** `suru --検査`, the check before running and `suru --翻訳` use the bundled `suruc`. Messages and JSON are the same as the Python version (`tests/test_go_compiler.py`), and checking takes milliseconds instead of about 0.15 seconds.
+5. **`suruc --実行 prog.suru args …`.** The same compile-and-run is available from `suruc` directly (`--検査なし`, `--json` and `-O0` to `-O3` can come before the file; the default is `-O0`).
+6. **How much faster.** On Linux x86_64, fib(25) takes 1.57 s with the interpreter, 0.15 s for the first run (compiling included) and 0.08 s after that; mapping and folding 200,000 numbers takes 1.43 s, 0.20 s and 0.09 s. Most of the 0.08 s is starting Python; the binary itself runs fib(25) in 0.005 s. The compiled program behaves the same, except for the differences in "Compiler" (integers up to ±2^62, `大文字にする` changes only Latin letters, deep recursion works).
 
 ## License
 

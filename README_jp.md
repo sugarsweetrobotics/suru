@@ -18,7 +18,7 @@ python3 -m pytest tests               # テスト
 
 | 方法 | 入れ方 | 入るもの |
 |---|---|---|
-| pip | `pip install suru-lang` | `suru` |
+| pip | `pip install suru-lang` | `suru`。Linux・macOS・Windows では `suruc`・`suru-ls`・`kumu` も |
 | Homebrew(macOS・Linux) | `brew install suru-lang/suru/suru` | `suru`・`suruc`・`suru-ls`・`kumu` |
 | バイナリ | [GitHub Releases](https://github.com/suru-lang/suru/releases) の `suru-版-OS-CPU.tar.gz`(Windows は `.zip`) | `suruc`・`suru-ls`・`kumu` |
 | VS Code | 拡張機能ビューで「する」を検索 | 拡張(`suru-ls` を同梱) |
@@ -29,11 +29,12 @@ python3 -m pytest tests               # テスト
 
 ```sh
 pip install suru-lang   # 最新のリポジトリからなら pip install git+https://github.com/suru-lang/suru(取ってきたフォルダで pip install . も可)
-suru examples/basic.suru          # python3 suru.py と同じ(--検査・--検査なし・--翻訳 も使えます)
+suru examples/basic.suru          # コンパイルして動かす(--検査・--検査なし・--翻訳 も使えます)
+suru --インタプリタ examples/basic.suru   # Python のインタプリタで動かす
 suru --version
 ```
 
-標準ライブラリ(`lib/標準.suru`)とコンパイラの実行時ライブラリ(`runtime/suru_rt.c`)も一緒に入ります。`--翻訳` には clang が別に必要です。
+標準ライブラリ(`lib/標準.suru`)とコンパイラの実行時ライブラリ(`runtime/suru_rt.c`)も一緒に入ります。Linux(x86_64・aarch64)・macOS・Windows では `suruc`・`suru-ls`・`kumu` も入り、`suru` はプログラムをネイティブの速さで動かします。`suruc` でキャッシュにコンパイルして、そのバイナリを動かします(2回目からはキャッシュのバイナリをすぐ動かします)。これには clang が要り、なければ今までどおり Python のインタプリタで動かします(「pip で入れても速く動かす」)。`--翻訳` にも clang が要ります。
 
 ### 速いコンパイラ(Go 版)
 
@@ -1675,6 +1676,15 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build
 2. **ページの見出しも英語。** `suru --文書` は `Usage:` と `Examples:` を書き、`docs/conf.py` と `kumu 文書 --雛形` のサイトは `language = "en"` です。各ページの題はファイルの名前(`# 「算術」`)のままです。
 3. **試験で英語を保つ。** `tests/test_doc.py` は、`lib/` の説明の `…` と 「…」 の外にひらがながあるとき、公開の定義(字句・構文・点検 を除く)に説明がないときに落ちます。
 4. **場合ごとの定義も「…」。** 場合ごとに書いた関数(引数が `（を）` になるもの)の使い方は `… を 最大値にする` と書きます。
+
+### pip で入れても速く動かす
+
+1. **pip の wheel に `suruc` を入れる。** PyPI には純 Python の wheel のほかに、Linux(x86_64・aarch64、glibc と musl)・macOS(x86_64・arm64)・Windows(x64・arm64)ごとに `suruc`・`suru-ls`・`kumu` も入れた wheel があります(ruff や uv と同じ形)。pip は手元の機械に合うものを選び、3つのコマンドを `suru` と同じ場所に入れます。ほかの機械や Pyodide(Web の playground)は純 Python の wheel を使います。wheel は `packaging/platform_wheels.py` で作ります(`docs/リリース.md`)。
+2. **`suru prog.suru` はコンパイルして動かす。** `suru` の隣に `suruc` が入っていて、C コンパイラ(`$CC` か clang)があれば、`suru` はプログラムを `-O0` でキャッシュ(`~/.cache/suru/run`、`$XDG_CACHE_HOME/suru/run`)にコンパイルし、そのバイナリを動かします。キーは `suruc` の版・オプションと LLVM IR で、IR には読み込んだ全部のファイル(標準ライブラリや依存も)が入るので、どれかが変われば作り直します。2回目からはキャッシュのバイナリをすぐ動かします。30日使わなかったバイナリは消します。標準入出力・引数・終了コードはそのまま通り、`--json` では実行時のエラーも1行の JSON で出ます。
+3. **インタプリタのままのとき。** `--インタプリタ`(`--interpreter`)か `SURU_INTERPRETER=1` を付けると、今までどおり Python のインタプリタで動かします。対話モード、kumu のプロジェクトで `Cソース` か `リンク引数` を使うもの(`suruc` はつながないので `kumu 作る` を使います)、C コンパイラのない機械もインタプリタです。C コンパイラがないときは、clang の入れ方を1回だけ知らせます。リポジトリのまま `python3 suru.py` で動かすときは、いつもインタプリタです(`SURU_SURUC=道` で使う `suruc` を決められます)。
+4. **検査にも `suruc` を使う。** `suru --検査`・実行の前の検査・`suru --翻訳` は同梱の `suruc` を使います。エラーの文と JSON は Python 版と同じで(`tests/test_go_compiler.py`)、検査は約 0.15 秒から数ミリ秒になります。
+5. **`suruc --実行 prog.suru 引数 …`。** 同じ「コンパイルして動かす」を `suruc` からも使えます(ファイルの前に `--検査なし`・`--json`・`-O0`〜`-O3` を書けます。既定は `-O0`)。
+6. **どれくらい速いか。** Linux x86_64 で、fib(25) はインタプリタで 1.57 秒、1回目(コンパイル込み)0.15 秒、2回目から 0.08 秒です。20万個の数の写像と畳み込みは 1.43 秒・0.20 秒・0.09 秒です。0.08 秒のほとんどは Python の起動で、バイナリだけなら fib(25) は 0.005 秒です。コンパイルしたものの動きは同じで、違いは「コンパイラ」の節のとおりです(整数は ±2^62 まで、`大文字にする` は英字だけ、深い再帰も動く)。
 
 ## ライセンス
 
