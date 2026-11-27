@@ -1569,7 +1569,7 @@ suruc --試験 計算.suru 二倍       # the same with the Go compiler, only te
 
 ### Calling from other languages (shared libraries)
 
-Functions written in Suru can now be used from Python, C, C++, Go, Rust and any other language that can call the C calling convention. `suruc --共有ライブラリ` builds a shared library (.so, .dylib, .dll). The plan is #208, and this covers its stages 1 to 5.
+Functions written in Suru can now be used from Python, C, C++, Go, Rust and any other language that can call the C calling convention. `suruc --共有ライブラリ` builds a shared library (.so, .dylib, .dll). The plan is #208.
 
 ```suru
 数 を 二倍する は 数 を 返す
@@ -1610,6 +1610,7 @@ print(lib.nibai(21))   # 42
 12. **Other values are handles.** Records, functions, other lists (`整数 の リスト`, `点 の リスト` and so on) and any other type are passed as `keisan_value *`, a handle whose contents the caller doesn't see. A handle returned to the caller keeps the value alive (it is a GC root) until `keisan_release`. A handle passed as an argument is only borrowed. Helper functions read and build handles: `keisan_type` (the Suru type name), `keisan_show` (the text 表示する shows), `keisan_len` and `keisan_get` (a list's length and its i-th item, from 0), `keisan_field` (a record field by name), `keisan_to_int`, `keisan_to_double`, `keisan_to_bool` and `keisan_to_string`, `keisan_from_int`, `keisan_from_double`, `keisan_from_bool`, `keisan_from_string` and `keisan_list` (new handles), and `keisan_call` (call a function value with handles; an action result is carried out). They report errors through `keisan_last_error` like exported functions.
 13. **kumu builds shared libraries too.** With `種類 とは 「共有ライブラリ」` in 組.suru, `kumu 作る` writes `出力/libNAME.so` (`.dylib` on macOS, `.dll` and `.dll.a` on Windows) and `出力/NAME.h`, using the project's dependencies, Cソース and リンク引数, and skips the build when nothing changed. NAME is the project name, or `ライブラリ名 とは 「keisan」` when the name isn't letters, digits and `_`. `kumu 新規 NAME --共有ライブラリ` (`--shared`) creates such a project: the entry file `NAME.suru` exports two functions, and `試験/例.suru` tests them from Suru with `kumu 試験`. `kumu 実行` explains that a library can't be run.
 14. **Windows builds a .dll.** On Windows (MSYS2 UCRT64 with clang, the same as for executables), `suruc --共有ライブラリ 計算.suru -o libkeisan.dll` writes `libkeisan.dll`, the import library `libkeisan.dll.a` for linking (`clang main.c -L. -lkeisan`) and `keisan.h`. Only the exported and helper functions are in the DLL's export table. winpthreads is linked in, so the DLL needs only Windows' own DLLs. At run time Windows looks for the DLL next to the `.exe` or on `PATH`. A Suru executable links it with `外部の「./libkeisan.dll.a」 を 読み込む`. The shared library tests also run on Windows in CI. The example is `examples/export.suru`.
+15. **What's next.** The candidates for later (a generated Python wrapper, an option to run on a big stack, WebAssembly and so on) are in `docs/今後/共有ライブラリ.md`. How to write exported functions is also summarized in `docs/AIの手引き.md`.
 
 ### Descriptions of definitions
 

@@ -1563,7 +1563,7 @@ suruc --試験 計算.suru 二倍       # Go 版のコンパイラで同じこ�
 
 ### 他の言語から呼ぶ(共有ライブラリ)
 
-する で書いた関数を、Python・C・C++・Go・Rust など C の呼び出し規約で呼べる言語から使えるようにしました。`suruc --共有ライブラリ` で共有ライブラリ(.so・.dylib・.dll)を作ります。計画は #208 で、これはその段階1〜5です。
+する で書いた関数を、Python・C・C++・Go・Rust など C の呼び出し規約で呼べる言語から使えるようにしました。`suruc --共有ライブラリ` で共有ライブラリ(.so・.dylib・.dll)を作ります。計画は #208 です。
 
 ```suru
 数 を 二倍する は 数 を 返す
@@ -1604,6 +1604,7 @@ print(lib.nibai(21))   # 42
 12. **ほかの値は手札。** 組・関数・ほかのリスト(`整数 の リスト`・`点 の リスト` など)など、ほかの型の値は `keisan_value *`(中を見ない手札)で渡します。呼んだ側に返した手札は、`keisan_release` まで値を生かします(GC の根になります)。引数で渡した手札は借りるだけです。手札は補助の関数で読み書きします: `keisan_type`(する の型の名前)、`keisan_show`(表示する と同じ文字)、`keisan_len`・`keisan_get`(リストの長さと 0 から数えた i 番目)、`keisan_field`(名前で組の項目)、`keisan_to_int`・`keisan_to_double`・`keisan_to_bool`・`keisan_to_string`、`keisan_from_int`・`keisan_from_double`・`keisan_from_bool`・`keisan_from_string`・`keisan_list`(新しい手札)、`keisan_call`(関数の値を手札で呼ぶ。値が動作なら行う)。エラーは出す関数と同じく `keisan_last_error` で読めます。
 13. **kumu でも共有ライブラリを作れる。** 組.suru に `種類 とは 「共有ライブラリ」` と書くと、`kumu 作る` が `出力/lib名前.so`(macOS は `.dylib`、Windows は `.dll` と `.dll.a`)と `出力/名前.h` を作ります。プロジェクトの依存・Cソース・リンク引数も使い、何も変わっていなければ作り直しません。名前はプロジェクトの名前で、英字・数字・`_` だけでなければ `ライブラリ名 とは 「keisan」` と書きます。`kumu 新規 名前 --共有ライブラリ`(`--shared`)でこの形のプロジェクトを作ります。入口のファイル `名前.suru` が2つの関数を出し、`試験/例.suru` が する からそれを試します(`kumu 試験`)。`kumu 実行` は、ライブラリは実行できないと案内します。
 14. **Windows では .dll を作る。** Windows(実行ファイルと同じく MSYS2 UCRT64 の clang)では、`suruc --共有ライブラリ 計算.suru -o libkeisan.dll` が `libkeisan.dll` と、リンク用の import ライブラリ `libkeisan.dll.a`(`clang main.c -L. -lkeisan`)と `keisan.h` を作ります。DLL の出す名前の表には、出す関数と補助の関数だけを載せます。winpthreads は中に入れるので、DLL が要るのは Windows 自身の DLL だけです。実行するときは、`.exe` と同じフォルダか `PATH` から DLL を探します。する の実行ファイルからは `外部の「./libkeisan.dll.a」 を 読み込む` でリンクします。共有ライブラリの試験は CI の Windows でも動かします。例は `examples/export.suru` です。
+15. **これから。** 後の候補(Python の包みを作る、大きいスタックで動かす形、WebAssembly など)は `docs/今後/共有ライブラリ.md` にあります。出す関数の書き方は `docs/AIの手引き.md` にもまとめました。
 
 ### 定義の説明
 
