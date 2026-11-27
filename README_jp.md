@@ -1664,7 +1664,7 @@ python suru.py --文書 --出力 docs/api lib   # 標準ライブラリの API �
 pip install -r docs/requirements.txt && sphinx-build docs docs/_build
 ```
 
-1. **このリポジトリも Read the Docs で公開する。** `docs/conf.py`(Sphinx + MyST、`language = "en"`、furo)と `.readthedocs.yaml` があり、ビルドのたびに `python suru.py --文書 --出力 docs/api lib` で `lib/` の全部のファイルの API のページを作ります。kumu のプロジェクトと違って依存がないので、kumu は使いません(#209)。
+1. **このリポジトリも Read the Docs で公開する。** サイトは https://suru.readthedocs.io/en/latest/ です。`docs/conf.py`(Sphinx + MyST、`language = "en"`、furo)と `.readthedocs.yaml` があり、ビルドのたびに `python suru.py --文書 --出力 docs/api lib` で `lib/` の全部のファイルの API のページを作ります。kumu のプロジェクトと違って依存がないので、kumu は使いません(#209)。
 2. **載せるもの。** 標準ライブラリの API、組み込み関数(README.md の「Built-in functions」の表を取り込みます)、`docs/AIの手引き.md`、`docs/ライブラリを公開する.md` です。`docs/今後/` と `docs/リリース.md` は使う人向けではないので載せません。版は `suru.py` の `__version__` から読みます。
 3. **色付けは kumu の雛形と同じ。** `cmd/kumu/docs_template/suru_lexer.py` を使います。`suru-誤り` のコード(AI の手引きの、検査でエラーになる例)も同じ色付けです。
 4. **外部の関数の引数は「…」。** `以下は外部の…です` のまとまりの中の関数は引数に名前がないので、使い方は `… を 正弦にする` のように書きます。
