@@ -57,8 +57,8 @@ def test_library_files():
         src = path.read_text(encoding="utf-8")
         module, names = doc_comments(src, parse_program(src))
         if path.name == "通信.suru":
-            assert module.startswith("「する」の通信ライブラリ(TCP)")
-            assert names["UDP便"].startswith("受け取った便り。")
+            assert module.startswith("「する」の通信ライブラリです(TCP と UDP)。")
+            assert names["UDP便"].startswith("受け取った便りです。")
 
 
 # --- suru --文書(段階2) ---
@@ -69,7 +69,7 @@ import subprocess  # noqa: E402
 
 import pytest  # noqa: E402
 
-from suru import doc_markdown, document, private_names  # noqa: E402
+from suru import doc_markdown, document, document_file, private_names  # noqa: E402
 
 ROOT = LIB.parent
 
@@ -185,3 +185,25 @@ def test_docs_site_includes_readme_section():
     for marker in ("### 組み込み関数", "## 決めたこと"):
         assert f'"{marker}"' in page
         assert "\n" + marker in readme
+
+
+def test_usage_of_merged_cases():
+    """場合ごとに書いた定義(引数が「（を）」にまとまる)の使い方は「…」にする(#209 段階4b)"""
+    d = document_file(str(ROOT / "lib" / "標準.suru"))
+    usage = {it["name"]: it["usage"] for it in d["items"]}
+    assert usage["最大値にする"] == "… を 最大値にする"
+
+
+TOOL_LIBS = {"字句", "構文", "点検"}  # 道具の中身なので、定義ごとの説明はまだ書いていない
+
+
+def test_library_definitions_have_descriptions():
+    """lib/ の公開の定義には説明がある(字句・構文・点検 を除く)。新しく足したら説明も書きます"""
+    missing = []
+    for path in sorted((ROOT / "lib").glob("*.suru")):
+        if path.stem in TOOL_LIBS:
+            continue
+        d = document_file(str(path))
+        assert d["description"], path.name
+        missing += [f"{path.stem}内の{it['name']}" for it in d["items"] if not it["description"]]
+    assert missing == []
