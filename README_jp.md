@@ -94,7 +94,7 @@ x を 二倍する とは x * 2
   以上です
 ```
 
-ライブラリの公開の手順は [docs/ライブラリを公開する.md](docs/ライブラリを公開する.md) にあります。VS Code の拡張からも、コマンドパレットで kumu の命令を使えます。
+ライブラリの公開の手順は [docs/ライブラリを公開する.md](docs/ライブラリを公開する.md) にあります(英語版は [docs/publishing-a-library.md](docs/publishing-a-library.md))。VS Code の拡張からも、コマンドパレットで kumu の命令を使えます。
 
 プロジェクトの設定は `組.suru` に する の定義で書きます。
 
@@ -1664,8 +1664,8 @@ python suru.py --文書 --出力 docs/api lib   # 標準ライブラリの API �
 pip install -r docs/requirements.txt && sphinx-build docs docs/_build
 ```
 
-1. **このリポジトリも Read the Docs で公開する。** `docs/conf.py`(Sphinx + MyST、`language = "en"`、furo)と `.readthedocs.yaml` があり、ビルドのたびに `python suru.py --文書 --出力 docs/api lib` で `lib/` の全部のファイルの API のページを作ります。kumu のプロジェクトと違って依存がないので、kumu は使いません(#209)。
-2. **載せるもの。** 標準ライブラリの API、組み込み関数(README.md の「Built-in functions」の表を取り込みます)、`docs/AIの手引き.md`、`docs/ライブラリを公開する.md` です。`docs/今後/` と `docs/リリース.md` は使う人向けではないので載せません。版は `suru.py` の `__version__` から読みます。
+1. **このリポジトリも Read the Docs で公開する。** サイトは https://suru.readthedocs.io/en/latest/ です。`docs/conf.py`(Sphinx + MyST、`language = "en"`、furo)と `.readthedocs.yaml` があり、ビルドのたびに `python suru.py --文書 --出力 docs/api lib` で `lib/` の全部のファイルの API のページを作ります。kumu のプロジェクトと違って依存がないので、kumu は使いません(#209)。
+2. **載せるもの。** 標準ライブラリの API、組み込み関数(README.md の「Built-in functions」の表を取り込みます)、`docs/AIの手引き.md`(日本語のまま)、`docs/publishing-a-library.md`(`docs/ライブラリを公開する.md` の英語版)です。`docs/今後/` と `docs/リリース.md` は使う人向けではないので載せず、日本語の `docs/ライブラリを公開する.md` も載せません。版は `suru.py` の `__version__` から読みます。
 3. **色付けは kumu の雛形と同じ。** `cmd/kumu/docs_template/suru_lexer.py` を使います。`suru-誤り` のコード(AI の手引きの、検査でエラーになる例)も同じ色付けです。
 4. **外部の関数の引数は「…」。** `以下は外部の…です` のまとまりの中の関数は引数に名前がないので、使い方は `… を 正弦にする` のように書きます。
 

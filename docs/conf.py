@@ -22,7 +22,7 @@ extensions = ["myst_parser"]
 source_suffix = {".md": "markdown"}
 myst_heading_anchors = 3
 # Future candidates and the release steps are not pages for users
-exclude_patterns = ["_build", "今後", "リリース.md", "conf.py"]
+exclude_patterns = ["_build", "今後", "リリース.md", "ライブラリを公開する.md", "conf.py"]
 html_theme = "furo"
 html_title = f"「する」 {release}"
 highlight_language = "suru"
