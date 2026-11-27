@@ -218,6 +218,8 @@ KW_IKA_EXT_IO = "以下は外部の入出力動作"
 KW_IKA_EXT = "以下は外部の関数"
 KW_IKA_EXT_IO_NO = "以下の外部の入出力動作"
 KW_IKA_EXT_NO = "以下の外部の関数"
+# 他の言語に出す関数のまとまり: 「以下は外部に出す関数です」+ 1行に1つ「二倍する は 「nibai」」+ 「以上です」(#208)
+KW_IKA_EXPORT = "以下は外部に出す関数"
 EXT_IO_WORDS = (KW_IKA_EXT_IO, KW_IKA_EXT_IO_NO)
 EXT_BLOCK_WORDS = (KW_IKA_EXT_IO, KW_IKA_EXT, KW_IKA_EXT_IO_NO, KW_IKA_EXT_NO)
 # 同じファイルの試験(#193): 「以下は「二倍」の試験です」+ 手順の文 + 「以上です」。通常の実行とビルドでは捨てる
@@ -245,7 +247,7 @@ KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
     KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA, DESU, KW_HENSU, KW_HENSU_POLITE,
     KW_IMPORT, KW_IMPORT_POLITE, KW_IMPORT_TE, KW_USE, KW_USE_POLITE, KW_IJOU, KW_IKA, KW_IKA_IO,
-    KW_IKA_EXT_IO, KW_IKA_EXT, KW_IKA_EXT_IO_NO, KW_IKA_EXT_NO,
+    KW_IKA_EXT_IO, KW_IKA_EXT, KW_IKA_EXT_IO_NO, KW_IKA_EXT_NO, KW_IKA_EXPORT,
 }
 KANJI_KEYWORDS = {KW_KUMI, KW_SEISHITSU, KW_IJOU}
 CONTINUATION_KEYWORDS = {KW_THEN, KW_ELSE}
@@ -490,9 +492,21 @@ def join_ika(tokens: list[Token]) -> list[Token]:
             out.append(Token("KW", test_head(tokens[i + 2].value), t.line))
             i += 5
             continue
-        if t.kind == "WORD" and not t.quoted and (t.value in IKA_WORDS or t.value in EXT_BLOCK_WORDS):
+        if t.kind == "WORD" and not t.quoted and (t.value in IKA_WORDS or t.value in EXT_BLOCK_WORDS or t.value == KW_IKA_EXPORT):
             out.append(Token("KW", t.value, t.line))
             i += 1
+            continue
+        # 「以下 は 外部 に 出す 関数」「以下 は 外部に出す関数」(#208)
+        if (t.kind == "WORD" and not t.quoted and t.value == "以下" and i + 2 < len(tokens) and is_kw(tokens[i + 1], KW_WA)
+                and _plain_word(tokens[i + 2], "外部に出す関数")):
+            out.append(Token("KW", KW_IKA_EXPORT, t.line))
+            i += 3
+            continue
+        if (t.kind == "WORD" and not t.quoted and t.value == "以下" and i + 5 < len(tokens) and is_kw(tokens[i + 1], KW_WA)
+                and _plain_word(tokens[i + 2], "外部") and tokens[i + 3].kind == "PART" and tokens[i + 3].value == "に"
+                and _plain_word(tokens[i + 4], "出す") and _plain_word(tokens[i + 5], "関数")):
+            out.append(Token("KW", KW_IKA_EXPORT, t.line))
+            i += 6
             continue
         if (t.kind == "WORD" and not t.quoted and t.value == "以下" and i + 4 < len(tokens)
                 and (is_kw(tokens[i + 1], KW_NO) or is_kw(tokens[i + 1], KW_WA))
@@ -511,6 +525,10 @@ def join_ika(tokens: list[Token]) -> list[Token]:
         out.append(t)
         i += 1
     return out
+
+
+def _plain_word(t: Token, s: str) -> bool:
+    return t.kind == "WORD" and not t.quoted and t.value == s
 
 
 def drop_desu(tokens: list[Token]) -> list[Token]:
@@ -560,7 +578,9 @@ def _find_name_close(text: str, i: int, line: int) -> int:
 
 OPERATOR_CHARS = {c for op in OPERATORS for c in unicodedata.normalize("NFKC", op)} | set(OPERATORS)
 # 漢字とひらがなが混ざった決まった言葉(名前の切り出しより先に照合する)
-MIXED_WORDS = ("受け取って", "返すこと", KW_HENSU_POLITE, KW_HENSU, "長さ", "残り", KW_IMPORT_POLITE, KW_IMPORT, KW_IMPORT_TE, KW_USE_POLITE, KW_USE)
+# 「外部に出す関数」は句読点の書き方の「以下は外部に出す関数です。」(#208)
+MIXED_WORDS = ("受け取って", "返すこと", KW_HENSU_POLITE, KW_HENSU, "長さ", "残り", KW_IMPORT_POLITE, KW_IMPORT, KW_IMPORT_TE, KW_USE_POLITE, KW_USE,
+               "外部に出す関数")
 # ひらがなを含む組み込み関数の名前(「する」の前の部分)。名前として切り出す
 MIXED_NAMES = ("畳み込み",)
 # ひらがなの並びを分けるときの辞書。長いものから順に照合する
@@ -1404,6 +1424,19 @@ class Extern:
 
 
 @dataclass
+class Export:
+    """「以下は外部に出す関数です」の中の1行「二倍する は 「nibai」」: 関数を他の言語から呼べる C の関数として出す(#208)。
+    params は定義の引数の順に C の型(FFI_TYPES の値)、result は値の C の型(void も)、action は値が動作か(_attach_exports が入れる)"""
+
+    name: str
+    symbol: str
+    line: int
+    params: list = field(default_factory=list)
+    result: str = ""
+    action: bool = False
+
+
+@dataclass
 class Visibility:
     """「確保する と 解放する は 非公開とする」: 読み込んだ側から見えるか"""
 
@@ -1415,7 +1448,7 @@ class Visibility:
 VIS_PUBLIC = "公開とする"
 VIS_PRIVATE = "非公開とする"
 
-TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import, ExternLib, Visibility)
+TOP_LEVEL_ONLY = (TypeDef, TraitDecl, TraitImpl, TypeSig, Import, ExternLib, Visibility, Export)
 TYPE_VAR_NAMES = "甲乙丙丁戊己庚辛壬癸"
 # 小数・整数・単精度は数の別名(外部の関数の宣言で C の double・int・float を表す)。番地は C のポインタ
 # 無は外部の関数の値がないこと(C の void。する では 0)。バイト列は変更できないバイトの並び
@@ -1796,13 +1829,69 @@ def _extern_block_line(ln: Line, word: str) -> list[Line]:
     return [Line(0, sig, ln.number, ln.closed), Line(0, define, ln.number, ln.closed)]
 
 
+# 「以下は外部に出す関数です」の中の1行を直した文の頭の印(書けない字を含むので、書いたものとはぶつからない)
+KW_EXPORT_MARK = "\x00外部に出す"
+EXPORT_LINE_HELP = "1行に1つ、「二倍する は 「nibai」」のように、このファイルの関数の名前と C の名前を書きます"
+
+
+def opens_export_block(ln: Line) -> bool:
+    """「以下は外部に出す関数です」だけの行か(#208)"""
+    toks = nosep(ln.tokens)
+    return len(toks) == 1 and is_kw(toks[0], KW_IKA_EXPORT)
+
+
+def _export_block(lines: list[Line], i: int) -> tuple[list[Line], int]:
+    """「以下は外部に出す関数です」から「以上です」までを、1行ずつ「印 名前 「C の名前」」の文にする(#208)。
+    i は頭の行の位置。直した行と、「以上」の次の位置を返す(Go 版の exportBlock と同じ)"""
+    ln = lines[i]
+    word = KW_IKA_EXPORT
+    if ln.indent:
+        raise SuruError(f"「{word}です」は一番外(字下げなし)に書きます", ln.number)
+    i += 1
+    out: list[Line] = []
+    names: dict[str, int] = {}
+    syms: dict[str, int] = {}
+    deep = i < len(lines) and lines[i].indent > 0
+    while i < len(lines) and not is_ijou(lines[i]):
+        b = lines[i]
+        if deep and b.indent == 0:
+            break
+        ts = nosep(b.tokens)
+        if ts and ts[-1].kind == "PERIOD":
+            ts = ts[:-1]
+        if len(ts) != 3 or not is_kw(ts[1], KW_WA) or ts[2].kind != "STR":
+            raise SuruError(f"「{word}です」の中には、{EXPORT_LINE_HELP}", b.number)
+        if ts[0].kind != "CALL":
+            raise SuruError(f"「{ts[0].value}」は関数ではないので、外部に出せません(出せるのは「…する」の関数です)", ts[0].line)
+        name, sym = ts[0].value, ts[2].value
+        if name in names:
+            raise SuruError(f"「{name}」がまとまりの中で2回書かれています({names[name]}行目と{b.number}行目)", b.number)
+        if sym in syms:
+            raise SuruError(f"C の名前「{sym}」がまとまりの中で2回書かれています({syms[sym]}行目と{b.number}行目)", b.number)
+        names[name] = b.number
+        syms[sym] = b.number
+        out.append(Line(0, [Token("KW", KW_EXPORT_MARK, ts[0].line), ts[0], ts[2]], b.number, b.closed))
+        i += 1
+    if i >= len(lines) or not is_ijou(lines[i]):
+        raise SuruError(f"「{word}です」を閉じる「{KW_IJOU}」がありません(最後の関数の行の後に「{KW_IJOU}」だけの行を書きます)",
+                        ln.number)
+    if not out:
+        raise SuruError(f"「{word}です」と「{KW_IJOU}」の間に関数がありません", ln.number)
+    return out, i + 1
+
+
 def expand_externs(lines: list[Line]) -> list[Line]:
-    """外部の関数の1行の書き方とまとまりを、型の宣言と定義の2行ずつにする(一番外だけ)"""
+    """外部の関数の1行の書き方とまとまりを、型の宣言と定義の2行ずつにする(一番外だけ)。
+    他の言語に出す関数のまとまり(#208)は、1行ずつの文にする"""
     out: list[Line] = []
     i = 0
     while i < len(lines):
         ln = lines[i]
         toks = nosep(ln.tokens)
+        if opens_export_block(ln):
+            got, i = _export_block(lines, i)
+            out.extend(got)
+            continue
         if opens_ext_block(ln):
             word = toks[0].value
             if ln.indent:
@@ -2861,6 +2950,8 @@ def parse_statement(node: Node) -> Any:
     vis = try_parse_visibility(nosep(flatten(node)))
     if vis is not None:
         return vis
+    if is_kw(tokens[0], KW_EXPORT_MARK):
+        return Export(tokens[1].value, tokens[2].value, tokens[0].line)
     typedef = try_parse_typedef(node)
     if typedef is not None:
         return typedef
@@ -3515,6 +3606,7 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         name_examples(statements)
         _check_open_imports(statements)
         _attach_externs(statements)
+        _attach_exports(statements)
         statements = attach_provisos(statements)
         body = [s for s in statements if not isinstance(s, (Import, ExternLib))]
         name_unwraps(body)
@@ -4066,6 +4158,58 @@ def _attach_externs(statements: list) -> None:
         if ext.symbol in seen:
             raise SuruError(f"外部の関数「{ext.symbol}」が2回定義されています(「{seen[ext.symbol]}」と「{d.name}」)", d.line)
         seen[ext.symbol] = d.name
+
+
+# 外部に出す C の名前に使えない頭(実行時ライブラリと IR の名前)
+EXPORT_RESERVED = ("rt_", "suru_", "gc_")
+# 外部に出す関数の引数と値に使える型(書く順。無は値だけ)
+EXPORT_TYPE_NAMES = ("数", "小数", "単精度", "整数", "真偽", "文字列", "番地", "無")
+
+
+def _export_type(te: Any, e: Export, what: str) -> str:
+    names = EXPORT_TYPE_NAMES if what == "値" else EXPORT_TYPE_NAMES[:-1]
+    if isinstance(te, TypeName) and not te.args and te.name in names:
+        return FFI_TYPES[te.name]
+    raise SuruError(f"外部に出す関数「{e.name}」の{what}には {'・'.join(names)} のどれかの型を書いてください", e.line)
+
+
+def _attach_exports(statements: list) -> None:
+    """「以下は外部に出す関数です」の行に、同じファイルの型の宣言から C の型を付ける(#208、Go 版の attachExports と同じ)"""
+    sigs = {s.name: s for s in statements if isinstance(s, TypeSig)}
+    defs = {s.name: s for s in statements if isinstance(s, Define)}
+    externs = {s.body.symbol for s in statements if isinstance(s, Define) and isinstance(s.body, Extern)}
+    for e in statements:
+        if not isinstance(e, Export):
+            continue
+        sym = e.symbol
+        if not sym.isascii() or not (sym[:1].isalpha() or sym[:1] == "_") or not all(c.isalnum() or c == "_" for c in sym):
+            raise SuruError(f"「{sym}」は C の名前にできません(英字か「_」で始まり、英字・数字・「_」だけで書きます)", e.line)
+        for r in EXPORT_RESERVED:
+            if sym.startswith(r):
+                raise SuruError(f"C の名前「{sym}」は「{r}」で始まるので使えません(実行時ライブラリの名前とぶつかります)", e.line)
+        if sym == "main":
+            raise SuruError("C の名前「main」は使えません", e.line)
+        if sym in externs:
+            raise SuruError(f"C の名前「{sym}」は、このファイルで読み込む外部の関数と同じです", e.line)
+        d = defs.get(e.name)
+        if d is None:
+            raise SuruError(f"「{e.name}」はこのファイルで定義していないので、外部に出せません", e.line)
+        if isinstance(d.body, Extern):
+            raise SuruError(f"「{e.name}」は外部の関数なので、外部に出せません", e.line)
+        sig = sigs.get(e.name)
+        if not d.is_function or sig is None or sig.params is None:
+            raise SuruError(f"外部に出す関数「{e.name}」には型の宣言が必要です(「数 を 二倍する は 数 を 返す」のように書きます)", e.line)
+        types = dict(sig.params)
+        e.params = []
+        for p, pat in d.params:
+            if not isinstance(pat, str):
+                raise SuruError(f"外部に出す関数「{e.name}」の引数は名前だけで書いてください", e.line)
+            e.params.append(_export_type(types.get(p), e, f"「{p}」"))
+        result = sig.result
+        if isinstance(result, TypeName) and result.name == "動作":
+            e.action = True
+            result = result.args[0]
+        e.result = _export_type(result, e, "値")
 
 
 PROJECT_CONFIG = "組" + SOURCE_SUFFIX  # プロジェクトの設定(kumu)
@@ -7915,7 +8059,7 @@ def _ika_open(lines: list[Line]) -> bool:
         if is_ijou(ln):
             if stack:
                 stack.pop()
-        elif opens_ika(ln) or opens_ext_block(ln):
+        elif opens_ika(ln) or opens_ext_block(ln) or opens_export_block(ln):
             stack.append(("手順", ln.indent))
         elif opens_case(ln):
             stack.append(("場合", ln.indent))

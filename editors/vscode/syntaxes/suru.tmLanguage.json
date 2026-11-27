@@ -206,6 +206,10 @@
         },
         {
           "name": "keyword.control.suru",
+          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])以下[ 　]*は[ 　]*外部[ 　]*に[ 　]*出す[ 　]*関数"
+        },
+        {
+          "name": "keyword.control.suru",
           "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])以下[ 　]*の[ 　]*(?:入出力)?手順"
         },
         {

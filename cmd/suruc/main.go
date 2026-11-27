@@ -10,6 +10,7 @@
 //	suruc --検査 prog.suru      # 構文と型だけを調べる(suru --検査 と同じ)
 //	suruc --json prog.suru     # エラーを1行の JSON で出す(suru --json と同じ形)
 //	suruc --展開 prog.suru     # 準クォートを展開したソースを出す
+//	suruc --共有ライブラリ prog.suru -o libprog.so  # 他の言語から呼べる共有ライブラリ(#208)
 package main
 
 import (
@@ -30,7 +31,7 @@ import (
 // version はリリースのときに -ldflags "-X main.version=…" で書きかえる
 var version = "0.10.1"
 
-const usage = "使い方: suruc [--ll] [--検査 | --検査なし | --展開] [--json] [-O0|-O1|-O2|-O3] [--対象 基板] プログラム.suru [-o 出力]\n" +
+const usage = "使い方: suruc [--ll] [--検査 | --検査なし | --展開] [--共有ライブラリ] [--json] [-O0|-O1|-O2|-O3] [--対象 基板] プログラム.suru [-o 出力]\n" +
 	"       suruc --試験 [-O0|-O1|-O2|-O3] ファイルかフォルダ … [名前 …]"
 
 // runTests は「suruc --試験 ファイルかフォルダ … [名前 …]」(#193): 試験のまとまり・例・「…試験する」を、
@@ -98,6 +99,7 @@ func run(args []string) int {
 	opt := "-O2"
 	out := ""
 	target := ""
+	shared := false
 	var files []string
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -110,6 +112,8 @@ func run(args []string) int {
 			checkOnly = true
 		case a == "--json" || a == "--JSON":
 			asJSON = true
+		case a == "--共有ライブラリ" || a == "--shared":
+			shared = true
 		case a == "--展開" || a == "--expand":
 			expandOnly = true
 		case a == "-O0" || a == "-O1" || a == "-O2" || a == "-O3" || a == "-Os":
@@ -175,7 +179,11 @@ func run(args []string) int {
 	if target != "" {
 		return buildMCU(source, abs, stem, out, target, llOnly)
 	}
-	ir, serr := compiler.CompileSource(source, baseDir, abs, check)
+	compile := compiler.CompileSource
+	if shared {
+		compile = compiler.CompileLibrary
+	}
+	ir, serr := compile(source, baseDir, abs, check)
 	if serr != nil {
 		return report(serr)
 	}
@@ -186,6 +194,17 @@ func run(args []string) int {
 	if err := os.WriteFile(llPath, []byte(ir), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
+	}
+	if !llOnly && shared {
+		if out == "" {
+			out = filepath.Join(filepath.Dir(stem), "lib"+filepath.Base(stem))
+		}
+		if _, err := native.BuildShared(llPath, out, opt); err != nil {
+			fmt.Fprintln(os.Stderr, "エラー: "+err.Error())
+			return 1
+		}
+		os.Remove(llPath)
+		return 0
 	}
 	if !llOnly {
 		if out == "" {

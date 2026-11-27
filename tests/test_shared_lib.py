@@ -1,0 +1,377 @@
+"""他の言語から呼べる共有ライブラリ(「以下は外部に出す関数です」と suruc --共有ライブラリ、#208)のテスト
+
+Python 版(suru_compile.py)と Go 版(cmd/suruc)で作った共有ライブラリを、Python の ctypes と C から呼ぶ。
+clang がなければ作るテストは飛ばす(Go 版は go がなければ飛ばす)。
+"""
+
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+
+import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+import suru  # noqa: E402
+import suru_compile  # noqa: E402
+from suru import SuruError  # noqa: E402
+
+needs_clang = pytest.mark.skipif(suru_compile.find_cc() is None, reason="clang がありません")
+linux_or_mac = pytest.mark.skipif(sys.platform == "win32", reason="Windows の共有ライブラリはまだ作れません")
+
+LIB = """数 を 二倍する は 数 を 返す
+x を 二倍する とは x * 2 です
+
+数 を 数 から 引き算する は 数 を 返す
+a を b から 引き算する とは b - a です
+
+文字列 を 挨拶文にする は 文字列 を 返す
+名前 を 挨拶文にする とは 「こんにちは、」 + 名前 + 「さん」 です
+
+小数 を 半分にする は 小数 を 返す
+x を 半分にする とは x / 2 です
+
+単精度 を 単精度半分にする は 単精度 を 返す
+x を 単精度半分にする とは x / 2 です
+
+整数 を 整数二倍する は 整数 を 返す
+x を 整数二倍する とは x * 2 です
+
+数 を 正であるか判定する は 真偽 を 返す
+x を 正であるか判定する とは x > 0 です
+
+真偽 を 反転する は 真偽 を 返す
+b を 反転する とは もし b ならば 偽 そうでなければ 真 です
+
+番地 を 番地素通しする は 番地 を 返す
+p を 番地素通しする とは p です
+
+文字列 を 記録する は 無 を 返す 入出力動作
+文 を 記録する とは 文 を 表示する です
+
+数 を 零割りする は 数 を 返す
+x を 零割りする とは x / 0 です
+
+答えする は 数 を 返す
+答えする とは 42 です
+
+番地 を 数 で 適用する は 数 を 返す 入出力動作
+f を x で 適用する とは f を x で 呼出する です
+
+f を x で 呼出する とは 外部の（f） で 番地 を 数 で 受け取って 数 を 返す 入出力動作です
+
+以下は外部に出す関数です
+  二倍する は 「nibai」
+  引き算する は 「hikizan」
+  挨拶文にする は 「aisatsu」
+  半分にする は 「hanbun」
+  単精度半分にする は 「hanbun_f」
+  整数二倍する は 「nibai_i」
+  正であるか判定する は 「sei」
+  反転する は 「hanten」
+  番地素通しする は 「sudoushi」
+  記録する は 「kiroku」
+  零割りする は 「zerowari」
+  答えする は 「kotae」
+  適用する は 「tekiyou」
+以上です
+"""
+
+CALLER = r"""
+import ctypes, sys, threading
+lib = ctypes.CDLL(sys.argv[1])
+L, D, F, I, P, S = ctypes.c_int64, ctypes.c_double, ctypes.c_float, ctypes.c_int, ctypes.c_void_p, ctypes.c_char_p
+def sig(name, args, res):
+    f = getattr(lib, name); f.argtypes = args; f.restype = res; return f
+nibai = sig("nibai", [L], L)
+hikizan = sig("hikizan", [L, L], L)
+aisatsu = sig("aisatsu", [S], P)
+hanbun = sig("hanbun", [D], D)
+hanbun_f = sig("hanbun_f", [F], F)
+nibai_i = sig("nibai_i", [I], I)
+sei = sig("sei", [L], I)
+hanten = sig("hanten", [I], I)
+sudoushi = sig("sudoushi", [P], P)
+kiroku = sig("kiroku", [S], None)
+zerowari = sig("zerowari", [L], L)
+kotae = sig("kotae", [], L)
+last_error = sig("keisan_last_error", [], S)
+free = sig("keisan_free", [P], None)
+init = sig("keisan_init", [], I)
+print(init(), nibai(21), hikizan(3, 10), hanbun(5.0), hanbun_f(3.0), nibai_i(-4), sei(5), sei(-1), hanten(1), hanten(0), kotae())
+print(sudoushi(12345))
+p = aisatsu("花子".encode()); print(ctypes.string_at(p).decode()); free(p)
+p = aisatsu(None); print(ctypes.string_at(p).decode()); free(p)
+sys.stdout.flush()
+kiroku("記録です".encode())
+print(zerowari(1), last_error().decode())
+print(nibai(2), last_error())
+print(nibai(1 << 62), last_error().decode())
+CB = ctypes.CFUNCTYPE(L, L)
+cb = CB(lambda x: nibai(x) + 1)
+print(sig("tekiyou", [CB, L], L)(cb, 5))
+def work():
+    for i in range(int(sys.argv[2])):
+        p = aisatsu(("x" * (i % 40)).encode()); s = ctypes.string_at(p); free(p)
+        assert s.decode() == "こんにちは、" + "x" * (i % 40) + "さん", s
+        assert nibai(i) == 2 * i
+ts = [threading.Thread(target=work) for _ in range(6)]
+[t.start() for t in ts]
+[t.join() for t in ts]
+print("スレッドも大丈夫")
+"""
+
+EXPECTED = """0 42 7 2.5 1.5 -8 1 0 0 1 42
+12345
+こんにちは、花子さん
+こんにちは、さん
+記録です
+0 32行目 16文字目: 0 で割ることはできません
+4 None
+0 43行目 3文字目: 「二倍する」に渡した数 4611686018427387904 が大きすぎます(数は ±4611686018427387903 までです)
+11
+スレッドも大丈夫
+"""
+
+HOST_C = r"""
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+int64_t nibai(int64_t); int64_t tekiyou(int64_t (*)(int64_t), int64_t); int64_t zerowari(int64_t);
+const char *keisan_last_error(void);
+static int64_t cb(int64_t x) { return nibai(x) + 1; }
+static void *run(void *a) {
+    (void)a;
+    for (int i = 0; i < 3000; i++)
+        if (tekiyou(cb, i) != 2 * i + 1) printf("違います\n");
+    return 0;
+}
+int main(void) {
+    pthread_t t[4];
+    for (int i = 0; i < 4; i++) pthread_create(&t[i], 0, run, 0);
+    for (int i = 0; i < 4; i++) pthread_join(t[i], 0);
+    printf("%lld %lld\n", (long long)tekiyou(cb, 5), (long long)zerowari(3));
+    printf("%s\n", keisan_last_error());
+    return 0;
+}
+"""
+
+
+@pytest.fixture(scope="module")
+def suruc(tmp_path_factory):
+    if shutil.which("go") is None:
+        pytest.skip("go がありません")
+    exe = tmp_path_factory.mktemp("go") / "suruc"
+    subprocess.run(["go", "build", "-o", str(exe), "./cmd/suruc"], cwd=ROOT, check=True)
+    return exe
+
+
+def build_py(src: pathlib.Path, out: pathlib.Path) -> subprocess.CompletedProcess:
+    return subprocess.run([sys.executable, str(ROOT / "suru.py"), "--翻訳", "--共有ライブラリ", str(src), "-o", str(out)],
+                          capture_output=True, text=True)
+
+
+def build_go(suruc: pathlib.Path, src: pathlib.Path, out: pathlib.Path) -> subprocess.CompletedProcess:
+    return subprocess.run([str(suruc), "--共有ライブラリ", str(src), "-o", str(out)], capture_output=True, text=True)
+
+
+def run_caller(lib: pathlib.Path, n: int = 2000, env: dict | None = None) -> str:
+    r = subprocess.run([sys.executable, "-c", CALLER, str(lib), str(n)], capture_output=True, text=True, timeout=600,
+                       env={**os.environ, **(env or {})})
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def parse_error(source: str) -> str:
+    with pytest.raises(SuruError) as e:
+        suru.parse_program(source, suru.ParseContext())
+    return str(e.value)
+
+
+# --- 書き方と型の検査 ---
+
+def test_インタプリタは出す関数のまとまりを読み飛ばす():
+    out: list[str] = []
+    it = suru.Interpreter(out=lambda s: out.append(s))
+    it.run("数 を 二倍する は 数\nx を 二倍する とは x * 2\n以下は外部に出す関数です\n  二倍する は 「nibai」\n以上です\n"
+           "（3 を 二倍する） を 表示する\n")
+    assert out == ["6"]
+
+
+def test_句読点と空白の書き方でも読める():
+    for src in ("数を二倍するは、数を返す。\nxを二倍するとは、x*2です。\n以下は外部に出す関数です。\n二倍するは、「nibai」。\n以上です。\n",
+                "数 を 二倍する は 数\nx を 二倍する とは x * 2\n以下 は 外部 に 出す 関数 です\n  二倍する は 「nibai」\n以上\n"):
+        prog = suru.parse_program(src, suru.ParseContext())
+        e = [s for s in prog if isinstance(s, suru.Export)]
+        assert [(x.name, x.symbol, x.params, x.result) for x in e] == [("二倍する", "nibai", ["i64"], "i64")]
+
+
+def test_型の宣言から_C_の型を決める():
+    prog = suru.parse_program(LIB, suru.ParseContext())
+    got = {x.symbol: (x.params, x.result, x.action) for x in prog if isinstance(x, suru.Export)}
+    assert got["hikizan"] == (["i64", "i64"], "i64", False)
+    assert got["aisatsu"] == (["str"], "str", False)
+    assert got["hanbun_f"] == (["f32"], "f32", False)
+    assert got["sei"] == (["i64"], "bool", False)
+    assert got["kiroku"] == (["str"], "void", True)
+    assert got["kotae"] == ([], "i64", False)
+    assert got["tekiyou"] == (["ptr", "i64"], "i64", True)
+
+
+HEAD = "数 を 二倍する は 数\nx を 二倍する とは x * 2\n"
+
+
+@pytest.mark.parametrize("body, message", [
+    ("  三倍する は 「a」\n", "「三倍する」はこのファイルで定義していないので、外部に出せません"),
+    ("  二倍する は 「2bai」\n", "「2bai」は C の名前にできません"),
+    ("  二倍する は 「二倍」\n", "「二倍」は C の名前にできません"),
+    ("  二倍する は 「rt_x」\n", "C の名前「rt_x」は「rt_」で始まるので使えません"),
+    ("  二倍する は 「suru_main」\n", "C の名前「suru_main」は「suru_」で始まるので使えません"),
+    ("  二倍する は 「main」\n", "C の名前「main」は使えません"),
+    ("  二倍する は 「a」\n  二倍する は 「b」\n", "「二倍する」がまとまりの中で2回書かれています"),
+    ("  二倍する は 「a」\n  三倍する は 「a」\n", "C の名前「a」がまとまりの中で2回書かれています"),
+    ("  二倍する\n", "「以下は外部に出す関数です」の中には、1行に1つ"),
+    ("  税率 は 「a」\n", "「税率」は関数ではないので、外部に出せません"),
+])
+def test_まとまりの間違い(body, message):
+    assert message in parse_error(HEAD + "以下は外部に出す関数です\n" + body + "以上です\n")
+
+
+@pytest.mark.parametrize("source, message", [
+    ("x を 三倍する とは x * 3\n以下は外部に出す関数です\n  三倍する は 「a」\n以上です\n",
+     "外部に出す関数「三倍する」には型の宣言が必要です"),
+    ("数 の リスト を 合計する は 数\nxs を 合計する とは xs の 先頭\n以下は外部に出す関数です\n  合計する は 「a」\n以上です\n",
+     "外部に出す関数「合計する」の「を」には 数・小数・単精度・整数・真偽・文字列・番地 のどれかの型を書いてください"),
+    ("数 を 対にする は 数 の リスト\nx を 対にする とは x と x\n以下は外部に出す関数です\n  対にする は 「a」\n以上です\n",
+     "外部に出す関数「対にする」の値には 数・小数・単精度・整数・真偽・文字列・番地・無 のどれかの型を書いてください"),
+    ("文字列 を 長さ計測する は 数\ns を 長さ計測する とは 外部の「strlen」\n以下は外部に出す関数です\n  長さ計測する は 「a」\n以上です\n",
+     "「長さ計測する」は外部の関数なので、外部に出せません"),
+    ("文字列 を 長さ計測する は 数\ns を 長さ計測する とは 外部の「strlen」\n" + HEAD
+     + "以下は外部に出す関数です\n  二倍する は 「strlen」\n以上です\n",
+     "C の名前「strlen」は、このファイルで読み込む外部の関数と同じです"),
+    (HEAD + "以下は外部に出す関数です\n  二倍する は 「a」\n", "「以下は外部に出す関数です」を閉じる「以上」がありません"),
+    (HEAD + "以下は外部に出す関数です\n以上です\n", "「以下は外部に出す関数です」と「以上」の間に関数がありません"),
+])
+def test_出せない関数(source, message):
+    assert message in parse_error(source)
+
+
+def test_実行ファイルでは出す関数があっても動く(tmp_path):
+    if suru_compile.find_cc() is None:
+        pytest.skip("clang がありません")
+    src = tmp_path / "prog.suru"
+    src.write_text(HEAD + "以下は外部に出す関数です\n  二倍する は 「nibai」\n以上です\n（4 を 二倍する） を 表示する\n", encoding="utf-8")
+    exe = tmp_path / "prog"
+    subprocess.run([sys.executable, str(ROOT / "suru.py"), "--翻訳", str(src), "-o", str(exe)], check=True)
+    assert subprocess.run([str(exe)], capture_output=True, text=True).stdout == "8\n"
+
+
+# --- 共有ライブラリを作る ---
+
+@needs_clang
+@linux_or_mac
+def test_一番外の文は共有ライブラリにできない(tmp_path):
+    src = tmp_path / "keisan.suru"
+    src.write_text(HEAD + "「やあ」 を 表示する\n以下は外部に出す関数です\n  二倍する は 「nibai」\n以上です\n", encoding="utf-8")
+    r = build_py(src, tmp_path / "libkeisan.so")
+    assert r.returncode == 1
+    assert "共有ライブラリにするファイルの一番外には、定義だけを書きます" in r.stderr
+
+
+@needs_clang
+@linux_or_mac
+def test_出す関数がなければ共有ライブラリにできない(tmp_path):
+    src = tmp_path / "keisan.suru"
+    src.write_text(HEAD, encoding="utf-8")
+    r = build_py(src, tmp_path / "libkeisan.so")
+    assert r.returncode == 1
+    assert "共有ライブラリにするには、「以下は外部に出す関数です」で外部に出す関数を書きます" in r.stderr
+
+
+@needs_clang
+@linux_or_mac
+def test_ライブラリの名前は_C_の名前にする(tmp_path):
+    src = tmp_path / "keisan.suru"
+    src.write_text(HEAD + "以下は外部に出す関数です\n  二倍する は 「nibai」\n以上です\n", encoding="utf-8")
+    r = build_py(src, tmp_path / "lib計算.so")
+    assert r.returncode == 1
+    assert "-o には英字・数字・「_」だけの名前を付けてください" in r.stderr
+
+
+@needs_clang
+@linux_or_mac
+def test_Pythonから呼ぶ(tmp_path):
+    src = tmp_path / "keisan.suru"
+    src.write_text(LIB, encoding="utf-8")
+    r = build_py(src, tmp_path / "libkeisan")
+    assert r.returncode == 0, r.stderr
+    lib = tmp_path / ("libkeisan.dylib" if sys.platform == "darwin" else "libkeisan.so")
+    assert run_caller(lib) == EXPECTED
+
+
+@needs_clang
+@linux_or_mac
+def test_GCを何度も動かしても大丈夫(tmp_path):
+    src = tmp_path / "keisan.suru"
+    src.write_text(LIB, encoding="utf-8")
+    lib = tmp_path / "libkeisan.so"
+    assert build_py(src, lib).returncode == 0
+    assert run_caller(lib, 300, {"SURU_GC_MIN": "0"}) == EXPECTED
+
+
+@needs_clang
+@linux_or_mac
+def test_Go版で作ってPythonから呼ぶ(suruc, tmp_path):
+    src = tmp_path / "keisan.suru"
+    src.write_text(LIB, encoding="utf-8")
+    lib = tmp_path / "libkeisan.so"
+    r = build_go(suruc, src, lib)
+    assert r.returncode == 0, r.stderr
+    assert run_caller(lib) == EXPECTED
+
+
+@needs_clang
+@linux_or_mac
+def test_Cから呼んで呼び戻す(tmp_path):
+    """C → する(適用する)→ C(cb)→ する(二倍する)と入れ子に呼ぶ。いくつものスレッドから"""
+    src = tmp_path / "keisan.suru"
+    src.write_text(LIB, encoding="utf-8")
+    assert build_py(src, tmp_path / "libkeisan.so").returncode == 0
+    (tmp_path / "host.c").write_text(HOST_C, encoding="utf-8")
+    cc = suru_compile.find_cc()
+    subprocess.run([cc, "host.c", str(tmp_path / "libkeisan.so"), f"-Wl,-rpath,{tmp_path}", "-lpthread", "-o", "host"],
+                   cwd=tmp_path, check=True)
+    r = subprocess.run(["./host"], cwd=tmp_path, capture_output=True, text=True, timeout=300)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "11 0\n32行目 16文字目: 0 で割ることはできません\n"
+
+
+@needs_clang
+@linux_or_mac
+def test_する_のライブラリ2つと実行ファイル(tmp_path):
+    """実行時ライブラリの名前は隠すので、する のライブラリを2つ読み込んでも、する の実行ファイルから読み込んでもぶつからない"""
+    src = tmp_path / "keisan.suru"
+    src.write_text(LIB, encoding="utf-8")
+    assert build_py(src, tmp_path / "libkeisan.so").returncode == 0
+    (tmp_path / "b.suru").write_text("数 を 三倍する は 数\nx を 三倍する とは x * 3\n以下は外部に出す関数です\n  三倍する は 「sanbai」\n以上です\n",
+                                     encoding="utf-8")
+    assert build_py(tmp_path / "b.suru", tmp_path / "libb.so").returncode == 0
+    code = ("import ctypes\na = ctypes.CDLL('./libkeisan.so'); b = ctypes.CDLL('./libb.so')\n"
+            "a.nibai.restype = b.sanbai.restype = ctypes.c_int64\n"
+            "a.nibai.argtypes = b.sanbai.argtypes = [ctypes.c_int64]\nprint(a.nibai(5), b.sanbai(5))\n")
+    r = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True)
+    assert r.stdout == "10 15\n", r.stderr
+    prog = tmp_path / "使う.suru"
+    prog.write_text("外部の「./libkeisan.so」 を 読み込む\n\n以下は外部の関数です\n  数 を 外の二倍する は 「nibai」 で 数 を 返します\n以上です\n\n"
+                    "（21 を 外の二倍する） を 表示する\n", encoding="utf-8")
+    exe = tmp_path / "使う"
+    subprocess.run([sys.executable, str(ROOT / "suru.py"), "--翻訳", str(prog), "-o", str(exe)], check=True)
+    assert subprocess.run([str(exe)], capture_output=True, text=True, cwd=tmp_path).stdout == "42\n"
+    nm = shutil.which("nm")
+    if nm and sys.platform.startswith("linux"):
+        syms = subprocess.run([nm, "-D", "--defined-only", str(tmp_path / "libb.so")], capture_output=True, text=True).stdout
+        names = sorted(line.split()[-1] for line in syms.splitlines())
+        assert names == ["b_free", "b_init", "b_last_error", "sanbai"]

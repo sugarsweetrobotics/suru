@@ -2002,6 +2002,9 @@ func parseStatement(node *LNode) Node {
 	if vis := tryParseVisibility(nosep(flatten(node))); vis != nil {
 		return vis
 	}
+	if isKw(tokens[0], KwExportMark) {
+		return &Export{Name: tokens[1].S, Symbol: tokens[2].S, Line: tokens[0].Line}
+	}
 	if td := tryParseTypedef(node); td != nil {
 		return td
 	}
@@ -2891,6 +2894,7 @@ func ParseProgram(source string, ctx *ParseContext) []Node {
 	nameExamples(statements)
 	checkOpenImports(statements)
 	attachExterns(statements)
+	attachExports(statements)
 	statements = attachProvisos(statements)
 	for _, st := range statements {
 		switch st.(type) {
@@ -3286,6 +3290,94 @@ func attachExterns(statements []Node) {
 		}
 		seen[ext.Symbol] = d.Name
 	}
+}
+
+// exportReserved は外部に出す C の名前に使えない頭(実行時ライブラリと IR の名前)
+var exportReserved = []string{"rt_", "suru_", "gc_"}
+
+// attachExports は「以下は外部に出す関数です」の行に、同じファイルの型の宣言から C の型を付ける(#208)
+func attachExports(statements []Node) {
+	sigs := map[string]*TypeSig{}
+	defs := map[string]*Define{}
+	externs := map[string]bool{}
+	for _, s := range statements {
+		switch x := s.(type) {
+		case *TypeSig:
+			sigs[x.Name] = x
+		case *Define:
+			defs[x.Name] = x
+			if ext, ok := x.Body.(*Extern); ok {
+				externs[ext.Symbol] = true
+			}
+		}
+	}
+	for _, s := range statements {
+		e, ok := s.(*Export)
+		if !ok {
+			continue
+		}
+		if !isCSymbol(e.Symbol) {
+			raise(e.Line, "「"+e.Symbol+"」は C の名前にできません(英字か「_」で始まり、英字・数字・「_」だけで書きます)")
+		}
+		for _, r := range exportReserved {
+			if strings.HasPrefix(e.Symbol, r) {
+				raise(e.Line, "C の名前「"+e.Symbol+"」は「"+r+"」で始まるので使えません(実行時ライブラリの名前とぶつかります)")
+			}
+		}
+		if e.Symbol == "main" {
+			raise(e.Line, "C の名前「main」は使えません")
+		}
+		if externs[e.Symbol] {
+			raise(e.Line, "C の名前「"+e.Symbol+"」は、このファイルで読み込む外部の関数と同じです")
+		}
+		d := defs[e.Name]
+		if d == nil {
+			raise(e.Line, "「"+e.Name+"」はこのファイルで定義していないので、外部に出せません")
+		}
+		if _, ok := d.Body.(*Extern); ok {
+			raise(e.Line, "「"+e.Name+"」は外部の関数なので、外部に出せません")
+		}
+		sig := sigs[e.Name]
+		if !d.IsFunction || sig == nil || !sig.HasParams {
+			raise(e.Line, "外部に出す関数「"+e.Name+"」には型の宣言が必要です(「数 を 二倍する は 数 を 返す」のように書きます)")
+		}
+		types := map[string]Node{}
+		for _, p := range sig.Params {
+			types[p.Part] = p.Type
+		}
+		e.Params = nil
+		for _, p := range d.Params {
+			if p.List || !p.simple() {
+				raise(e.Line, "外部に出す関数「"+e.Name+"」の引数は名前だけで書いてください")
+			}
+			e.Params = append(e.Params, exportType(types[p.Part], e, "「"+p.Part+"」"))
+		}
+		result := sig.Result
+		if tn, ok := result.(*TypeName); ok && tn.Name == "動作" {
+			e.Action = true
+			result = tn.Args[0]
+		}
+		e.Result = exportType(result, e, "値")
+	}
+}
+
+// exportTypeNames は外部に出す関数の引数と値に使える型(書く順)
+var exportTypeNames = []string{"数", "小数", "単精度", "整数", "真偽", "文字列", "番地", "無"}
+
+func exportType(te Node, e *Export, what string) string {
+	names := exportTypeNames
+	if what != "値" {
+		names = names[:len(names)-1]
+	}
+	if tn, ok := te.(*TypeName); ok && len(tn.Args) == 0 {
+		for _, n := range names {
+			if n == tn.Name {
+				return ffiTypes[n]
+			}
+		}
+	}
+	raise(e.Line, "外部に出す関数「"+e.Name+"」の"+what+"には "+strings.Join(names, "・")+" のどれかの型を書いてください")
+	return ""
 }
 
 func isCSymbol(sym string) bool {

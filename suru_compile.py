@@ -34,6 +34,9 @@ RUNTIME = S.data_path("runtime", "suru_rt.c")
 FFI_IR = {"i64": "i64", "f64": "double", "f32": "float", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr", "bytes": "ptr",
           "void": "void"}
 LINK_MARK = "; suru-link: "  # IR の中の、リンクするライブラリの印(build が読む)
+EXPORT_MARK = "; suru-export: "  # IR の中の、外部に出す関数の C の名前の印(共有ライブラリを作るときに読む、#208)
+# 外部に出す関数の C の型 → rt_export に渡す型の字(Go 版の exportCodes と同じ)
+EXPORT_CODES = {"i64": "l", "i32": "i", "f64": "d", "f32": "f", "bool": "b", "str": "s", "ptr": "p", "void": "v"}
 PART_IDS = {"を": 0, "に": 1, "で": 2, "から": 3, "へ": 4, "より": 5, "が": 6}
 OPS = {"+": 0, "-": 1, "*": 2, "/": 3, "%": 4, "^": 5, "<": 6, ">": 7, "<=": 8, ">=": 9, "==": 10, "!=": 11}
 CMP_PRED = {"<": "slt", ">": "sgt", "<=": "sle", ">=": "sge", "==": "eq", "!=": "ne"}
@@ -106,6 +109,7 @@ declare i64 @rt_do_result(i64)
 declare i64 @rt_std(ptr)
 declare i64 @rt_global_cached(ptr, ptr, i32)
 declare void @rt_top(i64)
+declare i64 @rt_export(ptr, i32, ptr, ptr, ptr, i32)
 declare i32 @rt_enter(i32)
 declare void @rt_leave(i32)
 declare void @rt_top_unwrap(i64)
@@ -347,6 +351,7 @@ class Compiler:
         self.ffi_decls: dict[str, str] = {}  # 外部の関数の名前 → declare の行
         self.ffi_where: dict[str, Any] = {}  # 外部の関数の名前 → 初めに宣言した位置
         self.link_libs: list[str] = []  # リンクするライブラリ(ExternLib.path)
+        self.exports: list[str] = []  # 外部に出す関数の C の名前(#208)
 
     def uid(self) -> int:
         self.n += 1
@@ -1140,6 +1145,7 @@ class Compiler:
         for ctor, (tname, fields) in self.ctx.ctors.items():
             ini.call("void", "@rt_def_ctor", f"ptr {self.cstr(ctor)}, ptr {self.cstr(tname)}, i32 {len(fields)}, ptr {self.ptrs(fields)}")
         sc = self.module(program, path, ini)
+        self.export_wrappers(program, sc)
         top = Scope(sc, ini)
         for s in program:
             if isinstance(s, (S.Define,) + S.TOP_LEVEL_ONLY):
@@ -1153,9 +1159,53 @@ class Compiler:
         entry = f"define void @suru_main() {{\nentry:\n{consts}\n  %r = call i64 @suru_init(ptr null)\n  ret void\n}}"
         src = self.source.encode("utf-8")
         source = f'@suru_source = constant [{len(src) + 1} x i8] c"{ir_bytes(src)}\\00"\n' + self.files_table()
-        links = [LINK_MARK + lib for lib in self.link_libs]
+        links = [LINK_MARK + lib for lib in self.link_libs] + [EXPORT_MARK + sym for sym in self.exports]
         ffi = [self.ffi_decls[k] for k in sorted(self.ffi_decls)]
         return "\n".join(["; 「する」のコンパイラが作った LLVM IR"] + links + [DECLS] + ffi + [source] + self.globals + self.functions + [entry, self.roots_table()]) + "\n"
+
+    def export_wrappers(self, program: list, sc: Scope) -> None:
+        """「以下は外部に出す関数です」の関数を、C の呼び出し規約の関数として出す(#208、Go 版の exportWrappers と同じ)。
+        引数を i64 の並びに置いて rt_export に渡し、実行時ライブラリが値に直して呼ぶ(初期化・スレッド・エラーもそこで扱う)"""
+        for e in program:
+            if not isinstance(e, S.Export):
+                continue
+            b = sc.vars[e.name]
+            self.exports.append(e.symbol)
+            n = len(e.params)
+            params = ", ".join(f"{FFI_IR[t]} %a{k}" for k, t in enumerate(e.params))
+            codes = "".join(EXPORT_CODES[t] for t in e.params) + EXPORT_CODES[e.result] + ("!" if e.action else "")
+            slots = n or 1
+            lines = [f"define {FFI_IR[e.result]} @{e.symbol}({params}) {{", "entry:", f"  %s = alloca [{slots} x i64]"]
+            for k, t in enumerate(e.params):
+                p = f"%p{k}"
+                lines.append(f"  {p} = getelementptr [{slots} x i64], ptr %s, i64 0, i64 {k}")
+                if t == "i64":
+                    lines.append(f"  store i64 %a{k}, ptr {p}")
+                elif t in ("i32", "bool"):
+                    lines += [f"  %x{k} = sext i32 %a{k} to i64", f"  store i64 %x{k}, ptr {p}"]
+                elif t == "f64":
+                    lines.append(f"  store double %a{k}, ptr {p}")
+                elif t == "f32":
+                    lines += [f"  %x{k} = fpext float %a{k} to double", f"  store double %x{k}, ptr {p}"]
+                else:  # str・ptr
+                    lines.append(f"  store ptr %a{k}, ptr {p}")
+            c = self.cstr(codes)
+            nm = self.cstr(e.name)
+            lines.append(f"  %r = call i64 @rt_export(ptr {b.g}, i32 {n}, ptr {c}, ptr %s, ptr {nm}, i32 {pos_of(e.line)})")
+            r = e.result
+            if r == "void":
+                lines.append("  ret void")
+            elif r == "i64":
+                lines.append("  ret i64 %r")
+            elif r in ("i32", "bool"):
+                lines += ["  %v = trunc i64 %r to i32", "  ret i32 %v"]
+            elif r == "f64":
+                lines += ["  %v = bitcast i64 %r to double", "  ret double %v"]
+            elif r == "f32":
+                lines += ["  %d = bitcast i64 %r to double", "  %v = fptrunc double %d to float", "  ret float %v"]
+            else:
+                lines += ["  %v = inttoptr i64 %r to ptr", "  ret ptr %v"]
+            self.functions.append("\n".join(lines) + "\n}")
 
     def files_table(self) -> str:
         """読み込んだファイル(読み込んだ順)の、行の番号に足した数・名前・中身(実行時エラーの表示に使う)"""
@@ -1188,8 +1238,36 @@ class Compiler:
                 f"@suru_nroots = constant i64 {len(self.roots)}")
 
 
-def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check: bool = True) -> str:
-    """する のプログラムを LLVM IR の文字列にする。間違いがあれば SuruError"""
+def export_symbols(ir: str) -> list[str]:
+    """IR の始めの「; suru-export: 」の行から、外部に出す関数の C の名前を読む(#208)"""
+    out = []
+    for line in ir.split("\n"):
+        if not line.startswith(";"):
+            break
+        if line.startswith(EXPORT_MARK):
+            out.append(line[len(EXPORT_MARK):])
+    return out
+
+
+def check_library(program: list) -> None:
+    """共有ライブラリにするプログラムの一番外を調べる(Go 版の checkLibrary と同じ)"""
+    def bad(msg: str, line: Any) -> S.SuruError:
+        err = S.SuruError(msg, line)
+        err.kind = "コンパイル"
+        return err
+    if not any(isinstance(s, S.Export) for s in program):
+        raise bad(f"共有ライブラリにするには、「{S.KW_IKA_EXPORT}です」で外部に出す関数を書きます"
+                  f"(「{S.KW_IKA_EXPORT}です」「  二倍する は 「nibai」」「以上です」)", 0)
+    for s in program:
+        if isinstance(s, (S.Define,) + S.TOP_LEVEL_ONLY):
+            continue
+        raise bad("共有ライブラリにするファイルの一番外には、定義だけを書きます(一番外の文は、ライブラリを読み込んだときに行われてしまいます)",
+                  S.first_line_of(s) or 0)
+
+
+def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check: bool = True, lib: bool = False) -> str:
+    """する のプログラムを LLVM IR の文字列にする。間違いがあれば SuruError。
+    lib なら共有ライブラリにするプログラム(「以下は外部に出す関数です」が要り、一番外には定義だけ、#208)"""
     if check:
         from suru_check import check as type_check
 
@@ -1210,6 +1288,8 @@ def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check
     it = S.Interpreter()
     it.ctx = ctx
     it.load_program(program, it.globals)
+    if lib:
+        check_library(program)
     try:
         return Compiler(ctx, source).compile(program, path)
     except CompileError as e:
@@ -1253,16 +1333,21 @@ def find_cc() -> str | None:
     return None
 
 
-def runtime_object(cc: str) -> str:
+# 共有ライブラリの形の実行時ライブラリ(main なし、名前を隠す)を作る引数(#208、Go 版の libFlags と同じ)
+LIB_FLAGS = ["-DSURU_LIB", "-fPIC", "-fvisibility=hidden"]
+
+
+def runtime_object(cc: str, prefix: str = "suru_rt-", flags: list[str] | None = None) -> str:
     """実行時ライブラリをコンパイルしたもの(中身が変わらなければ作り直さない)"""
     with open(RUNTIME, "rb") as f:
         digest = hashlib.sha256(f.read() + (cc + "\0" + target()).encode()).hexdigest()[:16]
     cache = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache"), "suru")
-    obj = os.path.join(cache, f"suru_rt-{digest}.o")
+    obj = os.path.join(cache, f"{prefix}{digest}.o")
     if not os.path.exists(obj):
         os.makedirs(cache, exist_ok=True)
         tmp = f"{obj}.{os.getpid()}.tmp"
-        r = subprocess.run([cc, *target_args(), "-O2", "-w", "-c", RUNTIME, "-o", tmp], capture_output=True, text=True)
+        r = subprocess.run([cc, *target_args(), *(flags or []), "-O2", "-w", "-c", "-x", "c", RUNTIME, "-o", tmp],
+                           capture_output=True, text=True)
         if r.returncode != 0:
             raise S.SuruError("実行時ライブラリのコンパイルに失敗しました:\n" + r.stderr)
         os.replace(tmp, obj)
@@ -1340,6 +1425,82 @@ def build(ll_path: str, out: str, opt: str = "-O2") -> None:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def target_darwin() -> bool:
+    t = target()
+    if not t:
+        return sys.platform == "darwin"
+    return "apple" in t or "darwin" in t
+
+
+def lib_path(out: str) -> str:
+    """共有ライブラリの道。拡張子がなければ OS に合わせて付ける(Go 版の native.LibPath と同じ)"""
+    if os.path.splitext(out)[1] in (".so", ".dylib", ".dll"):
+        return out
+    return out + (".dll" if target_windows() else ".dylib" if target_darwin() else ".so")
+
+
+def lib_prefix(out: str) -> str:
+    """共有ライブラリの道から、補助の関数の頭の名前を決める(libkeisan.so → keisan、Go 版の native.LibPrefix と同じ)"""
+    base = os.path.basename(out)
+    for ext in (".so", ".dylib", ".dll"):
+        if base.endswith(ext):
+            base = base[: -len(ext)]
+            break
+    if base.startswith("lib"):
+        base = base[3:]
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", base):
+        raise S.SuruError(f"共有ライブラリの名前「{os.path.basename(out)}」から補助の関数の名前(「名前_last_error」など)を作れません。"
+                          "-o には英字・数字・「_」だけの名前を付けてください(「-o libkeisan.so」)")
+    return base
+
+
+def lib_shim(prefix: str) -> str:
+    """補助の関数(頭の名前_init・_last_error・_free)を出す小さな C のファイルの中身(Go 版の libShim と同じ)"""
+    return ('#define E __attribute__((visibility("default")))\n'
+            "int rt_lib_init(void);\nconst char *rt_lib_last_error(void);\nvoid rt_lib_free(void *);\n"
+            f"E int {prefix}_init(void) {{ return rt_lib_init(); }}\n"
+            f"E const char *{prefix}_last_error(void) {{ return rt_lib_last_error(); }}\n"
+            f"E void {prefix}_free(void *p) {{ rt_lib_free(p); }}\n")
+
+
+def build_shared(ll_path: str, out: str, opt: str = "-O2") -> str:
+    """LLVM IR を共有ライブラリの形の実行時ライブラリとつないで共有ライブラリにする(#208、Go 版の native.BuildShared と同じ)。
+    外に見せるのは、出す関数と補助の関数だけ"""
+    import tempfile
+
+    cc = find_cc()
+    if cc is None:
+        raise S.SuruError("共有ライブラリを作るには clang が必要です(LLVM IR だけなら --ll を付けてください)")
+    if target_windows():
+        raise S.SuruError("Windows の共有ライブラリ(.dll)はまだ作れません")
+    lib = lib_path(out)
+    prefix = lib_prefix(lib)
+    rt = runtime_object(cc, "suru_rt_lib-", LIB_FLAGS)
+    with open(ll_path, encoding="utf-8") as f:
+        ir = f.read()
+    syms = export_symbols(ir) + [f"{prefix}_init", f"{prefix}_last_error", f"{prefix}_free"]
+    with tempfile.TemporaryDirectory(prefix="suru-lib-") as d:
+        shim = os.path.join(d, "shim.c")
+        with open(shim, "w", encoding="utf-8") as f:
+            f.write(lib_shim(prefix))
+        cmd = [cc, *target_args(), opt, "-w", "-fPIC", ll_path, rt, shim, "-o", lib]
+        if target_darwin():
+            lst = os.path.join(d, "exports.txt")
+            with open(lst, "w", encoding="utf-8") as f:
+                f.write("".join(f"_{s}\n" for s in syms))
+            cmd += ["-dynamiclib", f"-Wl,-install_name,@rpath/{os.path.basename(lib)}", f"-Wl,-exported_symbols_list,{lst}"]
+        else:
+            script = os.path.join(d, "exports.map")
+            with open(script, "w", encoding="utf-8") as f:
+                f.write("{\n  global:\n    " + ";\n    ".join(syms) + ";\n  local: *;\n};\n")
+            cmd += ["-shared", f"-Wl,--version-script={script}"]
+        cmd += link_flags(ll_path) + ["-lm", "-lpthread"]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode != 0:
+            raise S.SuruError("clang でのビルドに失敗しました:\n" + r.stderr)
+    return lib
+
+
 def windows_lld() -> bool:
     """Windows 向けのリンクに lld(ld.lld)を使えるか(Go 版の windowsLLD と同じ)"""
     return shutil.which("ld.lld") is not None
@@ -1382,7 +1543,8 @@ def manifest_object() -> str | None:
     return obj
 
 
-USAGE = "使い方: python3 suru_compile.py [--ll] [--検査なし] [--json] プログラム.suru [-o 出力]"
+USAGE = "使い方: python3 suru_compile.py [--ll] [--検査なし] [--共有ライブラリ] [--json] プログラム.suru [-o 出力]"
+SHARED_FLAGS = ("--共有ライブラリ", "--shared")  # 他の言語から呼べる共有ライブラリを作る(#208)
 
 
 def main(argv: list[str]) -> int:
@@ -1390,6 +1552,7 @@ def main(argv: list[str]) -> int:
     ll_only = "--ll" in args
     check = not any(a in S.NO_CHECK_FLAGS for a in args)
     as_json = any(a in S.JSON_FLAGS for a in args)
+    shared = any(a in SHARED_FLAGS for a in args)
     out = None
     if "-o" in args:
         k = args.index("-o")
@@ -1408,11 +1571,14 @@ def main(argv: list[str]) -> int:
     base_dir = os.path.dirname(os.path.abspath(src_path))
     stem = os.path.splitext(src_path)[0]
     try:
-        ir = compile_source(source, base_dir, os.path.abspath(src_path), check)
+        ir = compile_source(source, base_dir, os.path.abspath(src_path), check, lib=shared)
         ll_path = (out if ll_only and out else stem + ".ll")
         with open(ll_path, "w", encoding="utf-8") as f:
             f.write(ir)
-        if not ll_only:
+        if not ll_only and shared:
+            build_shared(ll_path, out or os.path.join(os.path.dirname(stem), "lib" + os.path.basename(stem)))
+            os.remove(ll_path)
+        elif not ll_only:
             build(ll_path, out or stem)
             os.remove(ll_path)
     except S.SuruError as e:

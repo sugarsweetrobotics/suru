@@ -310,6 +310,17 @@ type ExternLib struct {
 	MainThread bool
 }
 
+// Export は「以下は外部に出す関数です」の中の1行「二倍する は 「nibai」」: 関数を他の言語から呼べる C の関数として出す(#208)
+type Export struct {
+	Name   string
+	Symbol string
+	Line   Pos
+	// attachExports が型の宣言から入れる: 定義の引数の順に C の型(i64 f64 f32 i32 bool str ptr)、値の C の型(void も)、動作か
+	Params []string
+	Result string
+	Action bool
+}
+
 // Extern は「x を 余弦にする とは 外部の「cos」」の本体
 type Extern struct {
 	Symbol     string
@@ -438,6 +449,7 @@ func (n *Import) Children() []Node      { return nn(n.Module) }
 func (n *ExternLib) Children() []Node   { return nil }
 func (n *Visibility) Children() []Node  { return nil }
 func (n *Extern) Children() []Node      { return nil }
+func (n *Export) Children() []Node      { return nil }
 
 func (n *Num) GetLine() Pos            { return n.Line }
 func (n *Str) GetLine() Pos            { return n.Line }
@@ -470,6 +482,7 @@ func (n *Import) GetLine() Pos         { return n.Line }
 func (n *ExternLib) GetLine() Pos      { return n.Line }
 func (n *Visibility) GetLine() Pos     { return n.Line }
 func (n *Extern) GetLine() Pos         { return n.Line }
+func (n *Export) GetLine() Pos         { return n.Line }
 
 // lineOf は Python の getattr(node, "line", 0)
 func lineOf(n Node) Pos {
@@ -497,7 +510,7 @@ func firstLine(n Node) Pos {
 
 func isTopLevelOnly(n Node) bool {
 	switch n.(type) {
-	case *TypeDef, *TraitDecl, *TraitImpl, *TypeSig, *Import, *ExternLib, *Visibility:
+	case *TypeDef, *TraitDecl, *TraitImpl, *TypeSig, *Import, *ExternLib, *Visibility, *Export:
 		return true
 	}
 	return false
