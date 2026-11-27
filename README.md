@@ -129,21 +129,23 @@ There is a VS Code extension in `editors/vscode/`. It offers syntax highlighting
 ## Examples
 
 ```
-a　と　b　を加算する　とは　a + b
+数 と 数 を 加算する は 数 を 返す
+a と b を 加算する とは a + b です
 
-引数　を三倍する　とは　引数　と　引数　を加算して　引数　を加算する
+数 を 三倍する は 数 を 返す
+引数 を 三倍する とは 引数 と 引数 を 加算して 引数 を 加算する
 
-1　と　2　を加算する      # → 3
-5　を三倍する             # → 15
+1 と 2 を 加算する      # → 3
+5 を 三倍する           # → 15
 ```
 
-This defines 加算する ("add") taking a list `a と b` ("a and b") marked with を, and 三倍する ("triple") built as a pipeline: add the argument to itself, then (して, "and then") add the argument again.
+This defines 加算する ("add") taking a list `a と b` ("a and b") marked with を, and 三倍する ("triple") built as a pipeline: add the argument to itself, then (して, "and then") add the argument again. A type declaration ends with `… を 返す` ("returns …"), and the です ("is") at the end of a definition only makes it read as a sentence.
 
 ```
-a を b で 割った数にする とは a / b
+a を b で 割った数にする とは a / b です
 2 で 10 を 割った数にする              # → 5 (the particles decide the arguments, so word order is free)
 
-リスト とは 1 と 2 と 3
+リスト とは 1 と 2 と 3 です
 リスト の それぞれ を 三倍する        # → （3 と 6 と 9）
 リスト から 偶数判定すること で 選別する
 5 に （1 を 加算すること） を 適用する  # → 6
@@ -154,20 +156,21 @@ Here リスト の それぞれ ("each of the list") maps a function over a list
 You can also write without spaces or line breaks, packed tightly with punctuation (you may mix both styles in the same file).
 
 ```
-aとbを加算するとは、a+b。引数を三倍するとは、引数と引数を加算して、引数を加算する。
+aとbを加算するとは、a+bです。引数を三倍するとは、引数と引数を加算して、引数を加算する。
 1と2を加算する。5を三倍する。                         # → 3、15
-aとbを平均するとは、合計/2。ただし、合計とは、a+b。   # local definitions use 「ただし」 ("where")
+aとbを平均するとは、合計/2です。ただし、合計とは、a+bです。   # local definitions use 「ただし」 ("where")
 ```
 
 Records (named tuples), types with alternatives, pattern matching and traits (type classes) are available too.
 
 ```
-図形 とは 半径 の 円 か 幅 と 高 の 長方形
+図形 とは 半径 の 円 か 幅 と 高 の 長方形 です
 
+図形 を 面積にする は 数 を 返す
 形 を 面積にする とは
   もし 形 が
-    半径 の 円 ならば 3 * 半径 ^ 2
-    幅 と 高 の 長方形 ならば 幅 * 高
+    半径 の 円 ならば 3 * 半径 ^ 2 です
+    幅 と 高 の 長方形 ならば 幅 * 高 です
 
 5 の 円 を 面積にする                        # → 75
 幅 は 2 で 高 は 3 の 長方形 を 面積にする    # → 6
@@ -178,42 +181,47 @@ Records (named tuples), types with alternatives, pattern matching and traits (ty
 Writing values or shapes in place of arguments defines a function case by case. Patterns can take a condition with 「かつ」 ("and").
 
 ```
-0 を 階乗する とは 1
-n を 階乗する とは n * （n - 1 を 階乗する）
+数 を 階乗する は 数 を 返す
+0 を 階乗する とは 1 です
+n を 階乗する とは n * （n - 1 を 階乗する） です
 
-空 を 合計する とは 0
-先頭 は x で 残り は 他 を 合計する とは x + （他 を 合計する）
+空 を 合計する とは 0 です
+先頭 は x で 残り は 他 を 合計する とは x + （他 を 合計する） です
 
+図形 を 分類する は 文字列 を 返す
 形 を 分類する とは
   もし 形 が
-    半径 の 円 かつ 半径 >= 10 ならば 「大きい円」
-    半径 の 円 ならば 「円」
-    そうでなければ 「長方形」
+    半径 の 円 かつ 半径 >= 10 ならば 「大きい円」 です
+    半径 の 円 ならば 「円」 です
+    そうでなければ 「長方形」 です
 ```
 
 A name ending in 「…である」 ("is …") is a predicate (a function returning true or false), and takes its subject with 「が」.
 
 ```
-n が 偶数である とは n % 2 が 0
+n が 偶数である とは n % 2 が 0 です
 もし n が 偶数である ならば 「偶」 そうでなければ 「奇」
 3 が 偶数でない                                # → 真
 リスト から 偶数であること で 選別する
 ```
 
-Side effects such as printing and input are handled as values called 「動作」 ("actions"), and carried out in order with 「手順」 ("procedure").
+Side effects such as printing and input are handled as values called 「入出力動作」 ("input/output actions"), and carried out in order by the sentences from 「以下の手順です」 ("the steps below") to 「以上です」 ("that is all"). A type declaration writes them as `… を 返す 入出力動作` ("an input/output action that returns …").
 
 ```
-挨拶するとは、手順（
+挨拶するは、数を返す入出力動作。
+挨拶するとは、以下の手順です。
   名前とは、「お名前は? 」を入力した結果。     # 「…した 結果」 ("the result of having done …") receives an action's result
   「こんにちは、」+名前+「さん」を表示する。
-  名前の長さを結果にする）。
+  名前の長さを結果にする。
+  以上です。
 挨拶してから、表示する。                       # 「してから」 ("after doing") passes the previous action's result to 「を」
 「はじめ」を表示する。それから、「おわり」を表示する。
 ```
 
-A procedure can also be written as the sentences from 「以下の手順です」 ("the steps below") to 「以上」 ("that is all"), with no parenthesis to forget to close.
+In the spaced style it looks like this. To pack a procedure into one line, you can also write `手順（文。文。）`.
 
 ```
+文字列 を 歓迎する は 無 を 返す 入出力動作
 名前 を 歓迎する とは 以下の手順です
   「こんにちは、」 + 名前 + 「さん」 を 表示する
   「ようこそ」 を 表示する
