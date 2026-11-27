@@ -309,6 +309,16 @@ func (s *server) hover(p textDocumentPosition) any {
 	if u, ok := d.analysis.Usages[t.Name]; ok {
 		label += "\n\n使い方: `" + u + "`"
 	}
+	// 同じファイルにこの定義の例(「例えば … は … です」)があれば見せる(#193)
+	var examples []string
+	for _, x := range d.analysis.Tests {
+		if x.Example && x.Of == t.Name && x.Line-1 < len(d.lines) {
+			examples = append(examples, strings.TrimSpace(d.lines[x.Line-1]))
+		}
+	}
+	if len(examples) > 0 {
+		label += "\n\n例:\n```suru\n" + strings.Join(examples, "\n") + "\n```"
+	}
 	return map[string]any{
 		"contents": map[string]any{
 			"kind":  "markdown",

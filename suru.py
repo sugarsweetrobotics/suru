@@ -8392,6 +8392,8 @@ def run_tests(args: list[str]) -> int:
         if not tests:
             continue
         _FFI_BASE[0] = base_dir
+        # lib/標準.suru などそのものの試験では、そのファイルの組み込みも使う(読み込んだときと同じ)
+        interp.globals.vars.update((b.name, b) for b in LIB_PRIMITIVES.get(os.path.abspath(file), ()))
         interp.load_program(program, interp.globals)
         for d in tests:
             with captured_output() as out:
