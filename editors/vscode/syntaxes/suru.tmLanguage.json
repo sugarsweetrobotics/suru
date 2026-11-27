@@ -17,6 +17,9 @@
       "include": "#comment"
     },
     {
+      "include": "#test"
+    },
+    {
       "include": "#string"
     },
     {
@@ -69,6 +72,28 @@
     "comment": {
       "name": "comment.line.suru",
       "match": "(?<![^\\s　、。（）()」])[#＃※].*$"
+    },
+    "test": {
+      "patterns": [
+        {
+          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(以下[ 　]*は[ 　]*)(「[^「」]*」)([ 　]*の[ 　]*試験)",
+          "captures": {
+            "1": {
+              "name": "keyword.control.suru"
+            },
+            "2": {
+              "name": "string.quoted.other.suru"
+            },
+            "3": {
+              "name": "keyword.control.suru"
+            }
+          }
+        },
+        {
+          "name": "keyword.control.suru",
+          "match": "^[ 　]*例えば(?![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])"
+        }
+      ]
     },
     "string": {
       "patterns": [
@@ -358,6 +383,9 @@
       "patterns": [
         {
           "include": "#comment"
+        },
+        {
+          "include": "#test"
         },
         {
           "include": "#string"

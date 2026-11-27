@@ -47,6 +47,9 @@ def test_builtins_and_keywords_are_highlighted():
     # 「以下の手順」は「以下 の 手順」とも書けるので、間の空白を許す形で入っている
     assert "以下[ 　]*の[ 　]*(?:入出力)?手順" in text
     assert "以下[ 　]*[のは][ 　]*外部[ 　]*の[ 　]*(?:入出力動作|関数)" in text
+    # 試験のまとまりの頭と例(#193)
+    assert "(以下[ 　]*は[ 　]*)(「[^「」]*」)([ 　]*の[ 　]*試験)" in text
+    assert "例えば" in text
 
 
 def test_quasi_and_derive_are_highlighted():

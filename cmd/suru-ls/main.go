@@ -378,6 +378,19 @@ func (s *server) symbols(uri string) any {
 			"location": location{uri, r},
 		})
 	}
+	// 試験のまとまりと例は、書いた行の全体を指す(#193)
+	for _, t := range d.analysis.Tests {
+		detail := "試験"
+		if t.Example {
+			detail = "例"
+		}
+		end := 0
+		if t.Line-1 < len(d.lines) {
+			end = len([]rune(d.lines[t.Line-1])) + 1
+		}
+		r := rng{toUTF16(d.lines, t.Line, 1), toUTF16(d.lines, t.Line, end)}
+		out = append(out, map[string]any{"name": t.Label, "detail": detail, "kind": 12, "location": location{uri, r}})
+	}
 	return out
 }
 

@@ -30,6 +30,11 @@ func testLabel(d *Define) string {
 	return d.Name
 }
 
+// isTestName は試験のまとまりと例に付ける、プログラムには書けない名前か(「《試験》二倍」「《例》4」)
+func isTestName(name string) bool {
+	return strings.HasPrefix(name, testPrefix) || strings.HasPrefix(name, examplePrefix)
+}
+
 // isTestCase は試験として動かす定義か(試験のまとまり・例・一番外の引数のない「…試験する」)
 func isTestCase(d *Define) bool {
 	return d.Test != "" || d.IsFunction && len(d.Params) == 0 && strings.HasSuffix(d.Name, TestSuffix) && !strings.Contains(d.Name, ModuleSep)
