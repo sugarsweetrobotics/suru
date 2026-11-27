@@ -15,6 +15,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 5. **Lists, byte sequences and handles cross the boundary.** `バイト列` and lists of numbers, decimals or strings are passed as a pointer and a length (results as a new block plus `int64_t *out_len`), and any other value (records, functions, other lists) as a `keisan_value *` handle with helper functions (`keisan_get`, `keisan_field`, `keisan_to_int`, `keisan_call`, `keisan_release` and so on). Libraries that use self-recursive functions, such as ones that load 「標準」, now link as shared libraries too. This is stage 3 of #208.
 6. **kumu builds shared libraries.** Write `種類 とは 「共有ライブラリ」` in 組.suru and `kumu 作る` writes `出力/libNAME.so` (or `.dylib`) and `出力/NAME.h` (`ライブラリ名 とは 「…」` sets NAME when the project name isn't ASCII). `kumu 新規 NAME --共有ライブラリ` creates a library project with a test. A library whose code doesn't use self-recursion now also builds at `-O0`. This is stage 4 of #208.
 7. **Shared libraries on Windows.** `suruc --共有ライブラリ` (and kumu) now builds a `.dll` on Windows (MSYS2 UCRT64), together with the import library `libNAME.dll.a` for linking and the header. Only the exported and helper functions are exported. The shared library tests run on Windows in CI. This is stage 5 of #208.
+8. **`docs/AIの手引き.md` explains shared libraries.** A new section shows how to export functions, the type mapping, errors and kumu, and the remaining ideas are listed in `docs/今後/共有ライブラリ.md`. This is stage 6 of #208.
 
 ### Fixed
 
