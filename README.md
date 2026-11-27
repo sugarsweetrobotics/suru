@@ -1093,6 +1093,21 @@ Added for the WebSocket (suru-lang/http) handshake and masking. All give the sam
 5. **`n を 乱数内の乱数バイト列取得する` gives n bytes (1 to 256) of OS randomness.** An action calling getentropy. Used for the masks and keys of WebSocket clients.
 6. **`接続 を 秒 で 通信内の待機時間設定する` changes how many seconds receives and sends wait.** Accepted connections give up after 5 seconds, but connections kept open a long time, like WebSockets, are set to `0` (wait forever). Fractional seconds work. After a timeout failure, reading from the same connection can continue (the binary clears the read flag, and the interpreter recreates its reader).
 
+### SHA-256 and HMAC
+
+Added for signing cookies in the web framework (suru-lang/web). They give the same results in the interpreter and compiled binaries.
+
+```
+「標準」 を 読み込んで 使う
+「ハッシュ」 を 読み込む
+
+「abc」 を バイト列にして ハッシュ内のSHA256にして ハッシュ内の十六進表記にする  # → ba7816bf…
+（「本文」 を バイト列にする） を （「鍵」 を バイト列にする） で ハッシュ内のHMACSHA256にする
+```
+
+1. **SHA-256 and HMAC-SHA256 are also written in Suru in 「ハッシュ」.** `b を SHA256にする` and `b を 鍵 で HMACSHA256にする` (RFC 2104) both give 32 bytes. A key longer than 64 bytes is hashed with SHA-256 first.
+2. **Not for passwords.** A single hash is too fast for storing passwords. Use a slow function made for it, such as bcrypt or Argon2.
+
 ### Small Suru for microcontrollers
 
 1. **Microcontroller targets use a separate code generator with no heap and no GC.** `kumu 作る` (with a target) and `suruc --対象 …` decide value types from the type checker's results and generate LLVM IR with numbers as 32-bit integers, booleans as 0 and 1, and string constants as addresses placed in flash. The runtime library is `runtime/avr/suru_avr.c` (main, clock, pins, PWM, A/D conversion, serial). To fit in the Uno's 2KB of RAM, constructs that build values on the heap are not available.
