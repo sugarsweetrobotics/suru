@@ -4,7 +4,7 @@
 
 Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
 
-## Unreleased
+## 0.11.0
 
 ### New
 
@@ -16,12 +16,18 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 6. **kumu builds shared libraries.** Write `種類 とは 「共有ライブラリ」` in 組.suru and `kumu 作る` writes `出力/libNAME.so` (or `.dylib`) and `出力/NAME.h` (`ライブラリ名 とは 「…」` sets NAME when the project name isn't ASCII). `kumu 新規 NAME --共有ライブラリ` creates a library project with a test. A library whose code doesn't use self-recursion now also builds at `-O0`. This is stage 4 of #208.
 7. **Shared libraries on Windows.** `suruc --共有ライブラリ` (and kumu) now builds a `.dll` on Windows (MSYS2 UCRT64), together with the import library `libNAME.dll.a` for linking and the header. Only the exported and helper functions are exported. The shared library tests run on Windows in CI. This is stage 5 of #208.
 8. **`docs/AIの手引き.md` explains shared libraries.** A new section shows how to export functions, the type mapping, errors and kumu, and the remaining ideas are listed in `docs/今後/共有ライブラリ.md`. This is stage 6 of #208.
+9. **Descriptions of definitions.** The comment right above a definition is its description, and the comment at the head of a file describes the file. No new syntax: existing comments already work. The language server shows the description on hover, also for names of imported files. This is stage 1 of #209.
+10. **API documentation with `--文書`.** `suru --文書` and `suruc --文書` write Markdown (or JSON with `--json`) listing each public name of a file or folder with its type declaration, usage, description and examples. `--出力 フォルダ` writes one file per source file. The Python and Go versions give the same output. This is stage 2 of #209.
+11. **`kumu 文書` and Read the Docs.** `kumu 文書` writes the API pages of the project's top-level files to `docs/api/`, and `kumu 文書 --雛形` writes the Sphinx (MyST, furo) and Read the Docs settings, with a lexer that highlights Suru code. Connect the repository on readthedocs.org and the docs are published on every push. This is stage 3 of #209.
+12. **The standard library is documented in English.** Every public definition in `lib/` has an English description, and the API pages use the English labels `Usage:` and `Examples:`. The documentation of Suru itself is published at https://suru.readthedocs.io/en/latest/ . `ファイル内の作成する` (the C `mkdir`), which was public by mistake, is now private; use `ファイル内のフォルダ作成する`. This is stage 4 of #209.
 
 ### Fixed
 
 1. **A quasi-quote head written in a comment is no longer read as code.** A line like `# 例: 道群 とは 以下の【道】です` (or with `＃`/`※` before `とは`) used to start a quasi-quote and then fail with 「中身は頭より深く字下げして…」. The interpreter, `suruc` and `suru --点検` now treat it as a comment (#192).
 2. **`suru --点検` reads type declarations with `と` between parameter types.** `lib/構文.suru` now reads `数 を 数 と 数 と 数 で 三回転和にする は 数` (a list whose items have their own types, added in #119) like `suru.py`, instead of failing on the whole file.
 3. **A deriver or expander from a dependency can read that dependency's own dependencies.** `suruc` and `kumu` compiled the expander with the packages of the dependency's folder, which has no `組.lock`, so `会員 は 【表】 を 導出する` with only suru-lang/orm as a dependency failed with 「ファイル「蔵.suru」が見つかりません」. The expander now uses the packages of the program being built (#192).
+
+The VS Code extension 0.11.0 highlights `以下は外部に出す関数` and shows descriptions of definitions on hover.
 
 ## 0.10.1
 
