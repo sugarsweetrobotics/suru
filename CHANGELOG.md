@@ -4,6 +4,12 @@
 
 Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
 
+## Unreleased
+
+### Fixed
+
+1. **`kumu 文書 --雛形` also adds `__pycache__/` to `.gitignore`.** Sphinx writes `docs/_ext/__pycache__/` when it loads the lexer, and it was easy to commit by mistake (#209).
+
 ## 0.11.0
 
 ### New
