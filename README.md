@@ -1552,7 +1552,7 @@ suruc --試験 計算.suru 二倍       # the same with the Go compiler, only te
 
 ### Calling from other languages (shared libraries)
 
-Functions written in Suru can now be used from Python, C, C++, Go, Rust and any other language that can call the C calling convention. `suruc --共有ライブラリ` builds a shared library (.so, .dylib). The plan is #208, and this is its stage 1.
+Functions written in Suru can now be used from Python, C, C++, Go, Rust and any other language that can call the C calling convention. `suruc --共有ライブラリ` builds a shared library (.so, .dylib). The plan is #208, and this covers its stages 1 and 2.
 
 ```suru
 数 を 二倍する は 数 を 返す
@@ -1568,7 +1568,7 @@ x を 二倍する とは x * 2 です
 ```
 
 ```sh
-suruc --共有ライブラリ 計算.suru -o libkeisan.so
+suruc --共有ライブラリ 計算.suru -o libkeisan.so   # also writes keisan.h
 ```
 
 ```python
@@ -1587,7 +1587,9 @@ print(lib.nibai(21))   # 42
 6. **Runtime errors don't stop the process.** A runtime error inside an exported function (dividing by 0, a number beyond ±2^62 and so on) doesn't end the caller's process; the function returns 0 (NULL). `keisan_last_error()` is the error message of the last function called on that thread (`32行目 16文字目: 0 で割ることはできません`), or NULL if there was none.
 7. **They can be called from any thread.** They run on the caller's thread and stack (very deep recursion is limited by the caller's stack size). A thread is registered with the runtime library on its first call, and the GC looks at its stack only while a call is running. Several threads can call at the same time. Nesting also works: an exported function calls a foreign function, which calls an exported function again.
 8. **Other names are hidden.** The runtime library's names aren't visible from outside, so two Suru shared libraries can be loaded together, and a Suru executable can load one with `外部の「./libkeisan.so」 を 読み込む`, without clashes (each has its own GC).
-9. **Not yet.** Header generation and examples for other languages (stage 2), lists, records and byte sequences (stage 3), kumu (stage 4) and Windows .dll (stage 5) are later stages of #208. The example is `examples/export.suru`.
+9. **A C header is written next to the library.** `suruc --共有ライブラリ … -o libkeisan.so` also writes `keisan.h` in the same folder, with the prototypes of the exported functions (`int64_t nibai(int64_t a1);`) and of the helper functions, the Suru name and types of each function (`する: 二倍する  数 → 数`, with `入出力動作` for actions) and notes on errors, freeing strings and threads. It can be included from C and C++ (it has `extern "C"`). The Go and Python versions write the same header.
+10. **Examples for other languages.** `examples/他の言語から/` calls the functions of `examples/export.suru` from Python (`ctypes`), C, C++, Go (cgo) and Rust, including freeing strings and reading `keisan_last_error()`. Each example prints the same output, and the tests run all of them (each is skipped when its compiler is missing).
+11. **Not yet.** Lists, records and byte sequences (stage 3), kumu (stage 4) and Windows .dll (stage 5) are later stages of #208. The example is `examples/export.suru`.
 
 ## License
 

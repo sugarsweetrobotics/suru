@@ -1,6 +1,7 @@
 # 他の言語から呼べる共有ライブラリにする例(#208)
-# suruc --共有ライブラリ examples/export.suru -o libkeisan.so で libkeisan.so を作り、
-# Python(ctypes)・C・Go・Rust などから nibai・aisatsu などの C の関数として呼びます。
+# suruc --共有ライブラリ examples/export.suru -o libkeisan.so で libkeisan.so と keisan.h を作り、
+# Python(ctypes)・C・C++・Go・Rust などから nibai・aisatsu などの C の関数として呼びます。
+# 呼ぶ例は examples/他の言語から/ にあります。
 # 一番外には定義だけを書きます(読み込んだだけで何かが行われないように)。
 
 数 を 二倍する は 数 を 返す
