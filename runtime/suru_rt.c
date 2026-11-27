@@ -770,6 +770,7 @@ typedef struct TryFrame { jmp_buf jb; struct TryFrame *prev; int quiet; int32_t 
 static _Thread_local TryFrame *try_top;
 static _Thread_local char *fail_last_msg;
 static _Thread_local int32_t fail_last_pos;
+static _Thread_local char *fail_last_full; /* 文を書かない受け口(quiet)で受け止めたエラーの、位置つきの文(他の言語に出す関数 #208) */
 static V caught_failure(void); /* 受け止めた実行時エラーの失敗(後で定義) */
 /* 自分のプログラムから、ライブラリの関数を呼んでいる場所(#154)。ライブラリの中で実行時エラーになったら、
    この場所をエラーの位置にして、ライブラリの位置は添えるだけにする。0 なら呼んでいない */
@@ -820,10 +821,14 @@ __attribute__((noreturn)) static void fail_msg(int32_t pos, const char *msg) {
             fprintf(stderr, "%s\n", b.s);
             fflush(stderr);
         }
-        free(b.s);
         free(fail_last_msg); /* スレッドの一番外の受け口が、合流したときに同じエラーにするために覚えておく */
         fail_last_msg = strdup(msg);
         fail_last_pos = pos;
+        if (try_top->quiet) {
+            free(fail_last_full);
+            fail_last_full = strdup(b.s + strlen("エラー: "));
+        }
+        free(b.s);
         TryFrame *f = try_top;
         try_top = f->prev;
         call_pos = f->cpos;
@@ -5547,13 +5552,253 @@ int sigprocmask(int how, const void *s, void *old) { (void)how, (void)s, (void)o
 int sigwait(const void *s, int *sig) { (void)s, (void)sig; WIN_NO_SIGNAL; }
 #endif
 
+extern void suru_main(void);
+extern const char suru_source[];
+
+/* ------------------------------------------------------------------ */
+/* 他の言語に出す関数(「以下は外部に出す関数です」#208)                    */
+/* ------------------------------------------------------------------ */
+/* IR は出す関数ごとに C の呼び出し規約の関数を作り、引数を i64 の並び(小数は double のビット)に置いて rt_export を呼ぶ。
+ * 型の字: l 数(int64_t)・i 整数(int)・d 小数(double)・f 単精度(float、並びと値では double)・b 真偽(int)・
+ * s 文字列(const char *。値は malloc した写し)・p 番地(void *)・v 無(値だけ)。引数の字の後に値の字、動作なら最後に「!」。
+ * 実行時エラーは受け止めて 0 を返し、文は rt_lib_last_error で読める(共有ライブラリの形 SURU_LIB のとき) */
+static _Thread_local char *export_error; /* このスレッドで最後に呼んだ出す関数のエラー(なければ NULL) */
+
+#ifdef SURU_LIB
+/* 共有ライブラリの形: main はなく、最初に出す関数が呼ばれたときに一度だけ初期化する。
+ * 呼び出しは呼んだ側のスレッドとスタックで動かす。初めて呼んだスレッドは SThread を作って表に足し
+ * (スレッドが終わるときに外す)、呼んでいる間だけ「動いている」にする。呼び終わったら、スタックを GC が見ないようにする */
+static pthread_once_t lib_once = PTHREAD_ONCE_INIT;
+static pthread_key_t lib_key;
+static char *lib_setup_error; /* 初期化(一番外の定義)のエラー。あれば、どの関数もこのエラーにする */
+static _Thread_local SThread *lib_self;
+static _Thread_local int lib_depth; /* 出す関数の呼び出しの入れ子(外部の関数から呼び戻されたとき 2 以上) */
+
+/* スレッドの使っていたブロックを共有のつながりに戻す(alloc_mu を持って呼ぶ) */
+static void lib_return_blocks(SThread *t) {
+    for (int a = 0; a < 2; a++)
+        for (int k = 0; k < GC_NCLASS; k++) {
+            GcBlk *b = t->avail[a][k];
+            if (!b) continue;
+            b->next = gc_avail[a][k];
+            gc_avail[a][k] = b;
+            t->avail[a][k] = NULL;
+        }
+}
+
+/* 呼んだことのあるスレッドが終わった: 表から外す */
+static void lib_thread_exit(void *arg) {
+    SThread *t = arg;
+    pthread_mutex_lock(&world_mu);
+    SThread **pp = &threads;
+    while (*pp && *pp != t) pp = &(*pp)->next;
+    if (*pp) *pp = t->next;
+    __atomic_fetch_add(&gc_since, t->since, __ATOMIC_RELAXED);
+    pthread_mutex_lock(&alloc_mu);
+    lib_return_blocks(t);
+    pthread_mutex_unlock(&alloc_mu);
+    world_changed();
+    pthread_mutex_unlock(&world_mu);
+    pthread_cond_destroy(&t->wcv);
+    free(t);
+}
+
+static void lib_setup(void) {
+    self_thread = &main_thread;
+    main_thread.top = __builtin_frame_address(0);
+    gc_init();
+    pthread_cond_init(&main_thread.wcv, NULL);
+    source_text = suru_source;
+    init_builtins();
+    const char *e = getenv("SURU_GC_MIN");
+    if (e) gc_min = gc_next = (size_t)strtoull(e, NULL, 10) << 10;
+    if (gc_min / 16 < gc_batch) gc_batch = gc_min / 16;
+    gc_log = getenv("SURU_GC_LOG") != NULL;
+    gc_on = 1;
+    TryFrame f;
+    f.prev = NULL;
+    f.quiet = 1;
+    f.cpos = 0;
+    try_top = &f;
+    if (setjmp(f.jb) == 0) {
+        suru_main(); /* 一番外の定義(関数の値を大域変数に入れる) */
+        try_top = NULL;
+    } else {
+        lib_setup_error = fail_last_full ? fail_last_full : strdup("初期化に失敗しました");
+        fail_last_full = NULL;
+    }
+    fflush(stdout);
+    /* ここからは、出す関数を呼んでいるスレッドだけが動いている(初めは誰もいない) */
+    lib_return_blocks(&main_thread);
+    main_thread.since = 0;
+    threads = NULL;
+    world_running = 0;
+    world_multi = 1;
+    pthread_key_create(&lib_key, lib_thread_exit);
+}
+
+static int export_begin(char *top) {
+    pthread_once(&lib_once, lib_setup);
+    SThread *t = lib_self;
+    if (!t) {
+        t = calloc(1, sizeof(SThread));
+        if (!t) gc_oom();
+        pthread_cond_init(&t->wcv, NULL);
+        lib_self = t;
+        pthread_setspecific(lib_key, t);
+        pthread_mutex_lock(&world_mu);
+        t->next = threads;
+        threads = t;
+        pthread_mutex_unlock(&world_mu);
+    }
+    self_thread = t;
+    if (lib_depth++ == 0) t->top = top;
+    else ffi_depth--; /* 外部の関数から呼び戻された(このスレッドは外に出ている) */
+    world_acquire();
+    return 0;
+}
+
+static void export_end(int back) {
+    (void)back;
+    if (--lib_depth > 0) {
+        world_release();
+        ffi_depth++;
+        return;
+    }
+    fflush(stdout);
+    pthread_mutex_lock(&world_mu);
+    world_running--;
+    self_thread->lo = NULL; /* もう する の値はスタックにない(このあと呼んだ側がスタックを使う) */
+    pthread_cond_signal(&world_stop_cv);
+    pthread_mutex_unlock(&world_mu);
+}
+
+/* 共有ライブラリの補助(ライブラリの名前を頭に付けた名前で出す。suruc が作る小さな C のファイルから呼ぶ) */
+int rt_lib_init(void) {
+    pthread_once(&lib_once, lib_setup);
+    return lib_setup_error ? -1 : 0;
+}
+#else
+/* 実行ファイルの形: 外部の関数から呼び戻されたときだけ、外から戻る(1 を返す) */
+static int export_begin(char *top) {
+    (void)top;
+    if (ffi_depth <= 0) return 0;
+    ffi_depth--;
+    world_acquire();
+    return 1;
+}
+static void export_end(int back) {
+    if (!back) return;
+    world_release();
+    ffi_depth++;
+}
+#endif
+
+const char *rt_lib_last_error(void) { return export_error; }
+void rt_lib_free(void *p) { free(p); }
+
+/* 呼んだ側の C の値を する の値にする */
+static V export_in(char c, int64_t a, const char *name, int32_t pos) {
+    double d;
+    switch (c) {
+    case 'l':
+        if (a > INT_MAX62 || a < INT_MIN62)
+            fail(pos, "「%s」に渡した数 %lld が大きすぎます(数は ±%lld までです)", name, (long long)a, (long long)INT_MAX62);
+        return mk_int(a, pos);
+    case 'i': return mk_int((int32_t)a, pos);
+    case 'b': return rt_bool((int32_t)a != 0);
+    case 'd':
+    case 'f':
+        memcpy(&d, &a, sizeof d);
+        return rt_float(d);
+    case 's': {
+        const char *p = (const char *)(intptr_t)a;
+        return cstr(p ? p : "");
+    }
+    default: return rt_ffi_from_ptr((void *)(intptr_t)a);
+    }
+}
+
+__attribute__((noreturn)) static void export_bad(V v, const char *name, const char *want, int32_t pos) {
+    fail(pos, "「%s」の値は%sでなければなりません(「%s」でした)", name, want, plain(v).s);
+}
+
+/* する の値を呼んだ側の C の値にする */
+static int64_t export_out(char c, V v, const char *name, int32_t pos) {
+    double d;
+    int64_t out = 0;
+    switch (c) {
+    case 'v': return 0;
+    case 'l':
+    case 'i':
+        if (IS_INT(v)) out = INT_VAL(v);
+        else if (TAG(v) == T_FLT && AS(Flt, v)->d == floor(AS(Flt, v)->d) && fabs(AS(Flt, v)->d) < 4611686018427387904.0)
+            out = (int64_t)AS(Flt, v)->d;
+        else export_bad(v, name, "整数", pos);
+        if (c == 'i' && (out < INT32_MIN || out > INT32_MAX)) export_bad(v, name, "-2147483648 から 2147483647 までの整数", pos);
+        return out;
+    case 'd':
+    case 'f':
+        if (!is_num(v)) export_bad(v, name, "数", pos);
+        d = num_d(v);
+        memcpy(&out, &d, sizeof d);
+        return out;
+    case 'b':
+        if (TAG(v) != T_BOOL) export_bad(v, name, "真偽", pos);
+        return AS(Bool, v)->b ? 1 : 0;
+    case 's': {
+        if (TAG(v) != T_STR) export_bad(v, name, "文字列", pos);
+        Str *s = AS(Str, v);
+        char *p = malloc((size_t)s->n + 1);
+        if (!p) gc_oom();
+        memcpy(p, s->s, (size_t)s->n);
+        p[s->n] = 0;
+        return (int64_t)(intptr_t)p;
+    }
+    default:
+        if (TAG(v) != T_ADDR) export_bad(v, name, "番地", pos);
+        return (int64_t)(intptr_t)AS(Addr, v)->p;
+    }
+}
+
+int64_t rt_export(V *slot, int32_t n, const char *codes, int64_t *a, const char *name, int32_t pos) {
+    int back = export_begin(__builtin_frame_address(0));
+    free(export_error);
+    export_error = NULL;
+    volatile int64_t out = 0;
+#ifdef SURU_LIB
+    if (lib_setup_error) {
+        export_error = strdup(lib_setup_error);
+        export_end(back);
+        return 0;
+    }
+#endif
+    TryFrame f;
+    f.prev = try_top;
+    f.quiet = 1;
+    f.cpos = call_pos;
+    try_top = &f;
+    if (setjmp(f.jb) == 0) {
+        V args[16];
+        for (int i = 0; i < n; i++) args[i] = export_in(codes[i], a[i], name, pos);
+        V r = rt_force(apply(*slot, n, args, pos));
+        if (codes[n + 1] == '!' && (TAG(r) == T_ACT || TAG(r) == T_PURE)) r = rt_force(perform(r));
+        out = export_out(codes[n], r, name, pos);
+        try_top = f.prev;
+    } else {
+        export_error = fail_last_full ? fail_last_full : strdup("実行時エラー");
+        fail_last_full = NULL;
+        out = 0;
+    }
+    export_end(back);
+    return out;
+}
+
 /* ------------------------------------------------------------------ */
 /* 始まり                                                              */
 /* ------------------------------------------------------------------ */
 
-extern void suru_main(void);
-extern const char suru_source[];
-
+#ifndef SURU_LIB
 static void *run_main(void *arg) {
     (void)arg;
     self_thread = &main_thread;
@@ -5608,3 +5853,4 @@ int main(int argc, char **argv) {
     }
     return 0;
 }
+#endif /* SURU_LIB */

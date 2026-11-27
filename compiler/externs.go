@@ -246,11 +246,72 @@ func opensExtBlock(ln *Line) bool {
 	return len(ts) == 1 && ts[0].Kind == "KW" && extBlockWords[ts[0].S]
 }
 
-// expandExterns は外部の関数の1行の書き方とまとまりを、型の宣言と定義の2行ずつにする(一番外だけ)
+// KwExportMark は「以下は外部に出す関数です」の中の1行を直した文の頭の印(書けない字を含むので、書いたものとはぶつからない)
+const KwExportMark = "\x00外部に出す"
+
+const exportLineHelp = "1行に1つ、「二倍する は 「nibai」」のように、このファイルの関数の名前と C の名前を書きます"
+
+// exportBlock は「以下は外部に出す関数です」から「以上です」までを、1行ずつ「印 名前 「C の名前」」の文にする(#208)。
+// i は頭の行の位置。直した行と、「以上」の次の位置を返す
+func exportBlock(lines []*Line, i int) ([]*Line, int) {
+	ln := lines[i]
+	word := KwIkaExport
+	if ln.Indent != 0 {
+		raise(ln.Number, "「"+word+"です」は一番外(字下げなし)に書きます")
+	}
+	i++
+	var out []*Line
+	names := map[string]int{}
+	syms := map[string]int{}
+	deep := i < len(lines) && lines[i].Indent > 0
+	for i < len(lines) && !isIjou(lines[i]) {
+		b := lines[i]
+		if deep && b.Indent == 0 {
+			break
+		}
+		ts := nosep(b.Tokens)
+		if len(ts) > 0 && ts[len(ts)-1].Kind == "PERIOD" {
+			ts = ts[:len(ts)-1]
+		}
+		if len(ts) != 3 || !isKw(ts[1], KwWa) || ts[2].Kind != "STR" {
+			raise(b.Number, "「"+word+"です」の中には、"+exportLineHelp)
+		}
+		if ts[0].Kind != "CALL" {
+			raise(ts[0].Line, "「"+ts[0].S+"」は関数ではないので、外部に出せません(出せるのは「…する」の関数です)")
+		}
+		name, sym := ts[0].S, ts[2].S
+		if at, ok := names[name]; ok {
+			raise(b.Number, fmt.Sprintf("「%s」がまとまりの中で2回書かれています(%d行目と%d行目)", name, at, b.Number.Line))
+		}
+		if at, ok := syms[sym]; ok {
+			raise(b.Number, fmt.Sprintf("C の名前「%s」がまとまりの中で2回書かれています(%d行目と%d行目)", sym, at, b.Number.Line))
+		}
+		names[name] = b.Number.Line
+		syms[sym] = b.Number.Line
+		out = append(out, &Line{Indent: 0, Tokens: []*Token{tok("KW", KwExportMark, ts[0].Line), ts[0], ts[2]}, Number: b.Number, Closed: b.Closed})
+		i++
+	}
+	if i >= len(lines) || !isIjou(lines[i]) {
+		raise(ln.Number, "「"+word+"です」を閉じる「"+KwIjou+"」がありません(最後の関数の行の後に「"+KwIjou+"」だけの行を書きます)")
+	}
+	if len(out) == 0 {
+		raise(ln.Number, "「"+word+"です」と「"+KwIjou+"」の間に関数がありません")
+	}
+	return out, i + 1
+}
+
+// expandExterns は外部の関数の1行の書き方とまとまりを、型の宣言と定義の2行ずつにする(一番外だけ)。
+// 他の言語に出す関数のまとまり(#208)は、1行ずつの文にする
 func expandExterns(lines []*Line) []*Line {
 	var out []*Line
 	for i := 0; i < len(lines); {
 		ln := lines[i]
+		if ts := nosep(ln.Tokens); len(ts) == 1 && isKw(ts[0], KwIkaExport) {
+			got, next := exportBlock(lines, i)
+			out = append(out, got...)
+			i = next
+			continue
+		}
 		if opensExtBlock(ln) {
 			word := nosep(ln.Tokens)[0].S
 			if ln.Indent != 0 {

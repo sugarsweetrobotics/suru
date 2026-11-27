@@ -4,6 +4,16 @@
 
 Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
 
+## Unreleased
+
+### New
+
+1. **Build shared libraries that other languages can call.** List exported functions and their C names with `以下は外部に出す関数です` … `二倍する は 「nibai」` … `以上です`, and build a .so or .dylib with `suruc --共有ライブラリ 計算.suru -o libkeisan.so` (`suru --翻訳 --共有ライブラリ` in the Python version). Types come from the type declaration (数, 整数, 小数, 単精度, 真偽, 文字列, 番地, 無), and the functions can be called from Python's ctypes, C and so on. Runtime errors return 0 and can be read with `keisan_last_error()`, and calls work from any thread. This is stage 1 of #208.
+
+### Fixed
+
+1. **A quasi-quote head written in a comment is no longer read as code.** A line like `# 例: 道群 とは 以下の【道】です` (or with `＃`/`※` before `とは`) used to start a quasi-quote and then fail with 「中身は頭より深く字下げして…」. The interpreter, `suruc` and `suru --点検` now treat it as a comment (#192).
+
 ## 0.10.1
 
 ### Fixed

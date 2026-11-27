@@ -248,6 +248,8 @@ def dump(n) -> str:
         return f"外庫({n.name}){at()}"
     if isinstance(n, S.Extern):
         return f"外({n.symbol} {n.pointer}){at()}"
+    if isinstance(n, S.Export):
+        return f"出({n.name} {n.symbol}){at()}"
     if isinstance(n, S.Visibility):
         return f"公開({'公' if n.public else '非'} [{' '.join(n.names)}]){at()}"
     raise AssertionError(f"表示できない構文木: {n!r}")
@@ -402,6 +404,9 @@ def test_例とライブラリの行の構文木が同じ(dumper, path):
 
 # 手で書いたプログラム(文の書き方の組み合わせ)
 PROGRAMS = [
+    # 他の言語に出す関数のまとまり(#208)
+    "数 を 二倍する は 数\nx を 二倍する とは x * 2\n以下 は 外部 に 出す 関数 です\n  二倍する は 「nibai」\n以上\n",
+    "数を二倍するは、数を返す。\nxを二倍するとは、x*2です。\n以下は外部に出す関数です。\n二倍するは、「nibai」。\n以上です。\n",
     """\
 会員 とは 番号 は 数 で 名前 は 文字列 で 年齢 は 数 の 組
 図形 とは 半径 は 数 の 円 か 幅 は 数 で 高 は 数 の 長方形 か 点図形
@@ -614,6 +619,11 @@ x を 二倍する とは x * 2
 ]
 
 BAD_PROGRAMS = [
+    "数 を 二倍する は 数\nx を 二倍する とは x * 2\n以下は外部に出す関数です\n  二倍する は 「nibai」\n",
+    "以下は外部に出す関数です\n以上です\n",
+    "数 を 二倍する は 数\nx を 二倍する とは x * 2\n以下は外部に出す関数です\n  二倍する 「nibai」\n以上です\n",
+    "x とは 1\n以下は外部に出す関数です\n  x は 「a」\n以上です\n",
+    "f とは 以下の手順です\n  以下は外部に出す関数です\n    二倍する は 「a」\n  以上です\n  以上です\n",
     "  x とは 1\n",
     "x とは\n",
     "とは 1\n",
