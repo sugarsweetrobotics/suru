@@ -270,6 +270,9 @@ func shortName(n string) string {
 	if d := strings.TrimPrefix(n, "引数"); d != n && d != "" && strings.Trim(d, "0123456789") == "" {
 		return "…"
 	}
+	if strings.HasPrefix(n, "（") { // 場合ごとの定義をまとめたときの引数(「（を）」)
+		return "…"
+	}
 	return n
 }
 
