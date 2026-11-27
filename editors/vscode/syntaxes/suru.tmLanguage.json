@@ -8,6 +8,9 @@
   ],
   "patterns": [
     {
+      "include": "#quasi"
+    },
+    {
       "include": "#punct-line"
     },
     {
@@ -18,6 +21,9 @@
     },
     {
       "include": "#quoted-name"
+    },
+    {
+      "include": "#quasi-name"
     },
     {
       "include": "#import"
@@ -33,6 +39,9 @@
     },
     {
       "include": "#builtin"
+    },
+    {
+      "include": "#derive"
     },
     {
       "include": "#spaced-call"
@@ -145,6 +154,24 @@
     "spaced-call": {
       "name": "entity.name.function.suru",
       "match": "(?<=^|[\\s　（）()]|内の)[^\\s　（）()「」『』。、#＃※+\\-*/%^<>=!−×÷＋－＊／％＾＝≠≦≧≤≥＜＞・]+?(?:しましてから|であること|してから|しまして|すること|します|である|でない|した|して|する)(?=$|[\\s　（）()])"
+    },
+    "quasi-name": {
+      "match": "(【)([^【】 　]+)(】)",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.tag.suru"
+        },
+        "2": {
+          "name": "entity.name.tag.suru"
+        },
+        "3": {
+          "name": "punctuation.definition.tag.suru"
+        }
+      }
+    },
+    "derive": {
+      "name": "keyword.other.declaration.suru",
+      "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])導出(?:する|します)(?=[ 　]*。?[ 　]*(?:[#＃].*)?$)"
     },
     "kanji-keyword": {
       "patterns": [
@@ -277,6 +304,54 @@
       "name": "variable.other.suru",
       "match": "[\\p{L}_&&[^ぁ-ゟ]][\\p{L}\\p{Nd}_&&[^ぁ-ゟ]]*"
     },
+    "quasi": {
+      "begin": "^([ 　]*)(.*?)(以下[ 　]*[のは][ 　]*)(?=【[^【】 　]+】[ 　]*(?:です)?[ 　]*。?[ 　]*(?:[#＃].*)?$)",
+      "beginCaptures": {
+        "2": {
+          "patterns": [
+            {
+              "include": "#spaced-call"
+            },
+            {
+              "include": "#hiragana"
+            },
+            {
+              "include": "#name"
+            }
+          ]
+        },
+        "3": {
+          "name": "keyword.control.suru"
+        }
+      },
+      "end": "^\\1(以上)(?:[ 　]*です)?",
+      "endCaptures": {
+        "1": {
+          "name": "keyword.control.suru"
+        }
+      },
+      "patterns": [
+        {
+          "begin": "\\G",
+          "end": "$",
+          "patterns": [
+            {
+              "include": "#quasi-name"
+            },
+            {
+              "include": "#kanji-keyword"
+            },
+            {
+              "include": "#comment"
+            }
+          ]
+        },
+        {
+          "name": "meta.embedded.block.suru",
+          "match": ".+"
+        }
+      ]
+    },
     "punct-line": {
       "begin": "^(?=(?:(?<str>「(?:[^「」]|\\g<str>)*」)|『[^』]*』|[^「『#＃※。、])*[。、])",
       "end": "$",
@@ -289,6 +364,9 @@
         },
         {
           "include": "#quoted-name"
+        },
+        {
+          "include": "#quasi-name"
         },
         {
           "include": "#import"
@@ -304,6 +382,9 @@
         },
         {
           "include": "#builtin"
+        },
+        {
+          "include": "#derive"
         },
         {
           "include": "#call"

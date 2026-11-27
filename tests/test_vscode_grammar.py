@@ -47,3 +47,12 @@ def test_builtins_and_keywords_are_highlighted():
     # 「以下の手順」は「以下 の 手順」とも書けるので、間の空白を許す形で入っている
     assert "以下[ 　]*の[ 　]*(?:入出力)?手順" in text
     assert "以下[ 　]*[のは][ 　]*外部[ 　]*の[ 　]*(?:入出力動作|関数)" in text
+
+
+def test_quasi_and_derive_are_highlighted():
+    # 準クォートの頭と「以上です」、【道】、「導出する」(#192)
+    g = make_grammar.build()
+    assert "#quasi" in [p["include"] for p in g["patterns"]]
+    assert g["repository"]["quasi"]["end"] == "^\\1(以上)(?:[ 　]*です)?"
+    assert "導出(?:する|します)" in g["repository"]["derive"]["match"]
+    assert g["repository"]["quasi-name"]["match"] == "(【)([^【】 　]+)(】)"

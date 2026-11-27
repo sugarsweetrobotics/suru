@@ -147,3 +147,22 @@ def test_history_path(monkeypatch):
     monkeypatch.delenv("SURU_HISTORY")
     monkeypatch.setenv("XDG_STATE_HOME", "/s")
     assert suru.history_path() == os.path.join("/s", "suru", "history")
+
+
+def test_quasi_and_derive_use_earlier_inputs(tmp_path, monkeypatch):
+    # 前の入力で読み込んだファイルの展開・導出の関数と、前の入力で定義した型を使える(#192)
+    from test_derive import DERIVERS
+    from test_quasi import EXPANDERS
+
+    (tmp_path / "道.suru").write_text(EXPANDERS, encoding="utf-8")
+    (tmp_path / "写.suru").write_text(DERIVERS, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    out = session("「道」 を 読み込む", "以下は【定】です\n  x 10\n以上です", "x",
+                  "「写」 を 読み込む", "色 とは 赤 か 青", "色 は 【数え】 を 導出する", "色形数")
+    assert out == ["x は 数", "10 は 数", "色形数 は 数", "2 は 数"]
+
+
+def test_waits_for_quasi_end():
+    assert not Repl.complete(["以下は【定】です", "  x 10"])
+    assert not Repl.complete(["z とは 以下の【式】です", "  1"])
+    assert Repl.complete(["以下は【定】です", "  x 10", "以上です"])

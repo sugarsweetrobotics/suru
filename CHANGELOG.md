@@ -4,7 +4,7 @@
 
 Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
 
-## Unreleased
+## 0.10.0
 
 ### New
 
@@ -18,11 +18,14 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 8. **`suruc --試験 ファイルかフォルダ [名前]` runs the same tests with the Go compiler.** Each file becomes one test binary (built with -O0 unless another -O is given), and each test runs in its own process. The output is the same as `suru --試験` (#193).
 9. **Deriving JSON.** `会員 は 【JSON】 を 導出する` defines `会員JSON化する` and `会員JSON復元する` (`（会員 と 文字列） の 成否`). Records become objects, and types with several forms get a `形` item. Fields can be `数`, `文字列`, `真偽`, `JSON`, `X の リスト` and other types that derive 【JSON】 (#192).
 10. **`kumu 試験` also runs the test blocks and examples in the project's source files.** Each source file (other than `組.suru` and the files in `試験/` and `出力/`) with tests becomes one test binary, linked with the project's C sources, and runs in the project folder. `kumu 試験 名前` selects them by name as before (#193).
+11. **The interactive mode (REPL) reads quasi-quotes and deriving.** It waits for `以上です` before running a `以下は【X】です` block, and finds expanders, derivers and types from earlier inputs, so `「道」 を 読み込む` and `会員 とは …` can be typed before the line that uses them (#192).
 
 ### Fixed
 
 1. **The interpreter shows what it printed before it waits.** Like a compiled program, it now flushes standard output before waiting for a connection (`接続受付する`) or for data from a connection, so a server whose output goes to a pipe shows `ポート 9000 で待っています` right away (#195).
 2. **A deadlock between threads is always reported.** When two threads started waiting at almost the same moment (for example `合流する` and `通路受信する`), a compiled program could sometimes hang instead of failing with 「すべてのスレッドが待っていて、先に進めません」 (#195).
+
+The VS Code extension 0.10.0 highlights quasi-quotes (`以下は【X】です` … `以上です`, with the block left uncolored as another language), `【X】` and `導出する`.
 
 ## 0.9.1
 
