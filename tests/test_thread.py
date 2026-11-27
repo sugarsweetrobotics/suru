@@ -289,6 +289,29 @@ def test_通路(tmp_path, kind):
     assert lines[2] == "エラー: 25行目 8文字目: すべてのスレッドが待っていて、先に進めません(通路や合流の待ち)"
 
 
+# ほかのスレッドがまだ動いている間に待ち始め、そのスレッドが何も送らずに終わる(#230)。
+# 終わったときに待っている側を起こさないと、「先に進めません」と気づかずにずっと眠ったままになる
+LAST_EXIT = """「スレッド」 を 読み込んで 使う
+「時間」 を 読み込んで 使う
+数 を 遅延返却する は 数 の 動作
+x を 遅延返却する とは 手順
+  0.3 を 待機する
+  x を 結果にする
+試す とは 手順
+  e とは 1 で 通路作成した 結果
+  p とは （1 を 遅延返却する） を 並行開始した 結果
+  e から 通路受信する
+試す
+"""
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_最後に動いていたスレッドが終わると止まらずにエラー(tmp_path, kind):
+    r = subprocess.run(build(LAST_EXIT, tmp_path, kind), capture_output=True, text=True, timeout=60)
+    assert r.returncode == 1
+    assert "先に進めません" in r.stderr
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_お互いに待つと止まらずにエラー(tmp_path, kind):
     r = subprocess.run(build(STUCK, tmp_path, kind), capture_output=True, text=True, timeout=60)
