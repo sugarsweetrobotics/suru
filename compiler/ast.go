@@ -285,6 +285,9 @@ type Module struct {
 	Program []Node
 	Private map[string]bool // 「… は 非公開とする」で外から見えない名前
 	Source  string          // ファイルの中身(コンパイルした実行ファイルのエラーの表示に使う)
+	// Packages は読み込んだときのプロジェクトの依存。展開・導出の関数をコンパイルするときに、
+	// 依存の依存(台帳 から読み込む 蔵 など)を同じように見つけるために使う
+	Packages map[string]Package
 }
 
 // Visibility は「確保する と 解放する は 非公開とする」: 読み込んだ側から見えるか

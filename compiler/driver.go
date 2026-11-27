@@ -42,13 +42,19 @@ func ExportSymbols(ir string) []string {
 // CompileSource は する のプログラムを LLVM IR の文字列にする。間違いがあれば *SuruError
 // (Kind に 構文・型・コンパイル のどれかの印を付ける)
 func CompileSource(source, baseDir, path string, check bool) (ir string, err *SuruError) {
-	return compileSource(source, baseDir, path, check, false)
+	return compileSource(source, baseDir, path, check, false, nil)
+}
+
+// CompileSourceWith は依存(名前 → Package)を決めて CompileSource する。nil なら baseDir から探す。
+// 展開・導出の関数は、それを読み込んだプロジェクトの依存で探す(依存の中には 組.lock がないため)
+func CompileSourceWith(source, baseDir, path string, check bool, pkgs map[string]Package) (ir string, err *SuruError) {
+	return compileSource(source, baseDir, path, check, false, pkgs)
 }
 
 // CompileLibrary は共有ライブラリにするプログラムを LLVM IR にする(#208)。
 // 「以下は外部に出す関数です」が要り、一番外には定義だけを書ける(読み込んだだけで何かが行われないように)
 func CompileLibrary(source, baseDir, path string, check bool) (ir string, err *SuruError) {
-	return compileSource(source, baseDir, path, check, true)
+	return compileSource(source, baseDir, path, check, true, nil)
 }
 
 // checkLibrary は共有ライブラリにするプログラムの一番外を調べる
@@ -71,8 +77,11 @@ func checkLibrary(program []Node) {
 	}
 }
 
-func compileSource(source, baseDir, path string, check, lib bool) (ir string, err *SuruError) {
+func compileSource(source, baseDir, path string, check, lib bool, pkgs map[string]Package) (ir string, err *SuruError) {
 	ctx := NewParseContext(baseDir)
+	if pkgs != nil {
+		ctx.Packages = pkgs
+	}
 	ctx.Path = filePath(path)
 	var program []Node
 	if err = tagged("構文", func() { program = ParseProgram(source, ctx) }); err != nil {

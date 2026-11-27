@@ -175,3 +175,41 @@ func TestDependencies(t *testing.T) {
 		t.Errorf("無いタグ: %s", errb)
 	}
 }
+
+// 依存の中の導出の関数が、その依存の依存を読み込んでも動く(展開の関数は使う側の 組.lock で探す)
+func TestDeriverUsesDependencyOfDependency(t *testing.T) {
+	if native.FindCC() == "" {
+		t.Skip("clang がない")
+	}
+	native.InstallExpander()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("KUMU_HOME", t.TempDir())
+	w := t.TempDir()
+	text := filepath.Join(w, "飾字")
+	gitRepo(t, text, "v1.0.0", map[string]string{
+		"組.suru":  "名前 とは 「飾字」\n",
+		"飾字.suru": "s を 括弧付けする とは 「(」 + s + 「)」\n",
+	})
+	derive := filepath.Join(w, "写")
+	gitRepo(t, derive, "v1.0.0", map[string]string{
+		"組.suru": "名前 とは 「写」\n依存 とは 「file://" + text + "@1.0.0」\n",
+		"写.suru": "「導出」 を 読み込んで 使う\n「飾字」 を 読み込む\n\n" +
+			"型記述 を 名前導出する は 文字列 の 成否\n" +
+			"d を 名前導出する とは （d の 型名 + 「名 とは 」 + （12300 を 文字にする） + （d の 型名 を 飾字内の括弧付けする） + （12301 を 文字にする）） の 成功\n",
+	})
+	k, _, errb := newKumu(w)
+	if rc := k.run([]string{"新規", "アプリ"}); rc != 0 {
+		t.Fatal(errb)
+	}
+	app := filepath.Join(w, "アプリ")
+	k, out, errb := newKumu(app)
+	if rc := k.run([]string{"追加", "file://" + derive}); rc != 0 {
+		t.Fatalf("追加: %s", errb)
+	}
+	os.WriteFile(filepath.Join(app, "本体.suru"), []byte("「写」 を 読み込む\n\n会員 とは 番号 は 数 の 組\n会員 は 【名前】 を 導出する\n\n会員名 を 表示する\n"), 0o644)
+	out.Reset()
+	errb.Reset()
+	if rc := k.run([]string{"実行", "-O0"}); rc != 0 || out.String() != "(会員)\n" {
+		t.Fatalf("実行: rc=%d %q %s", rc, out, errb)
+	}
+}
