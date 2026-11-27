@@ -7,6 +7,7 @@
 //	kumu 初期化        # 今のフォルダに雛形を作る(init)
 //	kumu 作る          # 出力/名前 のバイナリを作る(build)
 //	kumu 実行 -- 引数  # 作って実行する(run)
+//	kumu 導入          # 作って ~/.local/bin に入れる(install)
 package main
 
 import (
@@ -45,6 +46,7 @@ const usage = `使い方: kumu <命令> [オプション]
   公開        確かめて Git のタグ v版 を付ける。push はしない(publish)
   文書        公開の名前の API ドキュメントを docs/api に書く(doc。--雛形 で Sphinx と Read the Docs の設定を書く)
   書き込む    マイコン向けに作って、USB でつないだ基板に書き込む(flash)
+  導入 [場所] 作ったコマンドを ~/.local/bin に入れる(install。場所は フォルダ か Git の 場所[@版]。--先 で入れる場所を選ぶ)
   版          kumu の版を出す(version)
   助け        この案内を出す(help)
 
@@ -80,6 +82,7 @@ var commands = map[string]string{
 	"公開": "公開", "publish": "公開",
 	"文書": "文書", "doc": "文書", "docs": "文書",
 	"書き込む": "書き込む", "flash": "書き込む", "upload": "書き込む",
+	"導入": "導入", "install": "導入",
 	"版": "版", "version": "版", "--版": "版", "--version": "版",
 	"助け": "助け", "help": "助け", "-h": "助け", "--help": "助け",
 }
@@ -154,6 +157,8 @@ func (k *kumu) run(args []string) int {
 		return k.publish(rest)
 	case "文書":
 		return k.doc(rest)
+	case "導入":
+		return k.install(rest)
 	}
 	// 作る・実行
 	opt, check := "-O2", true

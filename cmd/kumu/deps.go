@@ -200,22 +200,8 @@ func (r *resolver) fetch(d Dep) (string, error) {
 	tmp := fmt.Sprintf("%s.tmp-%d", dir, os.Getpid())
 	os.RemoveAll(tmp)
 	defer os.RemoveAll(tmp)
-	var lastOut string
-	ok := false
-	for _, tag := range []string{"v" + d.Version, d.Version} {
-		out, err := git("-c", "advice.detachedHead=false", "clone", "--quiet", "--depth", "1", "--branch", tag, gitURL(d.Source), tmp)
-		if err == nil {
-			ok = true
-			break
-		}
-		if out == "" {
-			return "", err
-		}
-		lastOut = out
-		os.RemoveAll(tmp)
-	}
-	if !ok {
-		return "", fmt.Errorf("依存「%s」を取ってこられません(タグ v%s か %s があるか確かめてください):\n%s", d, d.Version, d.Version, strings.TrimSpace(lastOut))
+	if err := cloneTag(d, tmp, "依存"); err != nil {
+		return "", err
 	}
 	commit, err := git("-C", tmp, "rev-parse", "HEAD")
 	if err != nil {
@@ -232,6 +218,23 @@ func (r *resolver) fetch(d Dep) (string, error) {
 	}
 	fmt.Fprintf(r.stderr, "「%s」を取ってきました\n", d)
 	return dir, nil
+}
+
+// cloneTag は d の版のタグ(v1.2.0 か 1.2.0)を dir に浅く clone する。what はエラーの文に使う(「依存」など)
+func cloneTag(d Dep, dir, what string) error {
+	var lastOut string
+	for _, tag := range []string{"v" + d.Version, d.Version} {
+		out, err := git("-c", "advice.detachedHead=false", "clone", "--quiet", "--depth", "1", "--branch", tag, gitURL(d.Source), dir)
+		if err == nil {
+			return nil
+		}
+		if out == "" {
+			return err
+		}
+		lastOut = out
+		os.RemoveAll(dir)
+	}
+	return fmt.Errorf("%s「%s」を取ってこられません(タグ v%s か %s があるか確かめてください):\n%s", what, d, d.Version, d.Version, strings.TrimSpace(lastOut))
 }
 
 // LatestVersion は Git のタグから一番新しい版を探す
