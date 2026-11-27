@@ -105,7 +105,7 @@ n を 内緒する とは n です
 内緒する は 非公開とする
 `
 
-const apiMD = "# 「計算」\n\n計算のライブラリです。\n\n## 二倍する\n\n```suru\n数 を 二倍する は 数 を 返す\n```\n\n使い方: `x を 二倍する`\n\n数を2倍した値です。\n\n例:\n\n```suru\n例えば （3 を 二倍する） は 6 です\n例えば （0 を 二倍する） は 0 です\n```\n\n## 円周率\n\n円周率の近い値です。\n\n## 図形\n\n```suru\n図形 とは\n  半径 の 円\n    か 幅 と 高 の 長方形\n```\n\n図形です。\n\n## 足す計算する\n\n使い方: `a と b を 足す計算する`\n"
+const apiMD = "# 「計算」\n\n計算のライブラリです。\n\n## 二倍する\n\n```suru\n数 を 二倍する は 数 を 返す\n```\n\nUsage: `x を 二倍する`\n\n数を2倍した値です。\n\nExamples:\n\n```suru\n例えば （3 を 二倍する） は 6 です\n例えば （0 を 二倍する） は 0 です\n```\n\n## 円周率\n\n円周率の近い値です。\n\n## 図形\n\n```suru\n図形 とは\n  半径 の 円\n    か 幅 と 高 の 長方形\n```\n\n図形です。\n\n## 足す計算する\n\nUsage: `a と b を 足す計算する`\n"
 
 func TestDocumentMarkdown(t *testing.T) {
 	prog := ParseProgram(apiSrc, NewParseContext("."))

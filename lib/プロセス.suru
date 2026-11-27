@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」のプロセスとパイプのライブラリです。C の system・popen・pipe などを外部の関数として呼びます。
-# 使うファイルに `「プロセス」 を 読み込む` と書き、`プロセス内の命令実行する` のように「プロセス内の」を付けて使います。
+# The process and pipe library of Suru. It calls C's system, popen, pipe and so on as external functions.
+# Write `「プロセス」 を 読み込む` in your file and use the names with the `プロセス内の` prefix, like `プロセス内の命令実行する`.
 #
-# どれも動作です(`引用する` だけは純粋な関数)。命令(文字列)は /bin/sh(Windows では cmd.exe)に渡し、引数のリストで渡すものは1つずつ引用してから渡します。
-# Windows では `分岐する`・`子終了待機する`・`子実行する` は使えません(fork がないため)。
+# All of them are actions (only `引用する` is a pure function). A command (a string) is passed to /bin/sh (cmd.exe on Windows); a list of arguments is quoted one by one first.
+# On Windows `分岐する`, `子終了待機する` and `子実行する` are not available (there is no fork).
 外部の「c」 を 読み込む
 「標準」 を 読み込んで 使う
 「環境」 を 読み込む
 
-# 命令の標準出力(文字列)と終了コードの組です。
+# The standard output (a string) and exit code of a command.
 実行結果 とは 出力 と 終了コード の 組
 
 # --- C の関数 ---
@@ -32,7 +32,7 @@ p を 字数計測する とは 外部の「strlen」 で 番地 を 受け取�
   整数 を 口低水準閉鎖する は 「close」 で 整数 を 返します
   番地 を 一時作成する は 「mkstemp」 で 整数 を 返します
   文字列 を 一時消去する は 「unlink」 で 整数 を 返します
-  # このプロセスの番号です(getpid)。
+  # The number of this process (getpid).
   プロセス番号取得する は 「getpid」 で 整数 を 返します
   低水準分岐する は 「fork」 で 整数 を 返します
   整数 を 番地 で 整数 に 低水準終了待機する は 「waitpid」 で 整数 を 返します
@@ -42,14 +42,14 @@ p を 字数計測する とは 外部の「strlen」 で 番地 を 受け取�
 
 # --- 引用と終了コード ---
 
-# sh 向けに '…' で囲みます(中の ' も正しく逃がします)。純粋な関数です。
+# Quotes for sh with '…' (a ' inside is escaped correctly). A pure function.
 文字列 を 引用する は 文字列
 s を 引用する とは 「'」 + （s を 「'」 から 「'\''」 へ 置換する） + 「'」
 
 文字列 の リスト を 命令組立する は 文字列
 xs を 命令組立する とは （xs を （x を 受け取って x を 引用する を 返すこと） で 写像する） を 「 」 で 結合する
 
-# wait の状態を終了コードにします(シグナルで終わったら 128+番号)。
+# Turns a wait status into an exit code (128 + the signal number if a signal ended it).
 数 を 終了コードにする は 数
 st を 終了コードにする とは もし st % 128 != 0 ならば 128 + st % 128 そうでなければ （st を 256 で 商にする） % 256
 
@@ -92,7 +92,7 @@ st を 系終了コードにする とは 以下の手順です
 
 # --- 終わるまで待つ ---
 
-# 命令を実行し、終わるまで待って終了コードを結果にします(シグナルで終わったら 128+番号)。
+# Runs a command, waits until it ends and gives the exit code (128 + the signal number if a signal ended it).
 文字列 を 命令実行する は 数 の 動作
 命令 を 命令実行する とは 以下の手順です
   表示全確定する
@@ -100,7 +100,7 @@ st を 系終了コードにする とは 以下の手順です
   st を 系終了コードにしてから 結果にする
   以上です
 
-# `（「ls」 と 「-l」） を 引数実行する` のように引数のリストで実行し、終了コードを結果にします。
+# Runs a list of arguments, like `（「ls」 と 「-l」） を 引数実行する`, and gives the exit code.
 文字列 の リスト を 引数実行する は 数 の 動作
 xs を 引数実行する とは xs を 系命令組立してから 命令実行する
 
@@ -133,7 +133,7 @@ h から 命令 で 結果待機する とは 以下の手順です
   出力2 と コード の 実行結果 を 結果にする
   以上です
 
-# 命令を実行し、標準出力と終了コードの組を結果にします。
+# Runs a command and gives its standard output and exit code.
 文字列 を 命令出力取得する は 実行結果 の 動作
 命令 を 命令出力取得する とは 以下の手順です
   表示全確定する
@@ -141,11 +141,11 @@ h から 命令 で 結果待機する とは 以下の手順です
   h から 命令 で 結果待機してから 結果にする
   以上です
 
-# 引数のリストで実行し、標準出力と終了コードの組を結果にします。
+# Runs a list of arguments and gives the standard output and exit code.
 文字列 の リスト を 出力取得する は 実行結果 の 動作
 xs を 出力取得する とは xs を 系命令組立してから 命令出力取得する
 
-# `入力 を 命令 で 命令変換する` で、入力を標準入力に渡して実行し、標準出力と終了コードの組を結果にします。
+# `入力 を 命令 で 命令変換する` runs the command with the input as its standard input and gives the standard output and exit code.
 文字列 を 文字列 で 命令変換する は 実行結果 の 動作
 入力 を 命令 で 命令変換する とは 以下の手順です
   表示全確定する
@@ -176,18 +176,18 @@ s を 一時書出する とは 以下の手順です
 
 # --- 待たずに始める ---
 
-# `命令 を 方法 で 命令開始する` で、終わりを待たずに始めて、口(番地)を結果にします。方法は popen と同じ「r」か「w」です。
+# `命令 を 方法 で 命令開始する` starts a command without waiting and gives a handle (address). The mode is 「r」 or 「w」 as for popen.
 文字列 を 文字列 で 命令開始する は 番地 の 動作
 命令 を 方法 で 命令開始する とは 以下の手順です
   表示全確定する
   （命令 を 方法 で 命令接続する） を （「命令『」 + 命令 + 「』を始めるの」） で 番地確認してから 結果にする
   以上です
 
-# 終わりを待たずに始めて、命令の標準入力に書く口(番地)を結果にします。
+# Starts a command without waiting and gives a handle that writes to its standard input.
 文字列 を 書込命令開始する は 番地 の 動作
 命令 を 書込命令開始する とは 命令 を 「w」 で 命令開始する
 
-# `命令開始する` で始めた口から1行を読みます。
+# Reads one line from a handle started with `命令開始する`.
 番地 から 行読込する は 文字列 の 動作
 h から 行読込する とは 以下の手順です
   p とは 65536 を 確保した 結果
@@ -197,7 +197,7 @@ h から 行読込する とは 以下の手順です
   b を 文字列にして 結果にする
   以上です
 
-# `書込命令開始する` で始めた口へ文字列を書きます。
+# Writes a string to a handle started with `書込命令開始する`.
 文字列 を 番地 へ 命令書込する は 数 の 動作
 s を h へ 命令書込する とは 以下の手順です
   k とは （s を バイト列にする） を 1 で （s を バイト数にする） に h へ 管書取した 結果
@@ -205,7 +205,7 @@ s を h へ 命令書込する とは 以下の手順です
   k を 結果にする
   以上です
 
-# 口を閉じ、命令が終わるまで待って終了コードを結果にします。
+# Closes the handle, waits until the command ends and gives the exit code.
 番地 を 命令終了待機する は 数 の 動作
 h を 命令終了待機する とは 以下の手順です
   st とは （h を 命令切断する） を 「命令を待つの」 で 失敗確認した 結果
@@ -214,14 +214,14 @@ h を 命令終了待機する とは 以下の手順です
 
 # --- fork と exec ---
 
-# fork です。子では 0、親では子のプロセス番号を結果にします。
+# fork. Gives 0 in the child and the child's process number in the parent.
 分岐する は 数 の 動作
 分岐する とは 以下の手順です
   表示全確定する
   （低水準分岐する） を 「プロセスを分けるの」 で 失敗確認してから 結果にする
   以上です
 
-# 子が終わるまで待って終了コードを結果にします(waitpid)。
+# Waits until the child ends and gives its exit code (waitpid).
 数 を 子終了待機する は 数 の 動作
 pid を 子終了待機する とは 以下の手順です
   p とは 8 を 確保した 結果
@@ -231,15 +231,15 @@ pid を 子終了待機する とは 以下の手順です
   st を 系終了コードにしてから 結果にする
   以上です
 
-# 表示を出してから、後始末をせずにすぐ終わります(_exit。fork した子の終わりに)。
+# Flushes the output and ends at once without cleaning up (_exit; for the end of a forked child).
 数 を 子終了する は 数 の 動作
 n を 子終了する とは 以下の手順です
   表示全確定する
   n を 低水準子終了する
   以上です
 
-# fork して子で動作を行い、子は終わります(エラーなら終了コード 1)。親では子のプロセス番号を結果にします。
-# 「スレッド」の `プロセス間通路作成する` と組むと、子と値をやりとりできます。
+# Forks, runs the action in the child and ends the child (exit code 1 on an error). Gives the child's process number in the parent.
+# With `プロセス間通路作成する` of 「スレッド」 you can pass values to and from the child.
 甲 の 動作 を 子実行する は 数 の 動作
 m を 子実行する とは 以下の手順です
   pid とは 分岐した 結果
@@ -282,7 +282,7 @@ ps を 番地配列確保する とは 以下の手順です
   p を 結果にする
   以上です
 
-# このプロセスを別のプログラムに置き換えます(execvp)。戻ったら失敗です。
+# Replaces this process with another program (execvp). Returning means it failed.
 文字列 の リスト を 置換実行する は 数 の 動作
 xs を 置換実行する とは 以下の手順です
   表示全確定する
@@ -303,7 +303,7 @@ p から k で 口番号読取する とは 以下の手順です
   （b を 数列にして 逆順にする） を 0 から （a と x を 受け取って a * 256 + x を 返すこと） で 畳み込みして 結果にする
   以上です
 
-# パイプを作り、`（読む口 と 書く口）` の番号を結果にします。
+# Makes a pipe and gives the numbers `（読む口 と 書く口）` (read end and write end).
 パイプ作成する は 数 の リスト の 動作
 パイプ作成する とは 以下の手順です
   p とは 8 を 確保した 結果
@@ -314,11 +314,11 @@ p から k で 口番号読取する とは 以下の手順です
   （読む口 と 書く口） を 結果にする
   以上です
 
-# `b を fd へ 口書込する` で、口(ファイル記述子)へバイト列を書きます。
+# `b を fd へ 口書込する` writes bytes to a file descriptor.
 バイト列 を 数 へ 口書込する は 数 の 動作
 b を fd へ 口書込する とは （fd を b で （b を バイト長にする） に 口低水準書込する） を 「口に書くの」 で 失敗確認する
 
-# `fd から n を 口読込する` で、口から n バイトまで読みます(終わりなら空)。
+# `fd から n を 口読込する` reads up to n bytes from a file descriptor (empty at the end).
 数 から 数 を 口読込する は バイト列 の 動作
 fd から n を 口読込する とは 以下の手順です
   p とは （もし n > 0 ならば n そうでなければ 1） を 確保した 結果
@@ -328,7 +328,7 @@ fd から n を 口読込する とは 以下の手順です
   b を 結果にする
   以上です
 
-# 口(ファイル記述子)を閉じます。
+# Closes a file descriptor.
 数 を 口閉鎖する は 数 の 動作
 fd を 口閉鎖する とは （fd を 口低水準閉鎖する） を 「口を閉じるの」 で 失敗確認する
 

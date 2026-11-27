@@ -1,18 +1,18 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」の読み書きロックのライブラリです。プロセスどうしで、読む人は何人でも同時に、書く人はひとりだけにします。
-# 使うファイルに `「読書ロック」 を 読み込む` と書き、`読書ロック内の読取実行する` のように「読書ロック内の」を付けて使います。
+# The read-write lock library of Suru: between processes, any number of readers at the same time, but only one writer.
+# Write `「読書ロック」 を 読み込む` in your file and use the names with the `読書ロック内の` prefix, like `読書ロック内の読取実行する`.
 #
-# 共有箱の外のもの(ファイル、バイト列の共有メモリ、C のメモリなど)を守るときに使います。共有箱は中に同じロックを持っています。
-# 名前は 「/suru-例」 のように / で始めます。同じ名前で接続したプロセスどうしで同じロックになります。どれも動作です。
+# Use it to protect things outside a shared box (files, shared memory of bytes, C memory and so on). A shared box has the same lock inside.
+# Names start with /, like 「/suru-例」. Processes connected with the same name share the same lock. All of them are actions.
 #
-# 中は System V のセマフォ2つ(書く人の印・読んでいる人の数)で、SEM_UNDO を付けるので、ロックの中でプロセスが落ちても OS が戻します。
-# 書く人が待っている間は、新しく読む人を入れません(書く人が待ち続けないように)。
+# Inside are two System V semaphores (the writer's flag and the number of readers) with SEM_UNDO, so the OS gives the lock back if a process dies while holding it.
+# While a writer is waiting, new readers are not let in (so the writer does not wait forever).
 外部の「c」 を 読み込む
 「標準」 を 読み込んで 使う
 「共有メモリ」 を 読み込んで 使う
 
-# プロセスどうしで使う読み書きロックです。
+# A read-write lock shared between processes.
 読書ロック とは 領域 と 識別子 の 組
 
 # --- C の関数 ---
@@ -61,8 +61,8 @@ l を 何 で 失敗解放する とは 以下の手順です
 
 # --- 中で行う ---
 
-# `l で 動作 を 読取実行する` で、読む人として動作を行います(ほかの読む人と同時に。書く人がいれば待ちます)。
-# 動作がエラーになったらロックを手放してから「読み書きロック『名前』で読む途中でエラーになりました」のエラーにします。
+# `l で 動作 を 読取実行する` runs the action as a reader (together with other readers; waits while there is a writer).
+# If the action fails, it releases the lock and then fails with 「読み書きロック『名前』で読む途中でエラーになりました」.
 読書ロック で 甲 の 動作 を 読取実行する は 甲 の 動作
 l で m を 読取実行する とは 以下の手順です
   l を 読取取得する
@@ -71,8 +71,8 @@ l で m を 読取実行する とは 以下の手順です
   r を 結果にする
   以上です
 
-# `l で 動作 を 書込実行する` で、書く人として動作を行います(ほかの人がいなくなるまで待ちます)。
-# 動作がエラーになったらロックを手放してからエラーにします。
+# `l で 動作 を 書込実行する` runs the action as the writer (waits until no one else holds the lock).
+# If the action fails, it releases the lock and then fails.
 読書ロック で 甲 の 動作 を 書込実行する は 甲 の 動作
 l で m を 書込実行する とは 以下の手順です
   l を 書込取得する
@@ -83,7 +83,7 @@ l で m を 書込実行する とは 以下の手順です
 
 # --- 作る・接続する ---
 
-# 作ります(同じ名前があれば作り直します)。
+# Makes the lock (remaking it if the name exists).
 文字列 を 読書ロック作成する は 読書ロック の 動作
 名前 を 読書ロック作成する とは 以下の手順です
   m とは 名前 を 64 で 共有メモリ作成した 結果
@@ -104,7 +104,7 @@ m を 古錠削除する とは 以下の手順です
 共有メモリ を 識別子読込する は 数 の 動作
 m を 識別子読込する とは m から 14 を 32 で 共有読込してから 復元する
 
-# すでにあるロックに接続します。
+# Connects to an existing lock.
 文字列 を 読書ロック接続する は 読書ロック の 動作
 名前 を 読書ロック接続する とは 以下の手順です
   m とは 名前 を 64 で 共有メモリ接続した 結果
@@ -126,11 +126,11 @@ m を 名前 で 印違失敗する とは 以下の手順です
 
 # --- やめる ---
 
-# 接続をやめます(ロックは残ります)。
+# Disconnects (the lock stays).
 読書ロック を 読書ロック解除する は 数 の 動作
 l を 読書ロック解除する とは l の 領域 を 共有メモリ解除する
 
-# ロックを消します。
+# Removes the lock.
 読書ロック を 読書ロック削除する は 数 の 動作
 l を 読書ロック削除する とは 以下の手順です
   （l の 識別子 を 0 で 0 に 錠低水準制御する） を （「読み書きロック『」 + l の 領域 の 名前 + 「』を消すの」） で 失敗確認する

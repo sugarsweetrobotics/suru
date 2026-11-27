@@ -321,13 +321,13 @@ func (d *DocFile) Markdown() string {
 			b.WriteString("\n```suru\n" + it.Signature + "\n```\n")
 		}
 		if it.Usage != "" {
-			b.WriteString("\n使い方: `" + it.Usage + "`\n")
+			b.WriteString("\nUsage: `" + it.Usage + "`\n")
 		}
 		if it.Description != "" {
 			b.WriteString("\n" + it.Description + "\n")
 		}
 		if len(it.Examples) > 0 {
-			b.WriteString("\n例:\n\n```suru\n" + strings.Join(it.Examples, "\n") + "\n```\n")
+			b.WriteString("\nExamples:\n\n```suru\n" + strings.Join(it.Examples, "\n") + "\n```\n")
 		}
 	}
 	return b.String()

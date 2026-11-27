@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」のファイルの読み書きのライブラリです。C の stdio を外部の関数として呼びます。
-# 使うファイルに `「ファイル」 を 読み込む` と書き、`ファイル内の読込する` のように「ファイル内の」を付けて使います。
+# The file library of Suru: reading and writing files. It calls C's stdio as external functions.
+# Write `「ファイル」 を 読み込む` in your file and use the names with the `ファイル内の` prefix, like `ファイル内の読込する`.
 #
-# どれも動作です。失敗すると「ファイル『a.txt』を開くのに失敗しました(No such file or directory)」のような実行時エラーになります。
+# All of them are actions. On failure they fail with a runtime error like 「ファイル『a.txt』を開くのに失敗しました(No such file or directory)」.
 外部の「c」 を 読み込む
 「標準」 を 読み込んで 使う
 
@@ -35,7 +35,7 @@ p を 字数計測する とは 外部の「strlen」 で 番地 を 受け取�
 
 # --- 読む ---
 
-# 道のファイル全体をバイト列で読みます。
+# Reads the whole file at the path as bytes.
 文字列 を バイト列読込する は バイト列 の 動作
 道 を バイト列読込する とは 以下の手順です
   f とは 道 を 「rb」 で 確認付開封した 結果
@@ -50,7 +50,7 @@ p を 字数計測する とは 外部の「strlen」 で 番地 を 受け取�
   b を 結果にする
   以上です
 
-# 道のファイル全体を文字列(UTF-8)で読みます。
+# Reads the whole file at the path as a string (UTF-8).
 文字列 を 読込する は 文字列 の 動作
 道 を 読込する とは （道 を バイト列読込する） の 結果 を 文字列にする
 
@@ -60,7 +60,7 @@ s を 行分解する とは
   そうでなければ もし s が 改行 で 末尾一致である ならば （s から （s の 長さ - 1） を 先頭取得する） を 改行 で 分割する
   そうでなければ s を 改行 で 分割する
 
-# 道のファイルを読んで、行の文字列のリストにします(終わりの改行は含めません)。
+# Reads the file at the path as a list of lines (without the newlines).
 文字列 を 行分割読込する は 文字列 の リスト の 動作
 道 を 行分割読込する とは （道 を 読込する） の 結果 を 行分解する
 
@@ -74,25 +74,25 @@ s を 行分解する とは
   k を 結果にする
   以上です
 
-# `b を 道 へ バイト列書出する` で、バイト列をファイルに書きます(ファイルは作り直します)。結果は書いたバイト数です。
+# `b を 道 へ バイト列書出する` writes bytes to the file (the file is recreated). The result is the number of bytes written.
 バイト列 を 文字列 へ バイト列書出する は 数 の 動作
 b を 道 へ バイト列書出する とは 「wb」 で b を 道 へ 方法書出する
 
-# `s を 道 へ 書出する` で、文字列をファイルに書きます(ファイルは作り直します)。結果は書いたバイト数です。
+# `s を 道 へ 書出する` writes a string to the file (the file is recreated). The result is the number of bytes written.
 文字列 を 文字列 へ 書出する は 数 の 動作
 s を 道 へ 書出する とは 「wb」 で （s を バイト列にする） を 道 へ 方法書出する
 
-# `s を 道 へ 追記する` で、文字列をファイルの終わりに足します。結果は書いたバイト数です。
+# `s を 道 へ 追記する` appends a string to the end of the file. The result is the number of bytes written.
 文字列 を 文字列 へ 追記する は 数 の 動作
 s を 道 へ 追記する とは 「ab」 で （s を バイト列にする） を 道 へ 方法書出する
 
 # --- そのほか ---
 
-# 道にファイルかフォルダがあれば 真 です。
+# 真 when a file or folder exists at the path.
 文字列 を 存在確認する は 真偽 の 動作
 道 を 存在確認する とは （道 を 0 で 権限確認する） を （r を 受け取って r = 0 を 返すこと） で 写像する
 
-# 道がフォルダ(を指すシンボリックリンク)なら 真 です。
+# 真 when the path is a folder (or a symbolic link to one).
 文字列 を フォルダ確認する は 真偽 の 動作
 道 を フォルダ確認する とは 以下の手順です
   d とは 道 を 目録開封した 結果
@@ -105,11 +105,11 @@ d を 目録閉鎖真にする とは 以下の手順です
   真 を 結果にする
   以上です
 
-# 道のファイルが読めるなら 真 です。
+# 真 when the file at the path can be read.
 文字列 を 読取可能確認する は 真偽 の 動作
 道 を 読取可能確認する とは （道 を 4 で 権限確認する） を （r を 受け取って r = 0 を 返すこと） で 写像する
 
-# シンボリックリンクと「..」を解いた絶対パスの 有 です。道がなければ 無 です。
+# The absolute path with symbolic links and 「..」 resolved, as `有`. `無` when the path does not exist.
 文字列 を 実道取得する は 文字列 の 有無 の 動作
 道 を 実道取得する とは 以下の手順です
   p とは 道 を （0 を 番地にする） で 実道解決した 結果
@@ -123,11 +123,11 @@ p を 実道取出する とは 以下の手順です
   （b を 文字列にする） の 有 を 結果にする
   以上です
 
-# 道のファイルを削除します。
+# Deletes the file at the path.
 文字列 を 削除する は 数 の 動作
 道 を 削除する とは （道 を 消去する） を （「ファイル『」 + 道 + 「』を削除するの」） で 失敗確認する
 
-# 道にフォルダを作ります(親のフォルダはあらかじめ要ります)。
+# Makes a folder at the path (its parent folder must exist).
 文字列 を フォルダ作成する は 数 の 動作
 道 を フォルダ作成する とは （道 を 493 で 作成する） を （「フォルダ『」 + 道 + 「』を作るの」） で 失敗確認する
 

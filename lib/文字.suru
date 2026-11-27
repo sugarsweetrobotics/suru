@@ -1,25 +1,25 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」の文字の分類のライブラリです。1文字の文字列を調べる述語と、全角の英数字・記号を半角にする関数があります。
-# 使うファイルに `「文字」 を 読み込む` と書き、`c が 文字内の漢字である` のように「文字内の」を付けて使います。
+# The character classification library of Suru: predicates on one-character strings, and functions that turn full-width letters, digits and symbols into half-width ones.
+# Write `「文字」 を 読み込む` in your file and use the names with the `文字内の` prefix, like `c が 文字内の漢字である`.
 
 「標準」 を 読み込んで 使う
 
-# `x が 下 から 上 で 範囲内である` で、x が 下 以上 上 以下のとき 真 です。
+# `x が 下 から 上 で 範囲内である` is 真 when x is at least 下 and at most 上.
 数 が 数 から 数 で 範囲内である は 真偽
 x が 下 から 上 で 範囲内である とは x >= 下 かつ x <= 上
 
-# c が平仮名(ぁ〜ゟ)のとき 真 です。
+# 真 when c is hiragana (「ぁ」 to 「ゟ」).
 文字列 が 平仮名である は 真偽
 c が 平仮名である とは （c を 文字コードにする） が 12353 から 12447 で 範囲内である
 
-# c が片仮名(ァ〜ヺ と ー・ヽ・ヾ・ヿ)のとき 真 です。半角片仮名は含みません。
+# 真 when c is katakana (ァ to ヺ and ー, ヽ, ヾ, ヿ). Half-width katakana is not included.
 文字列 が 片仮名である は 真偽
 c が 片仮名である とは
   コ とは c を 文字コードにする
   コ が 12449 から 12538 で 範囲内である または コ が 12540 から 12543 で 範囲内である
 
-# c が漢字(CJK 統合漢字と拡張、互換漢字、々・〆・〻 など)のとき 真 です。
+# 真 when c is a kanji (CJK unified ideographs and extensions, compatibility ideographs, 々, 〆, 〻 and so on).
 文字列 が 漢字である は 真偽
 c が 漢字である とは
   コ とは c を 文字コードにする
@@ -27,26 +27,26 @@ c が 漢字である とは
     または コ が 63744 から 64255 で 範囲内である または コ が 131072 から 201551 で 範囲内である
     または コ が 12293 から 12294 で 範囲内である または コ が 12337 から 12341 で 範囲内である または コ = 12347
 
-# c が半角か全角の a〜z・A〜Z のとき 真 です。
+# 真 when c is a half-width or full-width a to z or A to Z.
 文字列 が 英字である は 真偽
 c が 英字である とは
   コ とは c を 文字コードにする
   コ が 65 から 90 で 範囲内である または コ が 97 から 122 で 範囲内である
     または コ が 65313 から 65338 で 範囲内である または コ が 65345 から 65370 で 範囲内である
 
-# c が半角か全角の 0〜9 のとき 真 です。
+# 真 when c is a half-width or full-width 0 to 9.
 文字列 が 数字である は 真偽
 c が 数字である とは
   コ とは c を 文字コードにする
   コ が 48 から 57 で 範囲内である または コ が 65296 から 65305 で 範囲内である
 
-# c が半角の空白・タブ・全角の空白のとき 真 です。
+# 真 when c is a space, a tab or a full-width space.
 文字列 が 空白である は 真偽
 c が 空白である とは
   コ とは c を 文字コードにする
   コ = 32 または コ = 9 または コ = 12288
 
-# c が文字のとき 真 です。Python の str.isalpha に近いもの(英字・ラテン文字・ギリシャ文字・キリル文字・片仮名・半角片仮名・漢字・ハングル)で、ひらがなは含みません。
+# 真 when c is a letter. Close to Python's str.isalpha (Latin, Greek and Cyrillic letters, katakana, half-width katakana, kanji and hangul); hiragana is not included.
 文字列 が 文字類である は 真偽
 c が 文字類である とは
   コ とは c を 文字コードにする
@@ -56,7 +56,7 @@ c が 文字類である とは
     または コ が 248 から 591 で 範囲内である または コ が 880 から 1279 で 範囲内である
     または コ が 65382 から 65439 で 範囲内である または コ が 44032 から 55203 で 範囲内である
 
-# 全角の英数字・記号と全角の空白を半角にします。ほかの文字はそのままです。
+# Turns full-width letters, digits, symbols and the full-width space into half-width ones. Other characters stay as they are.
 文字列 を 半角にする は 文字列
 c を 半角にする とは
   コ とは c を 文字コードにする
@@ -64,6 +64,6 @@ c を 半角にする とは
   そうでなければ もし コ = 12288 ならば 「 」
   そうでなければ c
 
-# 文字列の全部の文字を `半角にする` で半角にします。
+# Applies `半角にする` to every character of the string.
 文字列 を 半角変換する は 文字列
 s を 半角変換する とは （s を 文字分解する） の それぞれ を 半角にして 「」 で 結合する

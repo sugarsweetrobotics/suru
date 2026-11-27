@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」のマイコン(Arduino Uno・Nano)のライブラリです。
-# kumu の 対象 を 「arduino-uno」 などにしたプロジェクトで、`「マイコン」 を 読み込んで 使う` と書いて使います。
+# The microcontroller library of Suru (Arduino Uno and Nano).
+# Use it with `「マイコン」 を 読み込んで 使う` in a kumu project whose 対象 is 「arduino-uno」 or similar.
 #
-# ピンの番号は Arduino と同じです(0〜13 はデジタル、14〜19 は A0〜A5)。
-# `速さ を シリアル開始する` の速さは、始めは 9600 です。「表示する」はシリアルに出します(行の終わりは CR LF)。
+# Pin numbers are the same as Arduino (0 to 13 are digital, 14 to 19 are A0 to A5).
+# The speed of `速さ を シリアル開始する` starts at 9600. 「表示する」 writes to the serial port (lines end with CR LF).
 
-# 基板の LED のピン(13)です。
+# The pin of the on-board LED (13).
 内蔵灯 とは 13
 
 以下は外部の入出力動作です
@@ -14,46 +14,46 @@
   数 を 数 で 書出する は 「mcu_pin_write」 で 無 を 返します
 以上です
 
-# ピンを出力にします。
+# Makes the pin an output.
 数 を 出力設定する は 無 の 動作
 p を 出力設定する とは p を 1 で 方向設定する
 
-# ピンを入力にします。
+# Makes the pin an input.
 数 を 入力設定する は 無 の 動作
 p を 入力設定する とは p を 0 で 方向設定する
 
-# ピンをプルアップつきの入力にします。
+# Makes the pin an input with a pull-up.
 数 を 引上入力設定する は 無 の 動作
 p を 引上入力設定する とは p を 2 で 方向設定する
 
-# ピンを高く(HIGH)します。
+# Sets the pin HIGH.
 数 を 高出力する は 無 の 動作
 p を 高出力する とは p を 1 で 書出する
 
-# ピンを低く(LOW)します。
+# Sets the pin LOW.
 数 を 低出力する は 無 の 動作
 p を 低出力する とは p を 0 で 書出する
 
 以下は外部の入出力動作です
-  # ピンの出力を反転します。
+  # Toggles the output of the pin.
   数 を 反転出力する は 「mcu_pin_toggle」 で 無 を 返します
-  # ピンが高いとき 真 です。
+  # 真 when the pin is HIGH.
   数 を 読取する は 「mcu_pin_read」 で 真偽 を 返します
-  # A0〜A5(0〜5 か 14〜19)の電圧を 0〜1023 で読みます。
+  # Reads the voltage of A0 to A5 (0 to 5 or 14 to 19) as 0 to 1023.
   数 を アナログ読取する は 「mcu_analog_read」 で 数 を 返します
-  # `p に v を パルス出力する` で、PWM を出します(3・5・6・9・10・11 のピン、v は 0〜255)。
+  # `p に v を パルス出力する` outputs PWM (pins 3, 5, 6, 9, 10, 11; v is 0 to 255).
   数 に 数 を パルス出力する は 「mcu_pwm」 で 無 を 返します
-  # ミリ秒だけ待ちます。
+  # Waits the given milliseconds.
   数 を ミリ秒待機する は 「mcu_delay_ms」 で 無 を 返します
-  # マイクロ秒だけ待ちます。
+  # Waits the given microseconds.
   数 を マイクロ秒待機する は 「mcu_delay_us」 で 無 を 返します
-  # 動き始めてからのミリ秒です。
+  # Milliseconds since the board started.
   経過ミリ秒取得する は 「mcu_millis」 で 数 を 返します
-  # 動き始めてからのマイクロ秒です。
+  # Microseconds since the board started.
   経過マイクロ秒取得する は 「mcu_micros」 で 数 を 返します
-  # シリアルをその速さで始めます(始めは 9600)。
+  # Starts the serial port at that speed (9600 at first).
   数 を シリアル開始する は 「mcu_serial_begin」 で 無 を 返します
-  # シリアルで受け取った1バイトです(なければ -1)。
+  # One byte received on the serial port (-1 if none).
   シリアル受信する は 「mcu_serial_read」 で 数 を 返します
 以上です
 

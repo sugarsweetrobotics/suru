@@ -1,32 +1,32 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」の JSON の読み書きのライブラリです(する で書いたもの)。
-# 使うファイルに `「JSON」 を 読み込んで 使う` と書きます(名前はどれも JSON で始まります)。
-# `「JSON」 を 読み込む` なら `JSON内のJSON解析する` のように「JSON内の」を付けます。
+# The JSON library of Suru: reading and writing JSON (written in Suru).
+# Write `「JSON」 を 読み込んで 使う` in your file (every name starts with JSON).
+# With `「JSON」 を 読み込む`, add the `JSON内の` prefix, like `JSON内のJSON解析する`.
 #
-# JSON の値は、選択肢のある型 `JSON` です。
+# A JSON value is the type `JSON`, which has these forms:
 #
 # - `JSON無`: null
 # - `真 の JSON真偽`: true / false
-# - `1.5 の JSON数`: 数
-# - `「a」 の JSON文字列`: 文字列
-# - `xs の JSON配列`: 配列(JSON のリスト)
-# - `ps の JSON物`: オブジェクト(`JSON項目` のリスト。書いた順のまま)
-# - `「名前」 と v の JSON項目`: オブジェクトの1項目(項目名 と 項目値)
+# - `1.5 の JSON数`: a number
+# - `「a」 の JSON文字列`: a string
+# - `xs の JSON配列`: an array (a list of JSON)
+# - `ps の JSON物`: an object (a list of `JSON項目`, in the order written)
+# - `「名前」 と v の JSON項目`: one member of an object (項目名 and 項目値)
 #
-# 導出: `会員 は 【JSON】 を 導出する` と書くと、`会員 を 会員JSON化する`(JSON にする)と `JSON を 会員JSON復元する`(`（会員 と 文字列） の 成否`)を作ります。
-# 組は `{"番号": 1, …}`、形が2つ以上の型は `{"形": "円", "半径": 2}` のようにします。フィールドの型は 数・文字列・真偽・JSON・X の リスト と、導出した型です。
+# Derivation: `会員 は 【JSON】 を 導出する` makes `会員 を 会員JSON化する` (to JSON) and `JSON を 会員JSON復元する` (giving `（会員 と 文字列） の 成否`).
+# A record becomes `{"番号": 1, …}`; a type with two or more forms becomes `{"形": "円", "半径": 2}`. Field types can be `数`, `文字列`, `真偽`, `JSON`, `X の リスト` and derived types.
 「標準」 を 読み込んで 使う
 「導出」 を 読み込んで 使う
 
-# JSON の値です。null・true / false・数・文字列・配列・オブジェクトのどれかです。
+# A JSON value: null, true / false, a number, a string, an array or an object.
 JSON とは JSON無 か 真偽値 の JSON真偽 か 数値 の JSON数 か 文字値 の JSON文字列 か 要素 の JSON配列 か 項目 の JSON物
-# オブジェクトの1項目(項目名 と 項目値)です。
+# One member of an object (項目名 and 項目値).
 JSON項目 とは 項目名 と 項目値 の 組
 
 # --- 書く ---
 
-# 1行の JSON の文字列にします。
+# A one-line JSON string.
 JSON を JSON文字列にする は 文字列
 JSON無 を JSON文字列にする とは 「null」
 （b の JSON真偽） を JSON文字列にする とは もし b ならば 「true」 そうでなければ 「false」
@@ -38,7 +38,7 @@ JSON無 を JSON文字列にする とは 「null」
 JSON項目 を 項目文字列にする は 文字列
 p を 項目文字列にする とは （p の 項目名 を 文字列逃避する） + 「:」 + （p の 項目値 を JSON文字列にする）
 
-# 字下げ(空白2つ)と改行を入れた JSON の文字列にします。
+# A JSON string with indentation (two spaces) and newlines.
 JSON を JSON整形する は 文字列
 v を JSON整形する とは v を 「」 で 字下文字列にする
 
@@ -81,7 +81,7 @@ n を 十六進字にする とは 「0123456789abcdef」 から n + 1 を 番�
 
 # --- 読む ---
 
-# JSON の文字列を読んで、値 の 成功 か 理由 の 失敗 にします。
+# Parses a JSON string into `値 の 成功` or `理由 の 失敗`.
 文字列 を JSON解析する は （JSON と 文字列） の 成否
 s を JSON解析する とは
   もし 終 の 読誤 != 「」 ならば （「JSON を読めません(」 + 終 の 読誤 + 「)」） の 失敗
@@ -90,7 +90,7 @@ s を JSON解析する とは
   そうでなければ 終 の 読完成 の 先頭 の 成功
 ただし 終 とは （s を 字句分割する） を （読枠 は 空 で 読完成 は 空 で 読誤 は 「」 の JSON読状） から 字句読込すること で 畳み込みする
 
-# JSON の文字列を読んで、値を結果にする動作です。読めなければ実行時エラーです(`試行する` で受け止められます)。
+# An action that parses a JSON string and gives the value. If it cannot be parsed, it is a runtime error (you can catch it with `試行する`).
 文字列 を JSON読取する は JSON の 動作
 s を JSON読取する とは
   もし （s を JSON解析する） が
@@ -99,14 +99,14 @@ s を JSON読取する とは
 
 # --- 取り出す ---
 
-# `v から 名前 を JSON取得する` で、オブジェクトの項目の値です(なければ JSON無。同じ名前が2つあれば後ろのもの)。
+# `v から 名前 を JSON取得する` is the value of that member of an object (JSON無 if none; the last one if the name appears twice).
 JSON から 文字列 を JSON取得する は JSON
 （ps の JSON物） から 名前 を JSON取得する とは
   もし 合致 が 空 ならば JSON無 そうでなければ 合致 の 最後 の 項目値
 ただし 合致 とは ps から （p を 受け取って （p の 項目名 が 名前） を 返すこと） で 選別する
 v から 名前 を JSON取得する とは JSON無
 
-# `v から n を JSON番目取得する` で、配列の n 番目です(1 から。なければ JSON無)。
+# `v から n を JSON番目取得する` is the n-th item of an array (from 1; JSON無 if none).
 JSON から 数 を JSON番目取得する は JSON
 （xs の JSON配列） から n を JSON番目取得する とは もし n >= 1 かつ n <= xs の 長さ ならば xs から n を 番目取得する そうでなければ JSON無
 v から n を JSON番目取得する とは JSON無
@@ -115,11 +115,11 @@ v から n を JSON番目取得する とは JSON無
 # 「"」で分けると、偶数番目が文字列の外、奇数番目が文字列の中になる(「\"」で分かれたところはつなぎ直す)。
 # 畳み込みで1つずつ進めるので、長い文字列でも再帰が深くならない。
 
-# JSON の文字列を分けた字句です(このライブラリの中で使います)。
+# A token of a JSON string (used inside this library).
 JSON字句 とは 記号 の JSON記号字句 か 内容 の JSON文字字句 か 語 の JSON語字句 か 字句誤り の JSON誤字句
-# 字句に分けるときの途中の状態です(このライブラリの中で使います)。
+# State while splitting into tokens (used inside this library).
 JSON分状 とは 分字句 と 分中 と 分途中 の 組
-# 字句に分けるときの途中の状態です(このライブラリの中で使います)。
+# State while splitting into tokens (used inside this library).
 JSON外状 とは 外字句 と 外語 の 組
 
 文字列 を 字句分割する は JSON字句 の リスト
@@ -162,7 +162,7 @@ c が 空白字である とは c が 「 」 または c が 改行 または c
 
 # --- 文字列の中の「\」を戻す ---
 
-# 文字列の中の「\」を戻すときの途中の状態です(このライブラリの中で使います)。
+# State while unescaping 「\」 in a string (used inside this library).
 JSON解除 とは 解除出力 と 解除段 と 解除符号 と 解除桁 と 解除高 と 解除誤り の 組
 
 文字列 を 逃避解除する は JSON字句
@@ -242,9 +242,9 @@ st を 高送出する とは もし st の 解除高 > 0 ならば 解除高 �
 # 配列の段: 0 値か「]」、1 値、2 「,」か「]」
 # オブジェクトの段: 0 名前か「}」、1 名前、2 「:」、3 値、4 「,」か「}」
 
-# 読んでいる途中の配列かオブジェクトです(このライブラリの中で使います)。
+# An array or object being read (used inside this library).
 JSON枠 とは 配列要素 と 配列段 の JSON配列枠 か 物項目 と 物鍵 と 物段 の JSON物枠
-# 字句を読むときの途中の状態です(このライブラリの中で使います)。
+# State while reading tokens (used inside this library).
 JSON読状 とは 読枠 と 読完成 と 読誤 の 組
 
 JSON読状 を JSON字句 で 字句読込する は JSON読状
@@ -364,22 +364,22 @@ c が 指数字である とは c が 「e」 または c が 「E」
 # --- 値に戻す(【JSON】で導出した 会員JSON復元する が使う) ---
 # 名 はエラーの文に入れる項目の名前
 
-# `v を 名 で JSON数復元する` で、JSON数 なら数の 成功、ほかは「名が数ではありません」の 失敗 です。導出した `会員JSON復元する` が使います。
+# `v を 名 で JSON数復元する` is `数 の 成功` for a JSON数, otherwise a 失敗 saying 「名が数ではありません」. Used by a derived `会員JSON復元する`.
 JSON を 文字列 で JSON数復元する は （数 と 文字列） の 成否
 （n の JSON数） を 名 で JSON数復元する とは n の 成功
 v を 名 で JSON数復元する とは （名 + 「が数ではありません」） の 失敗
 
-# JSON文字列 なら文字列の 成功、ほかは「名が文字列ではありません」の 失敗 です。
+# A 成功 with the string for a JSON文字列, otherwise a 失敗 saying 「名が文字列ではありません」.
 JSON を 文字列 で JSON文字列復元する は （文字列 と 文字列） の 成否
 （s の JSON文字列） を 名 で JSON文字列復元する とは s の 成功
 v を 名 で JSON文字列復元する とは （名 + 「が文字列ではありません」） の 失敗
 
-# JSON真偽 なら真偽の 成功、ほかは「名が真偽ではありません」の 失敗 です。
+# A 成功 with the boolean for a JSON真偽, otherwise a 失敗 saying 「名が真偽ではありません」.
 JSON を 文字列 で JSON真偽復元する は （真偽 と 文字列） の 成否
 （b の JSON真偽） を 名 で JSON真偽復元する とは b の 成功
 v を 名 で JSON真偽復元する とは （名 + 「が真偽ではありません」） の 失敗
 
-# `v を 名 で f に JSONリスト復元する` で、配列の要素を f で戻したリストの 成功 です(1つでも失敗ならその失敗)。
+# `v を 名 で f に JSONリスト復元する` is a 成功 with the list of the array items turned back by f (the first 失敗 if any fails).
 JSON を 文字列 で （JSON を 受け取って （甲 と 文字列） の 成否 を 返すこと） に JSONリスト復元する は （甲 の リスト と 文字列） の 成否
 （xs の JSON配列） を 名 で 復元 に JSONリスト復元する とは xs を 復元 で 全部復元する
 v を 名 で 復元 に JSONリスト復元する とは （名 + 「が配列ではありません」） の 失敗
@@ -404,7 +404,7 @@ a を 他 に 成否続連結する とは
 # 組(形が1つ)は {"番号": 1, "名前": "花子"} に、形が2つ以上の型は {"形": "円", "半径": 2} のように「形」の項目を足す。
 # フィールドの型は 数・文字列・真偽・JSON・X の リスト と、導出した(JSON化する・JSON復元する のある)型
 
-# 導出【JSON】の本体です。`会員 は 【JSON】 を 導出する` と書いたときに、型の記述から `会員JSON化する` と `会員JSON復元する` の定義を作ります。
+# The derivation 【JSON】. For `会員 は 【JSON】 を 導出する`, it makes the definitions of `会員JSON化する` and `会員JSON復元する` from the description of the type.
 型記述 を JSON導出する は 文字列 の 成否
 d を JSON導出する とは
   誤群 とは （（d の 形群 を （c を 受け取って c の 欄群 を 返すこと） で 写像する） を 連結する） から （f を 受け取って （f の 欄型 が 導対応型である） = 偽 を 返すこと） で 選別する
