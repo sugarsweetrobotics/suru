@@ -69,6 +69,7 @@ kumu 取得           # fetch dependencies and write 組.lock (fetch; 作る and
 kumu 試験           # run the tests of the source files, then each 「…試験する」 in 試験/ (test; kumu 試験 二倍 picks by part of the name)
 kumu 点検           # lint every file in the project (check)
 kumu 公開           # check, then put the Git tag vVERSION (publish; push it yourself)
+kumu 文書           # write API documentation of the public names to docs/api (doc; --雛形 writes Sphinx and Read the Docs settings)
 ```
 
 Tests can be written in the same file as the code they test, as test blocks and examples ("Tests in the same file and examples"):
@@ -1638,7 +1639,20 @@ suru --文書 --json lib/算術.suru           # 同じ中身を1ファイル1�
 2. **What each name shows.** The type declaration as written (for types and traits, the definition, with its indented continuation lines), for functions the usage (`x を 二倍する`, from the parameter names of a definition without patterns), the description (see "Descriptions of definitions") and the examples of that definition (`例えば … は … です`). Functions and values without a type declaration get no type. A declaration inside an `以下は外部の…です` block is that one line.
 3. **Markdown layout.** The file name as the title (`# 「算術」`), then the file description, then one `## 名前` section per name. Code is fenced with ` ```suru `, so Sphinx's MyST reads it too. `--json` gives JSON with `file`, `module`, `description` and `items` (`name`, `kind` (関数・値・型・性質), `line`, `signature`, `usage`, `description`, `examples`).
 4. **`--出力 フォルダ` writes files.** One `名前.md` per file (`名前.json` with `--json`). Without it, everything goes to standard output. A file that cannot be read (a syntax error, an imported file not found, …) is reported and skipped, and the exit code is 1.
-5. **The Python and Go versions give the same output.** `tests/test_doc.py` checks that both give the same Markdown and JSON for every file in `lib/`. Sphinx settings, `kumu 文書` and publishing on Read the Docs are later stages.
+5. **The Python and Go versions give the same output.** `tests/test_doc.py` checks that both give the same Markdown and JSON for every file in `lib/`. `kumu 文書` and publishing on Read the Docs are in "kumu 文書 and Read the Docs".
+
+### kumu 文書 and Read the Docs
+
+```sh
+kumu 文書 --雛形    # docs/conf.py・docs/index.md・docs/requirements.txt・docs/_ext/suru_lexer.py・.readthedocs.yaml を書く
+kumu 文書           # docs/api/ にファイルごとの API のページ(Markdown)を書く
+pip install -r docs/requirements.txt && sphinx-build docs docs/_build   # 手元で HTML にする
+```
+
+1. **`kumu 文書` documents the top-level files of the project.** After fetching the dependencies (like `取得`), it writes the `.suru` files at the top of the project folder (except `組.suru`) to `docs/api/名前.md`, in the same form as `suru --文書`. Files under `試験/` or `例/` are not API, so they are not read. `--出力 フォルダ` chooses where to write and `--json` writes JSON (#209).
+2. **`kumu 文書 --雛形` writes Sphinx and Read the Docs settings.** Sphinx reads MyST (Markdown), with `language = "ja"` (Japanese search) and the furo theme. `docs/_ext/suru_lexer.py` is a Pygments lexer that highlights Suru code, registered by `conf.py`. The project name is filled in when the files are written; the version is read from `組.suru` on every build. `index.md` gets the head comment of the file named after the project (or else the entry file). Existing files are left as they are, and `/docs/api/` and `/docs/_build/` are added to `.gitignore`.
+3. **Read the Docs only needs the repository connected.** On every build, `.readthedocs.yaml` downloads the Linux kumu of the same version as the one that wrote the files from GitHub Releases, runs `kumu 文書 --出力 docs/api`, then builds the HTML with Sphinx. The generated pages are not committed. Import the GitHub repository on readthedocs.org and it is published on every push and tag.
+4. **The folder is named docs.** Instead of a Japanese folder name like `試験/`, it uses `docs/`, which Read the Docs and Sphinx tools expect.
 
 ### Web app skeleton (kumu 新規 --対象 web)
 
