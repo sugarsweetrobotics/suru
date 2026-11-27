@@ -24,7 +24,7 @@ var ffiIR = map[string]string{"i64": "i64", "f64": "double", "f32": "float", "i3
 // LinkMark は IR の中の、リンクするライブラリの印(ビルドで読む)
 const LinkMark = "; suru-link: "
 
-// ExportMark は IR の中の、外部に出す関数の C の名前の印(共有ライブラリを作るときに読む、#208)
+// ExportMark は IR の中の、外部に出す関数の印(「; suru-export: C の名前 型の字 する の名前」、共有ライブラリとヘッダを作るときに読む、#208)
 const ExportMark = "; suru-export: "
 
 var partIDs = map[string]int{"を": 0, "に": 1, "で": 2, "から": 3, "へ": 4, "より": 5, "が": 6}
@@ -487,7 +487,7 @@ type Compiler struct {
 	ffiDecls    map[string]string // 外部の関数の名前 → declare の行
 	ffiWhere    map[string]Pos    // 外部の関数の名前 → 初めに宣言した位置
 	linkLibs    []string          // リンクするライブラリ(ExternLib.Path)
-	exports     []string          // 外部に出す関数の C の名前(#208)
+	exports     []string          // 外部に出す関数の「C の名前 型の字 する の名前」(#208)
 }
 
 func newCompiler(ctx *ParseContext, source string) *Compiler {
@@ -1638,7 +1638,6 @@ func (c *Compiler) exportWrappers(program []Node, sc *scope) {
 			continue
 		}
 		b := sc.vars[e.Name]
-		c.exports = append(c.exports, e.Symbol)
 		n := len(e.Params)
 		var params []string
 		codes := ""
@@ -1650,6 +1649,7 @@ func (c *Compiler) exportWrappers(program []Node, sc *scope) {
 		if e.Action {
 			codes += "!"
 		}
+		c.exports = append(c.exports, e.Symbol+" "+codes+" "+e.Name)
 		ret := ffiIR[e.Result]
 		lines := []string{fmt.Sprintf("define %s @%s(%s) {", ret, e.Symbol, strings.Join(params, ", ")), "entry:"}
 		slots := n
