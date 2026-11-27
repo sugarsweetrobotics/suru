@@ -65,12 +65,24 @@ kumu 追加 github.com/someone/計算   # add a dependency; without a version, t
 kumu 更新           # move dependencies to their newest tags (update; kumu 更新 計算 updates just one)
 kumu 削除 計算      # remove a dependency (remove)
 kumu 取得           # fetch dependencies and write 組.lock (fetch; 作る and 実行 do this too)
-kumu 試験           # run each 「…試験する」 in 試験/ one by one (test; kumu 試験 二倍 picks by part of the name)
+kumu 試験           # run the tests of the source files, then each 「…試験する」 in 試験/ (test; kumu 試験 二倍 picks by part of the name)
 kumu 点検           # lint every file in the project (check)
 kumu 公開           # check, then put the Git tag vVERSION (publish; push it yourself)
 ```
 
-Tests are written in files in the `試験/` ("tests") folder, as procedures whose names end in 「試験する」.
+Tests can be written in the same file as the code they test, as test blocks and examples ("Tests in the same file and examples"):
+
+```
+数 を 二倍する は 数
+x を 二倍する とは x * 2
+例えば （2 を 二倍する） は 4 です
+
+以下は「二倍」の試験です
+  （0 を 二倍する） を 0 に 一致確認する
+  以上です
+```
+
+Tests can also be written in files in the `試験/` ("tests") folder, as procedures whose names end in 「試験する」.
 
 ```
 「試験」 を 読み込んで 使う
@@ -1505,6 +1517,38 @@ m を 会員JSON化して JSON文字列にして 表示する
 2. **The JSON shape.** A record (one form) becomes an object with one item per field: `{"番号":1,"名前":"花子","好物":["茶","餅"]}`. A type with several forms adds a `形` item with the form's name: `{"形":"長方形","幅":2,"高":3}`, and `{"形":"点"}` for a form without fields.
 3. **Field types.** `数`, `文字列`, `真偽`, `JSON` (kept as it is), `X の リスト`, and other types that also derive 【JSON】 (their `…JSON化する` and `…JSON復元する` are used). Other field types, and types with parameters (甲・乙 …), are errors when deriving.
 4. **Failures name the field.** `会員JSON復元する` returns `失敗` with a message such as 「番号が数ではありません」 or 「「形」が三角の形はありません」. The helpers it uses, `JSON数復元する`, `JSON文字列復元する`, `JSON真偽復元する` and `JSONリスト復元する`, can also be used by hand.
+
+### Tests in the same file and examples
+
+```suru
+# x の2倍を返します。
+数 を 二倍する は 数
+x を 二倍する とは x * 2
+例えば （2 を 二倍する） は 4 です
+例えば （-3 を 二倍する） は -6 です
+
+数 を 加一する は 数
+x を 加一する とは x + 1
+
+以下は「二倍」の試験です
+  （0 を 加一して 二倍する） を 2 に 一致確認する
+  1 < 2 を 確認する
+  以上です
+
+加一する は 非公開とする
+```
+
+```
+suru --試験 計算.suru             # run the tests of a file with the interpreter (a folder runs every file in it)
+suruc --試験 計算.suru 二倍       # the same with the Go compiler, only tests whose name contains 二倍
+```
+
+1. **Test blocks.** `以下は「二倍」の試験です` … `以上です` at the top level is a test named 「二倍」. The body is a procedure. It can use the file's private names, and the assertion functions of 「試験」 (`一致確認する`, `確認する`, `不合格にする`) without loading it. `以下 は 「二倍」 の 試験 です` also works. Two test blocks in one file can't have the same name.
+2. **Examples.** `例えば 式 は 期待する値 です` at the top level is an example of the definition just above it (the `です` can be left out). It passes when both sides are equal (`=`), and its name is 「二倍するの例(4行)」 (the definition's name and the line). It is a statement, not a comment, so a typo in it is an error. The language server shows a definition's examples when hovering over its name.
+3. **Always type checked, never run by a normal run.** Test blocks and examples are type checked with the rest of the file (`suru --検査`, `suruc --検査`, the language server), are skipped in a normal run and dropped from a build, and are ignored when the file is loaded by another file.
+4. **Running tests.** `suru --試験 ファイルかフォルダ … [名前 …]` runs the test blocks, the examples and the top-level `…試験する` procedures with the interpreter. `suruc --試験 …` does the same with the Go compiler, building one test binary per file (with -O0 unless another -O is given) and running each test in its own process. Words that are not paths pick tests by part of their name or path. The output is the same as `kumu 試験`: ✓ or ✗ for each test, the reason and what a failing test printed indented below it, and 「合格 3・不合格 1」 ("3 passed, 1 failed") at the end. The exit code is 1 if anything failed.
+5. **`kumu 試験` runs them too.** Before the files in `試験/`, it runs the test blocks and examples in the project's source files (not `組.suru`, `試験/` or `出力/`), one binary per file, linked with the project's `Cソース`.
+6. **`lib/` is tested this way.** `lib/算術.suru`, `lib/乱数.suru` and the formatting functions of `lib/標準.suru` have examples and test blocks, and the CI runs `suru --試験 lib/` and `suruc --試験 lib/` on every pull request, next to pytest and `go test`. pytest and `go test` stay for testing the interpreter and the compilers themselves.
 
 ## License
 
