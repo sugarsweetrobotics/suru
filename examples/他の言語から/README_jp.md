@@ -8,7 +8,7 @@
 suruc --共有ライブラリ ../export.suru -o libkeisan.so   # keisan.h も作る
 ```
 
-macOS ではライブラリは `libkeisan.dylib` です。
+macOS ではライブラリは `libkeisan.dylib` です。Windows(MSYS2 UCRT64)では `libkeisan.dll` と import ライブラリ `libkeisan.dll.a` です。下の命令から `-Wl,-rpath,…` を外し、DLL を `.exe` と同じフォルダに置きます。
 
 | 言語 | フォルダ | 動かし方 |
 |---|---|---|

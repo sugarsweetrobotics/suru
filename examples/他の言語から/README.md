@@ -8,7 +8,7 @@ These examples call the functions of [`examples/export.suru`](../export.suru) (`
 suruc --共有ライブラリ ../export.suru -o libkeisan.so   # also writes keisan.h
 ```
 
-On macOS the library is `libkeisan.dylib`.
+On macOS the library is `libkeisan.dylib`. On Windows (MSYS2 UCRT64) it is `libkeisan.dll`, with the import library `libkeisan.dll.a`: drop `-Wl,-rpath,…` from the commands below and keep the DLL next to the `.exe`.
 
 | Language | Folder | Run |
 |---|---|---|
