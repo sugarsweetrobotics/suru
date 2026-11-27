@@ -11,6 +11,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 1. **Fast with pip too.** PyPI gets wheels for Linux, macOS and Windows that also install `suruc`, `suru-ls` and `kumu`. `suru prog.suru` compiles the program into a cache and runs it when a C compiler (clang) is available (fib(25): from 1.57 s down to 0.08 s from the second run). Add `--インタプリタ` to run it the old way. Without a C compiler it uses the interpreter. Checking and `--翻訳` also use the bundled `suruc`. `suruc --実行` does the same (#229).
 2. **`ホスト に ポート で 秒 を 通信内の期限付き接続する`.** Connecting gives up after that many seconds, with the runtime error 「「期限付き接続する」で通信に失敗しました(時間切れ)」 (README "Connecting with a time limit").
 3. **`接続 を 通信内の記述子取得する`** gives the OS socket number, to hand a connection to a C library such as OpenSSL.
+4. **`kumu 導入` installs commands.** It builds the project and copies the command to `~/.local/bin` (`--先` chooses another folder). `kumu 導入 github.com/suru-lang/surl` installs the newest tag of a Git repository, and `kumu 導入 ../surl` a project in a folder. It says how to add the folder to PATH when it is missing (README "Installing commands (kumu 導入)").
 
 ### Improved
 

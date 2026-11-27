@@ -9,3 +9,10 @@ editors/vscode/server/
 *.vsix
 /docs/api/
 /docs/_build/
+# go build ./cmd/… をリポジトリ直下で流すとできる実行ファイル
+/kumu
+/suruc
+/suru-ls
+/kumu.exe
+/suruc.exe
+/suru-ls.exe

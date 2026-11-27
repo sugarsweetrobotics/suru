@@ -71,6 +71,7 @@ kumu 試験           # run the tests of the source files, then each 「…試�
 kumu 点検           # lint every file in the project (check)
 kumu 公開           # check, then put the Git tag vVERSION (publish; push it yourself)
 kumu 文書           # write API documentation of the public names to docs/api (doc; --雛形 writes Sphinx and Read the Docs settings)
+kumu 導入           # build, then put the command in ~/.local/bin (install; see "Installing commands (kumu 導入)")
 ```
 
 Tests can be written in the same file as the code they test, as test blocks and examples ("Tests in the same file and examples"):
@@ -1708,6 +1709,19 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build
 ```
 2. **Every timeout has the same reason.** A receive or send that passes the time of `待機時間設定する`, and a connection that passes its limit, all fail with 「…で通信に失敗しました(時間切れ)」, on every OS, in the interpreter and in binaries (before, the reason was the OS's own text, such as `Resource temporarily unavailable` or `timed out`). Programs can tell a timeout from other failures by this text.
 3. **`接続 を 通信内の記述子取得する` gives the OS socket number.** It is for handing a connection to a C library, such as OpenSSL's `SSL_set_fd`, so that a TLS connection can use `期限付き接続する` and `待機時間設定する` too. The connection still belongs to Suru: close it with `切断する` after the library is done. In the interpreter, `待機時間設定する` on such a connection sets the OS timeouts (`SO_RCVTIMEO` and `SO_SNDTIMEO`) like a binary does, so the C library sees a blocking socket.
+
+### Installing commands (kumu 導入)
+
+```
+kumu 導入                                   # build the current project and put it in ~/.local/bin
+kumu 導入 ../surl                           # a project in a folder
+kumu 導入 github.com/suru-lang/surl         # the newest tag of a Git repository (…@0.1.0 picks a version)
+kumu 導入 --先 /usr/local/bin               # put it somewhere else
+```
+
+1. **`kumu 導入` (install) builds the project and copies the command to `~/.local/bin`.** It builds like `作る` (`-O2` by default; `-O0` to `-O3` and `--検査なし` work too) and copies `出力/名前` (`名前.exe` on Windows) to `~/.local/bin/名前`, which can be run from anywhere once that folder is in PATH. `--先 フォルダ` (`--dir`) chooses another folder (relative to the current folder). An installed command of the same name is replaced; the new file is written next to it and renamed, so a running old command is not broken.
+2. **It can install from a folder or a Git repository.** A location starting with `.` or `/` is a project folder. Otherwise it is a Git location like the ones in `依存`: without `@版` it picks the newest version tag (like `追加`), fetches that tag into a temporary folder, builds there and removes the folder afterwards. The project's dependencies are fetched into `~/.kumu/依存/` as in `作る`, and checked against its `組.lock`.
+3. **It says when the folder is not in PATH.** After installing, if the folder is not in PATH, it prints how to add it (`export PATH="$HOME/.local/bin:$PATH"` in the shell's settings; on Windows, the user's Path in the environment variables). Shared library projects and microcontroller projects can't be installed (they are not commands).
 
 ## License
 
