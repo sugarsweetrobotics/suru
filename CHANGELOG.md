@@ -16,6 +16,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 
 1. **A quasi-quote head written in a comment is no longer read as code.** A line like `# 例: 道群 とは 以下の【道】です` (or with `＃`/`※` before `とは`) used to start a quasi-quote and then fail with 「中身は頭より深く字下げして…」. The interpreter, `suruc` and `suru --点検` now treat it as a comment (#192).
 2. **`suru --点検` reads type declarations with `と` between parameter types.** `lib/構文.suru` now reads `数 を 数 と 数 と 数 で 三回転和にする は 数` (a list whose items have their own types, added in #119) like `suru.py`, instead of failing on the whole file.
+3. **A deriver or expander from a dependency can read that dependency's own dependencies.** `suruc` and `kumu` compiled the expander with the packages of the dependency's folder, which has no `組.lock`, so `会員 は 【表】 を 導出する` with only suru-lang/orm as a dependency failed with 「ファイル「蔵.suru」が見つかりません」. The expander now uses the packages of the program being built (#192).
 
 ## 0.10.1
 
