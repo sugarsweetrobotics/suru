@@ -262,9 +262,13 @@ func docUsage(name string, params []Param) string {
 	return usage(name, ps)
 }
 
+// shortName は引数の名前から「表内の」を除く。外部の関数のまとまりで付けた「引数1」などは「…」にする
 func shortName(n string) string {
 	if i := strings.LastIndex(n, ModuleSep); i >= 0 {
-		return n[i+len(ModuleSep):]
+		n = n[i+len(ModuleSep):]
+	}
+	if d := strings.TrimPrefix(n, "引数"); d != n && d != "" && strings.Trim(d, "0123456789") == "" {
+		return "…"
 	}
 	return n
 }

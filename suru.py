@@ -3711,12 +3711,16 @@ def _statement_text(lines: list, line: int) -> str:
 
 def _doc_usage(name: str, params: list) -> str:
     """引数の並びから「n を 三倍する」のような使い方を作る(compiler/analyze.go の usage と同じ)"""
+    def short(n: str) -> str:  # 「表内の」を除き、外部の関数のまとまりで付けた「引数1」などは「…」にする
+        n = n.rpartition(MODULE_SEP)[2]
+        return "…" if re.fullmatch(r"引数[0-9]+", n) else n
+
     out = ""
     for part, pat in params:
         if isinstance(pat, str):
-            out += pat.rpartition(MODULE_SEP)[2]
+            out += short(pat)
         elif isinstance(pat, list) and all(isinstance(x, str) for x in pat):
-            out += f" {KW_TO} ".join(x.rpartition(MODULE_SEP)[2] for x in pat)
+            out += f" {KW_TO} ".join(short(x) for x in pat)
         else:
             out += "…"
         out += f" {part} "
