@@ -55,6 +55,9 @@ const usage = `使い方: kumu <命令> [オプション]
   --対象 名前  基板を選ぶ(--target。` + "arduino-uno・arduino-nano・arduino-nano-old" + `)
   --ポート 道  書き込むシリアルポート(--port。なければ見つけたもの)
   新規・初期化 にも --対象 を付けられます(L チカの雛形を作る)
+
+ウェブアプリ:
+  kumu 新規 名前 --対象 web  屋台(suru-lang/web)のウェブアプリの雛形を作る
 `
 
 // commands は命令の名前(日本語と英語の別名)→ 正の名前
@@ -103,7 +106,7 @@ func (k *kumu) run(args []string) int {
 	case "新規":
 		rest, target, ok := targetOption(rest)
 		if !ok || len(rest) != 1 {
-			fmt.Fprintln(k.stderr, "使い方: kumu 新規 名前 [--対象 基板]")
+			fmt.Fprintln(k.stderr, "使い方: kumu 新規 名前 [--対象 基板か web]")
 			return 2
 		}
 		name := rest[0]
@@ -111,7 +114,9 @@ func (k *kumu) run(args []string) int {
 			return k.fail(err)
 		}
 		next := "kumu 実行"
-		if target != "" {
+		if target == WebTarget {
+			next = "kumu 実行。http://localhost:8080/ を開きます"
+		} else if target != "" {
 			next = "kumu 書き込む"
 		}
 		fmt.Fprintf(k.stderr, "「%s」を作りました(cd %s してから %s)\n", filepath.Base(name), name, next)
@@ -119,7 +124,7 @@ func (k *kumu) run(args []string) int {
 	case "初期化":
 		rest, target, ok := targetOption(rest)
 		if !ok || len(rest) != 0 {
-			fmt.Fprintln(k.stderr, "使い方: kumu 初期化 [--対象 基板]")
+			fmt.Fprintln(k.stderr, "使い方: kumu 初期化 [--対象 基板か web]")
 			return 2
 		}
 		abs, err := filepath.Abs(k.dir)

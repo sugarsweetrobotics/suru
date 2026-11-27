@@ -61,6 +61,7 @@ cd 挨拶
 kumu 実行           # build 出力/挨拶 and run it (run; arguments after -- go to the program)
 kumu 作る           # only build 出力/挨拶 (build; -O0 to -O3 and --検査なし work too)
 kumu 初期化         # create the skeleton in the current folder (init)
+kumu 新規 店 --対象 web   # create a web app for 屋台 (suru-lang/web) in 店/
 kumu 追加 github.com/someone/計算   # add a dependency; without a version, the newest tag (add; …@1.2.0 picks a version)
 kumu 更新           # move dependencies to their newest tags (update; kumu 更新 計算 updates just one)
 kumu 削除 計算      # remove a dependency (remove)
@@ -1638,6 +1639,11 @@ suru --文書 --json lib/算術.suru           # 同じ中身を1ファイル1�
 3. **Markdown layout.** The file name as the title (`# 「算術」`), then the file description, then one `## 名前` section per name. Code is fenced with ` ```suru `, so Sphinx's MyST reads it too. `--json` gives JSON with `file`, `module`, `description` and `items` (`name`, `kind` (関数・値・型・性質), `line`, `signature`, `usage`, `description`, `examples`).
 4. **`--出力 フォルダ` writes files.** One `名前.md` per file (`名前.json` with `--json`). Without it, everything goes to standard output. A file that cannot be read (a syntax error, an imported file not found, …) is reported and skipped, and the exit code is 1.
 5. **The Python and Go versions give the same output.** `tests/test_doc.py` checks that both give the same Markdown and JSON for every file in `lib/`. Sphinx settings, `kumu 文書` and publishing on Read the Docs are later stages.
+
+### Web app skeleton (kumu 新規 --対象 web)
+
+1. **`kumu 新規 店 --対象 web` creates a web app for 屋台 ([suru-lang/web](https://github.com/suru-lang/web)).** `組.suru` depends on `github.com/suru-lang/web@0.1.0`. `店.suru` has the routes (【道】) and handlers, and `本体.suru` reads it and opens the server on port 8080. The pages are in `画面/` (a layout and a top page), static files are in `公開/`, and `試験/道.suru` tests the routes without starting a server. `kumu 実行` runs it, `kumu 試験` runs the tests, and `kumu 作る` makes the binary `出力/店`. The binary reads `画面/` and `公開/` from the folder it runs in, so ship those folders with it. `kumu 初期化 --対象 web` writes the same files into the current folder and keeps files that already exist.
+2. **`web` is not a microcontroller target.** `--対象 web` only chooses the skeleton, so `組.suru` gets no `対象` line and the app is built for this computer. The app's name must not be the name of a standard library or of 屋台 and its dependencies (屋台, HTTP, 雛形, 台帳, 蔵), because the routes file is loaded by that name.
 
 ## License
 

@@ -247,6 +247,10 @@ func CreateProject(dir, name string, fresh bool, target string) error {
 	if err := checkName(name); err != nil {
 		return err
 	}
+	// ウェブアプリは道のファイル「名前.suru」を読み込むので、標準や屋台の依存と同じ名前は使えない
+	if target == WebTarget && (isLibName(name) || contains(webDepNames, name)) {
+		return fmt.Errorf("「%s」は読み込みの名前と重なるので、ウェブアプリの名前に使えません", name)
+	}
 	if fresh {
 		if _, err := os.Stat(dir); err == nil {
 			return fmt.Errorf("「%s」は既にあります", dir)
@@ -256,6 +260,9 @@ func CreateProject(dir, name string, fresh bool, target string) error {
 		}
 	} else if _, err := os.Stat(filepath.Join(dir, ConfigName)); err == nil {
 		return fmt.Errorf("「%s」は既にあります", filepath.Join(dir, ConfigName))
+	}
+	if target == WebTarget {
+		return writeFiles(dir, webFiles(name))
 	}
 	if target != "" {
 		if _, err := mcu.Lookup(target); err != nil {
@@ -278,10 +285,18 @@ func CreateProject(dir, name string, fresh bool, target string) error {
 		}
 		files = append(files, struct{ name, body string }{filepath.Join(TestDir, "例"+compiler.SourceSuffix), testTemplate})
 	}
+	return writeFiles(dir, files)
+}
+
+// writeFiles は雛形のファイルを書く(初期化では、今あるファイルはそのまま)
+func writeFiles(dir string, files []struct{ name, body string }) error {
 	for _, f := range files {
 		path := filepath.Join(dir, f.name)
 		if _, err := os.Stat(path); err == nil {
-			continue // 初期化では、今あるファイルはそのまま
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
 		}
 		if err := os.WriteFile(path, []byte(f.body), 0o644); err != nil {
 			return err
