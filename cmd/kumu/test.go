@@ -17,6 +17,7 @@ import (
 
 	"github.com/suru-lang/suru/cmd/internal/lintbin"
 	"github.com/suru-lang/suru/cmd/internal/native"
+	"github.com/suru-lang/suru/cmd/internal/testrun"
 	"github.com/suru-lang/suru/compiler"
 )
 
@@ -97,6 +98,22 @@ func (k *kumu) test(p *Project, filters []string, opt string, check bool, cb *CB
 		return false
 	}
 	passed, failed, total := 0, 0, 0
+	// プロジェクトのソースのファイル(試験/・組.suru・出力/ を除く)の、試験のまとまりと例(#193)。
+	// ファイルごとに1つのバイナリにして、そのファイルの中で動かす(非公開の名前も使える)
+	srcs, err := suruFiles(p.Root)
+	if err != nil {
+		return k.fail(err)
+	}
+	r := &testrun.Runner{Out: k.stdout, Opt: opt, Filters: filters, WorkDir: filepath.Join(p.Root, OutDir, TestDir, "ソース"),
+		Extra: cb.Args(), Dir: p.Root}
+	testsDir := filepath.Join(p.Root, TestDir) + string(filepath.Separator)
+	for _, f := range srcs {
+		if f == filepath.Join(p.Root, ConfigName) || strings.HasPrefix(f, testsDir) {
+			continue
+		}
+		r.FileAt(f, k.rel(f))
+	}
+	passed, failed, total = r.Passed, r.Failed, r.Passed+r.Failed
 	for _, file := range files {
 		rel := k.rel(file)
 		data, err := os.ReadFile(file)
@@ -158,7 +175,7 @@ func (k *kumu) test(p *Project, filters []string, opt string, check bool, cb *CB
 		}
 	}
 	if total == 0 && failed == 0 {
-		fmt.Fprintf(k.stderr, "試験が見つかりません(%s/ のファイルに「…%s」の手順を書きます)\n", TestDir, testSuffix)
+		fmt.Fprintf(k.stderr, "試験が見つかりません(%s/ のファイルに「…%s」の手順を書くか、ソースのファイルに「以下は「名前」の試験です」・「例えば … は … です」を書きます)\n", TestDir, testSuffix)
 		return 0
 	}
 	fmt.Fprintf(k.stdout, "\n合格 %d・不合格 %d\n", passed, failed)

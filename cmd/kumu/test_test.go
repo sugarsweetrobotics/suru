@@ -110,3 +110,42 @@ func TestTestAndLint(t *testing.T) {
 		t.Errorf("点検 --json: rc=%d %s %s", rc, out, errb)
 	}
 }
+
+// ソースのファイルの試験のまとまりと例も動かす(#193)。非公開の名前も試せて、一番外の行うことはしない
+func TestTestBlocksInSources(t *testing.T) {
+	if native.FindCC() == "" {
+		t.Skip("clang がない")
+	}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Setenv("KUMU_HOME", t.TempDir())
+	dir := t.TempDir()
+	k, _, errb := newKumu(dir)
+	if rc := k.run([]string{"新規", "計算"}); rc != 0 {
+		t.Fatal(errb)
+	}
+	root := filepath.Join(dir, "計算")
+	os.Remove(filepath.Join(root, "試験", "例.suru"))
+	os.WriteFile(filepath.Join(root, "部品.suru"), []byte(
+		"数 を 二倍する は 数\nx を 二倍する とは x * 2\n例えば （2 を 二倍する） は 4 です\n例えば （3 を 二倍する） は 7 です\n\n"+
+			"数 を 補助する は 数\nx を 補助する とは x + 1\n\n"+
+			"以下は「補助」の試験です\n  （1 を 補助する） を 2 に 一致確認する\n  以上です\n\n補助する は 非公開とする。\n"), 0o644)
+	k, out, errb := newKumu(root)
+	if rc := k.run([]string{"試験"}); rc != 1 {
+		t.Fatalf("不合格があるのに rc=%d\n%s%s", rc, out, errb)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"✓ 部品.suru 二倍するの例(3行)\n",
+		"✗ 部品.suru 二倍するの例(4行)\n    部品.suru:4: 等しくありません: 期待は 7 / 実際は 6\n",
+		"✓ 部品.suru 補助\n",
+		"合格 2・不合格 1\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q がない:\n%s", want, got)
+		}
+	}
+	out.Reset()
+	if rc := k.run([]string{"試験", "補助"}); rc != 0 || !strings.Contains(out.String(), "合格 1・不合格 0") {
+		t.Errorf("選んだ試験: rc=%d %s", rc, out)
+	}
+}
