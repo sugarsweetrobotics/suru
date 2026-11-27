@@ -11,7 +11,7 @@ python3 suru.py --検査なし examples/basic.suru  # 型を調べずに実行(-
 python3 suru.py                       # 対話モード(1行ずつ入力して、値と型をすぐ表示)
 python3 suru.py --対話 examples/数学.suru  # ファイルを読んでから対話モード(-i も可)
 python3 suru.py --翻訳 examples/basic.suru  # バイナリ examples/basic を作る(--compile も可。clang が必要)
-python3 -m pytest tests               # テスト
+python3 -m pytest tests               # テスト(pytest-xdist があれば -n auto を付けて並べて流せる)
 ```
 
 ### 入れ方
@@ -1560,7 +1560,7 @@ suruc --試験 計算.suru 二倍       # Go 版のコンパイラで同じこ�
 3. **いつも型を検査し、通常の実行では動かさない。** 試験のまとまりと例は、ファイルのほかの部分と一緒に型を検査します(`suru --検査`・`suruc --検査`・言語サーバー)。通常の実行では飛ばし、ビルドでは捨て、ほかのファイルから読み込まれたときは使いません。
 4. **試験の動かし方。** `suru --試験 ファイルかフォルダ … [名前 …]` は、インタプリタで試験のまとまり・例・一番外の `…試験する` の手順を動かします。`suruc --試験 …` は Go 版のコンパイラで同じことをします。ファイル1つにつき試験用のバイナリを1つ作り(ほかの -O を書かなければ -O0)、試験ごとに別のプロセスで動かします。道でない引数は、名前か道の一部で試験を選びます。知らせ方は `kumu 試験` と同じです。試験ごとに ✓ か ✗ を出し、不合格の試験は理由とその試験が書いたものを下に字下げして見せ、最後に「合格 3・不合格 1」と出します。不合格があれば終了コードは 1 です。
 5. **`kumu 試験` も動かす。** `試験/` のファイルより先に、プロジェクトのソースのファイル(`組.suru`・`試験/`・`出力/` は除く)の試験のまとまりと例を動かします。ファイル1つにつきバイナリを1つ作り、プロジェクトの `Cソース` とつなぎます。
-6. **`lib/` もこの形で試す。** `lib/算術.suru`・`lib/乱数.suru` と `lib/標準.suru` の書式の関数に例と試験のまとまりがあり、CI は pull request のたびに、pytest と `go test` と並べて `suru --試験 lib/` と `suruc --試験 lib/` を流します。インタプリタとコンパイラそのものの試験は、これからも pytest と `go test` で行います。
+6. **`lib/` もこの形で試す。** `lib/算術.suru`・`lib/乱数.suru` と `lib/標準.suru` の書式の関数に例と試験のまとまりがあり、`suru --試験 lib/` と `suruc --試験 lib/` で動かします。言語の仕様が変わっているあいだは CI では流さないので(#230)、`lib/` を変えたときは手で流します。インタプリタとコンパイラそのものの試験は、これからも pytest と `go test` で行います。
 
 ### 他の言語から呼ぶ(共有ライブラリ)
 
@@ -1649,7 +1649,7 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build   # 手元
 ```
 
 1. **`kumu 文書` はプロジェクトの一番上のファイルを文書にする。** 依存を取ってきてから(`取得` と同じ)、プロジェクトのフォルダの一番上にある `.suru`(`組.suru` を除く)を `suru --文書` と同じ形で `docs/api/名前.md` に書きます。`試験/` や `例/` の下のファイルは API ではないので見ません。`--出力 フォルダ` で書く場所を、`--json` で JSON を選べます(#209)。
-2. **`kumu 文書 --雛形` は Sphinx と Read the Docs の設定を書く。** Sphinx は MyST(Markdown)で読み、`language = "en"`(英語のページ。「英語の API ドキュメント」)、テーマは furo です。`docs/_ext/suru_lexer.py` は する のコードに色を付ける Pygments の lexer で、`conf.py` が登録します。プロジェクトの名前は書いたときに入れ、版はビルドのたびに `組.suru` から読みます。`index.md` には、プロジェクトと同じ名前のファイル(なければ入口のファイル)の頭の注釈を入れます。今あるファイルは変えず、`.gitignore` に `/docs/api/` と `/docs/_build/` を足します。
+2. **`kumu 文書 --雛形` は Sphinx と Read the Docs の設定を書く。** Sphinx は MyST(Markdown)で読み、`language = "en"`(英語のページ。「英語の API ドキュメント」)、テーマは furo です。`docs/_ext/suru_lexer.py` は する のコードに色を付ける Pygments の lexer で、`conf.py` が登録します。プロジェクトの名前は書いたときに入れ、版はビルドのたびに `組.suru` から読みます。`index.md` には、プロジェクトと同じ名前のファイル(なければ入口のファイル)の頭の注釈を入れます。今あるファイルは変えず、`.gitignore` に `/docs/api/`・`/docs/_build/`・`__pycache__/`(Sphinx が lexer を読むときに作るもの)を足します。
 3. **Read the Docs はリポジトリをつなぐだけ。** `.readthedocs.yaml` はビルドのたびに、雛形を書いた kumu と同じ版の Linux 用の kumu を GitHub Releases から取ってきて `kumu 文書 --出力 docs/api` を流し、それから Sphinx で HTML にします。作ったページはコミットしません。readthedocs.org で GitHub のリポジトリを取り込めば、push とタグごとに公開されます。
 4. **フォルダの名前は docs。** 日本語のフォルダの名前(`試験/` など)にそろえず、Read the Docs と Sphinx の道具がふつう使う `docs/` にしました。
 

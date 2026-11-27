@@ -59,7 +59,7 @@ func TestDoc(t *testing.T) {
 	if !strings.Contains(string(rtd), "/v"+version+"/suru-"+version+"-linux-amd64.tar.gz") || !strings.Contains(string(rtd), "kumu 文書 --出力 docs/api") {
 		t.Errorf(".readthedocs.yaml:\n%s", rtd)
 	}
-	if !strings.Contains(string(gi), "/docs/api/") {
+	if !strings.Contains(string(gi), "/docs/api/") || !strings.Contains(string(gi), "__pycache__/") {
 		t.Errorf(".gitignore:\n%s", gi)
 	}
 	if _, err := os.Stat(filepath.Join(app, "docs", "_ext", "suru_lexer.py")); err != nil {

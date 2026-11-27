@@ -13,7 +13,7 @@ python3 suru.py --検査なし examples/basic.suru  # run without checking types
 python3 suru.py                       # interactive mode (type one line at a time and see its value and type right away)
 python3 suru.py --対話 examples/数学.suru  # load a file, then enter interactive mode (-i also works)
 python3 suru.py --翻訳 examples/basic.suru  # build the binary examples/basic (--compile also works; needs clang)
-python3 -m pytest tests               # tests
+python3 -m pytest tests               # tests (with pytest-xdist, add -n auto to run them in parallel)
 ```
 
 ### Installing
@@ -1566,7 +1566,7 @@ suruc --試験 計算.suru 二倍       # the same with the Go compiler, only te
 3. **Always type checked, never run by a normal run.** Test blocks and examples are type checked with the rest of the file (`suru --検査`, `suruc --検査`, the language server), are skipped in a normal run and dropped from a build, and are ignored when the file is loaded by another file.
 4. **Running tests.** `suru --試験 ファイルかフォルダ … [名前 …]` runs the test blocks, the examples and the top-level `…試験する` procedures with the interpreter. `suruc --試験 …` does the same with the Go compiler, building one test binary per file (with -O0 unless another -O is given) and running each test in its own process. Words that are not paths pick tests by part of their name or path. The output is the same as `kumu 試験`: ✓ or ✗ for each test, the reason and what a failing test printed indented below it, and 「合格 3・不合格 1」 ("3 passed, 1 failed") at the end. The exit code is 1 if anything failed.
 5. **`kumu 試験` runs them too.** Before the files in `試験/`, it runs the test blocks and examples in the project's source files (not `組.suru`, `試験/` or `出力/`), one binary per file, linked with the project's `Cソース`.
-6. **`lib/` is tested this way.** `lib/算術.suru`, `lib/乱数.suru` and the formatting functions of `lib/標準.suru` have examples and test blocks, and the CI runs `suru --試験 lib/` and `suruc --試験 lib/` on every pull request, next to pytest and `go test`. pytest and `go test` stay for testing the interpreter and the compilers themselves.
+6. **`lib/` is tested this way.** `lib/算術.suru`, `lib/乱数.suru` and the formatting functions of `lib/標準.suru` have examples and test blocks, which `suru --試験 lib/` and `suruc --試験 lib/` run. While the language is still changing, the CI does not run them (#230); run them by hand when you change `lib/`. pytest and `go test` stay for testing the interpreter and the compilers themselves.
 
 ### Calling from other languages (shared libraries)
 
@@ -1655,7 +1655,7 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build   # 手元
 ```
 
 1. **`kumu 文書` documents the top-level files of the project.** After fetching the dependencies (like `取得`), it writes the `.suru` files at the top of the project folder (except `組.suru`) to `docs/api/名前.md`, in the same form as `suru --文書`. Files under `試験/` or `例/` are not API, so they are not read. `--出力 フォルダ` chooses where to write and `--json` writes JSON (#209).
-2. **`kumu 文書 --雛形` writes Sphinx and Read the Docs settings.** Sphinx reads MyST (Markdown), with `language = "en"` (English pages, see "English API documentation") and the furo theme. `docs/_ext/suru_lexer.py` is a Pygments lexer that highlights Suru code, registered by `conf.py`. The project name is filled in when the files are written; the version is read from `組.suru` on every build. `index.md` gets the head comment of the file named after the project (or else the entry file). Existing files are left as they are, and `/docs/api/` and `/docs/_build/` are added to `.gitignore`.
+2. **`kumu 文書 --雛形` writes Sphinx and Read the Docs settings.** Sphinx reads MyST (Markdown), with `language = "en"` (English pages, see "English API documentation") and the furo theme. `docs/_ext/suru_lexer.py` is a Pygments lexer that highlights Suru code, registered by `conf.py`. The project name is filled in when the files are written; the version is read from `組.suru` on every build. `index.md` gets the head comment of the file named after the project (or else the entry file). Existing files are left as they are, and `/docs/api/`, `/docs/_build/` and `__pycache__/` (made by Sphinx when it loads the lexer) are added to `.gitignore`.
 3. **Read the Docs only needs the repository connected.** On every build, `.readthedocs.yaml` downloads the Linux kumu of the same version as the one that wrote the files from GitHub Releases, runs `kumu 文書 --出力 docs/api`, then builds the HTML with Sphinx. The generated pages are not committed. Import the GitHub repository on readthedocs.org and it is published on every push and tag.
 4. **The folder is named docs.** Instead of a Japanese folder name like `試験/`, it uses `docs/`, which Read the Docs and Sphinx tools expect.
 

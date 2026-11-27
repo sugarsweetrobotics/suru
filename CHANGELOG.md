@@ -8,6 +8,16 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 
 ### New
 
+1. **Fast with pip too.** PyPI gets wheels for Linux, macOS and Windows that also install `suruc`, `suru-ls` and `kumu`. `suru prog.suru` compiles the program into a cache and runs it when a C compiler (clang) is available (fib(25): from 1.57 s down to 0.08 s from the second run). Add `--インタプリタ` to run it the old way. Without a C compiler it uses the interpreter. Checking and `--翻訳` also use the bundled `suruc`. `suruc --実行` does the same (#229).
+
+### Fixed
+
+1. **`kumu 文書 --雛形` also adds `__pycache__/` to `.gitignore`.** Sphinx writes `docs/_ext/__pycache__/` when it loads the lexer, and it was easy to commit by mistake (#209).
+
+## 0.11.0
+
+### New
+
 1. **Build shared libraries that other languages can call.** List exported functions and their C names with `以下は外部に出す関数です` … `二倍する は 「nibai」` … `以上です`, and build a .so or .dylib with `suruc --共有ライブラリ 計算.suru -o libkeisan.so` (`suru --翻訳 --共有ライブラリ` in the Python version). Types come from the type declaration (数, 整数, 小数, 単精度, 真偽, 文字列, 番地, 無), and the functions can be called from Python's ctypes, C and so on. Runtime errors return 0 and can be read with `keisan_last_error()`, and calls work from any thread. This is stage 1 of #208.
 2. **`suruc --共有ライブラリ` also writes a C header.** Building `libkeisan.so` writes `keisan.h` next to it, with the prototypes, the Suru name and types of each function, and notes on errors and freeing strings. `examples/他の言語から/` has examples that call the library from Python, C, C++, Go and Rust. This is stage 2 of #208.
 3. **SHA-256 and HMAC-SHA256 in 「ハッシュ」.** `b を ハッシュ内のSHA256にする` and `b を 鍵 で ハッシュ内のHMACSHA256にする` give 32 bytes, the same in the interpreter and compiled binaries. They are for signing cookies in suru-lang/web (#192).
@@ -16,13 +26,18 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 6. **kumu builds shared libraries.** Write `種類 とは 「共有ライブラリ」` in 組.suru and `kumu 作る` writes `出力/libNAME.so` (or `.dylib`) and `出力/NAME.h` (`ライブラリ名 とは 「…」` sets NAME when the project name isn't ASCII). `kumu 新規 NAME --共有ライブラリ` creates a library project with a test. A library whose code doesn't use self-recursion now also builds at `-O0`. This is stage 4 of #208.
 7. **Shared libraries on Windows.** `suruc --共有ライブラリ` (and kumu) now builds a `.dll` on Windows (MSYS2 UCRT64), together with the import library `libNAME.dll.a` for linking and the header. Only the exported and helper functions are exported. The shared library tests run on Windows in CI. This is stage 5 of #208.
 8. **`docs/AIの手引き.md` explains shared libraries.** A new section shows how to export functions, the type mapping, errors and kumu, and the remaining ideas are listed in `docs/今後/共有ライブラリ.md`. This is stage 6 of #208.
-9. **Fast with pip too.** PyPI gets wheels for Linux, macOS and Windows that also install `suruc`, `suru-ls` and `kumu`. `suru prog.suru` compiles the program into a cache and runs it when a C compiler (clang) is available (fib(25): from 1.57 s down to 0.08 s from the second run). Add `--インタプリタ` to run it the old way. Without a C compiler it uses the interpreter. Checking and `--翻訳` also use the bundled `suruc`. `suruc --実行` does the same (#229).
+9. **Descriptions of definitions.** The comment right above a definition is its description, and the comment at the head of a file describes the file. No new syntax: existing comments already work. The language server shows the description on hover, also for names of imported files. This is stage 1 of #209.
+10. **API documentation with `--文書`.** `suru --文書` and `suruc --文書` write Markdown (or JSON with `--json`) listing each public name of a file or folder with its type declaration, usage, description and examples. `--出力 フォルダ` writes one file per source file. The Python and Go versions give the same output. This is stage 2 of #209.
+11. **`kumu 文書` and Read the Docs.** `kumu 文書` writes the API pages of the project's top-level files to `docs/api/`, and `kumu 文書 --雛形` writes the Sphinx (MyST, furo) and Read the Docs settings, with a lexer that highlights Suru code. Connect the repository on readthedocs.org and the docs are published on every push. This is stage 3 of #209.
+12. **The standard library is documented in English.** Every public definition in `lib/` has an English description, and the API pages use the English labels `Usage:` and `Examples:`. The documentation of Suru itself is published at https://suru.readthedocs.io/en/latest/ . `ファイル内の作成する` (the C `mkdir`), which was public by mistake, is now private; use `ファイル内のフォルダ作成する`. This is stage 4 of #209.
 
 ### Fixed
 
 1. **A quasi-quote head written in a comment is no longer read as code.** A line like `# 例: 道群 とは 以下の【道】です` (or with `＃`/`※` before `とは`) used to start a quasi-quote and then fail with 「中身は頭より深く字下げして…」. The interpreter, `suruc` and `suru --点検` now treat it as a comment (#192).
 2. **`suru --点検` reads type declarations with `と` between parameter types.** `lib/構文.suru` now reads `数 を 数 と 数 と 数 で 三回転和にする は 数` (a list whose items have their own types, added in #119) like `suru.py`, instead of failing on the whole file.
 3. **A deriver or expander from a dependency can read that dependency's own dependencies.** `suruc` and `kumu` compiled the expander with the packages of the dependency's folder, which has no `組.lock`, so `会員 は 【表】 を 導出する` with only suru-lang/orm as a dependency failed with 「ファイル「蔵.suru」が見つかりません」. The expander now uses the packages of the program being built (#192).
+
+The VS Code extension 0.11.0 highlights `以下は外部に出す関数` and shows descriptions of definitions on hover.
 
 ## 0.10.1
 

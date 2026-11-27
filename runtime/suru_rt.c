@@ -4049,6 +4049,11 @@ static V mem_run(Act *a) {
 
 /* スレッドの結果を書くところ(GC の領域。合流する動作と、動いているスレッドの両方から見える) */
 typedef struct { int64_t state; V result; char *msg; int32_t pos; } ThreadCell; /* state: 0 動いている、1 終わった、2 エラー */
+/* スレッドが終わるたびに増える(world_mu を持って変える)。眠っているスレッドは、これが変わると起きて
+ * 「みな止まっていないか」を調べ直す。終わったスレッドが最後の動いているスレッドだったとき、
+ * 残りがみな待っているのに誰も気づかず、ずっと眠ったままになるのを防ぐ(#230 の CI で見つかった) */
+static uint64_t world_finished;
+
 /* 通路や合流の状態を変えたら、world_mu を持って呼ぶ。待っているスレッドのうち、先に進めるようになったものだけを起こす */
 static void world_changed(void) {
     if (!world_multi) return;
@@ -4127,7 +4132,8 @@ static void world_wait(int (*ready)(void *), void *arg, int32_t pos) {
         world_save(me);
         world_running--;
         pthread_cond_signal(&world_stop_cv);
-        while (!ready(arg)) pthread_cond_wait(&me->wcv, &world_mu);
+        uint64_t finished = world_finished;
+        while (!ready(arg) && finished == world_finished) pthread_cond_wait(&me->wcv, &world_mu);
         while (__atomic_load_n(&rt_gc_stop, __ATOMIC_RELAXED)) pthread_cond_wait(&world_resume_cv, &world_mu);
         world_running++;
         me->wready = NULL;
@@ -4165,6 +4171,10 @@ static void thread_finish(SThread *t) {
     world_running--;
     pthread_cond_signal(&world_stop_cv);
     world_changed();
+    /* 先に進めないまま眠っているスレッドも起こして、みな止まっていないかを調べ直させる */
+    world_finished++;
+    for (SThread *w = threads; w; w = w->next)
+        if (w->wready) pthread_cond_signal(&w->wcv);
     pthread_mutex_unlock(&world_mu);
 }
 

@@ -34,7 +34,8 @@ AI(Claude Code など)が「する」のプログラムを書いたり直した�
 
 ### このリポジトリ(suru 本体)の試験
 
-- Python 版: `python3 -m pytest tests/test_ファイル.py`(全部は時間がかかるので、変えたところに近いものから)
+- Python 版: `python3 -m pytest tests/test_ファイル.py`(変えたところに近いものから)。全部は `python3 -m pytest -n auto tests`(`pip install pytest-xdist` で CPU の数だけ並べて流す)
+- CI は PR で変わったファイルを見て、文書だけなら文書の試験だけを流します(`.github/workflows/test.yml`)
 - Go 版: `go test ./compiler/ ./cmd/...`
 - Python 版(`suru.py`・`suru_check.py`・`suru_compile.py`)を直したら、Go 版(`compiler/`)も同じに直します。`tests/test_go_compiler.py` が、両方が同じ IR とエラーを出すかを確かめます。
 
