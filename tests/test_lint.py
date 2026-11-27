@@ -212,8 +212,12 @@ syntax.suru:34:43: 不要な括弧: この括弧は外しても読み方が変�
 KINDS = ["interp"] + (["binary"] if suru_compile.find_cc() is not None else [])
 
 
-def run_lint(kind: str, tmp_path: pathlib.Path, *paths: str) -> subprocess.CompletedProcess:
-    env = dict(os.environ, XDG_CACHE_HOME=str(tmp_path / "cache"))
+def run_lint(kind: str, tmp_path: pathlib.Path, *paths: str, fresh_cache: bool = False) -> subprocess.CompletedProcess:
+    # 点検のバイナリは作るのに十数秒かかるので、ふだんはいつものキャッシュ(~/.cache/suru)を共有する(#230)。
+    # 名前に lib と実行時の中身のハッシュが入るので、古いものを使うことはない
+    env = dict(os.environ)
+    if fresh_cache:
+        env["XDG_CACHE_HOME"] = str(tmp_path / "cache")
     if kind == "interp":
         env["SURU_LINT_INTERP"] = "1"
     else:
@@ -227,11 +231,11 @@ def test_知らせと終了コード(kind, tmp_path):
     (tmp_path / "bad.suru").write_text(BAD, encoding="utf-8")
     (tmp_path / "polite.suru").write_text(POLITE, encoding="utf-8")
     (tmp_path / "good.suru").write_text("x とは 1\n", encoding="utf-8")
-    r = run_lint(kind, tmp_path, "bad.suru", "good.suru", "polite.suru")
+    r = run_lint(kind, tmp_path, "bad.suru", "good.suru", "polite.suru", fresh_cache=True)
     assert r.returncode == 1, r.stderr
     assert r.stdout == BAD_OUT.replace("DIR/", "") + (
         "polite.suru:3:3: 丁寧語の混在: 文の終わりが「する」の文が1つ、「します」の文が2つあります。「します」にそろえると読みやすくなります\n")
-    r = run_lint(kind, tmp_path, "good.suru")
+    r = run_lint(kind, tmp_path, "good.suru", fresh_cache=True)
     assert (r.returncode, r.stdout) == (0, "")
     if kind == "binary":
         assert len(list((tmp_path / "cache" / "suru").glob("点検-*"))) == 1

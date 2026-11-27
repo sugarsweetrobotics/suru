@@ -54,16 +54,55 @@ def test_例のプログラムで同じIR(path, suruc, tmp_path):
     compare(path, suruc, tmp_path)
 
 
+def _compile_py(path: str, ll: str) -> tuple[int, str]:
+    """Python 版で --ll を作る(suru_compile.py --ll と同じ)。プログラムごとに新しい子で動かすので、状態は次のプログラムに残らない"""
+    import contextlib
+    import io
+
+    import suru_compile
+
+    sys.setrecursionlimit(10000)
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        try:
+            code = suru_compile.main(["suru_compile.py", "--ll", path, "-o", ll])
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else 1
+    return code, err.getvalue()
+
+
+def _compare_one(job: tuple[str, str, str]) -> str | None:
+    """1つのプログラムを Python 版と Go 版でコンパイルして比べる。違えば そのソース"""
+    path, suruc, out = job
+    py_ll, go_ll = out + ".py.ll", out + ".go.ll"
+    for ll in (py_ll, go_ll):
+        pathlib.Path(ll).unlink(missing_ok=True)
+    py = _compile_py(path, py_ll)
+    go = subprocess.run([suruc, "--ll", path, "-o", go_ll], capture_output=True, text=True)
+    same = (go.returncode, go.stderr) == py
+    if same and py[0] == 0:
+        same = pathlib.Path(go_ll).exists() and pathlib.Path(go_ll).read_bytes() == pathlib.Path(py_ll).read_bytes()
+    return None if same else pathlib.Path(path).read_text(encoding="utf-8")
+
+
 def test_テストのプログラムで同じIRとエラー(suruc, tmp_path):
+    # 2000 個ほどあるので、Python を毎回起動しない。suru_compile を読み込んだ forkserver から
+    # プログラムごとに子を fork して、並べて動かす(#230)
+    import multiprocessing
+
     shutil.copy(ROOT / "examples" / "数学.suru", tmp_path / "数学.suru")
-    failed = []
+    jobs = []
     for k, source in enumerate(programs()):
         path = tmp_path / f"p{k}.suru"
         path.write_text(source, encoding="utf-8")
-        try:
-            compare(path, suruc, tmp_path)
-        except AssertionError:
-            failed.append(source)
+        jobs.append((str(path), str(suruc), str(tmp_path / f"p{k}")))
+    if "forkserver" in multiprocessing.get_all_start_methods():
+        ctx = multiprocessing.get_context("forkserver")
+        ctx.set_forkserver_preload(["suru_compile", "test_go_compiler"])
+    else:  # Windows
+        ctx = multiprocessing.get_context("spawn")
+    with ctx.Pool(maxtasksperchild=1) as pool:
+        failed = [src for src in pool.map(_compare_one, jobs, chunksize=1) if src is not None]
     assert not failed, f"{len(failed)} 個のプログラムで違います。最初のもの:\n{failed[0]}"
 
 
