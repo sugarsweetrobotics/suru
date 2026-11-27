@@ -4,6 +4,12 @@
 
 Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
 
+## Unreleased
+
+### Fixed
+
+1. **`kumu 試験` and `kumu 点検` skip folders that are projects of their own.** A folder below the project with its own `組.suru` (such as a project in `例/`) is a separate project, so its files are no longer tested or linted with the outer project's dependencies. Since 0.10.0 such files made `kumu 試験` fail with 「ファイル「蔵.suru」が見つかりません」 (#193).
+
 ## 0.10.0
 
 ### New
