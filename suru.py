@@ -898,7 +898,8 @@ def _quasi_header(raw: str) -> tuple[str, str | None] | None:
     if m:
         return m.group(1), None
     m = _QUASI_EXPR.match(text)
-    if m and "「" not in m.group(1):
+    # 「x とは」の前に注釈の字があれば、注釈の中に書いたもの(準クォートではない)
+    if m and "「" not in m.group(1) and not any(c in m.group(1) for c in COMMENT_STARTS):
         return m.group(2), m.group(1)
     return None
 

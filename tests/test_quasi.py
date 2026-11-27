@@ -121,6 +121,16 @@ def test_墨付き括弧は頭のほかでは使えない(tmp_path):
     assert r.stdout == "【b】\n"
 
 
+def test_注釈の中の頭は準クォートではない(tmp_path):
+    src = "# 例: 道群 とは 以下の【道】です\n#   GET / 見る\nx とは 1 ＃ y とは 以下の【定】です\nx を 表示する\n"
+    r = _suru(str(_write(tmp_path, src)))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == "1\n"
+    # 点検(lib/字句.suru)も注釈として読む
+    lint = _suru("--点検", str(_write(tmp_path, "# 例: 道群 とは 以下の【道】です\n\nx とは 1\n\nx を 表示する\n")))
+    assert lint.stdout == "", lint.stdout
+
+
 def test_一番外の形は字下げできない(tmp_path):
     err = _err(tmp_path, "「道」 を 読み込む\nf とは 以下の手順です\n  以下は【定】です\n    x 1\n  以上です\n以上です\n")
     assert "「以下は【定】です」は一番外(字下げなし)にだけ書けます" in err
@@ -168,6 +178,7 @@ GO_PROGRAMS = [
     "a とは 【b】\n",
     "「道」 を 読み込む\n以下は【再】です\n  x\n以上です\n",
     "「道」 を 読み込む\n以下は【読込】です\n  x\n以上です\n",
+    "# 例: 道群 とは 以下の【道】です\nx とは 1 ※ y とは 以下の【定】です\nx を 表示する\n",
 ]
 
 
