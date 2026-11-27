@@ -1,6 +1,6 @@
 # Suru documentation
 
-Suru (「する」) is a functional programming language written in Japanese. This site has the API of the standard library (`lib/`), the built-in functions and guides. The whole language and its decisions are in the [README](https://github.com/suru-lang/suru/blob/main/README.md).
+Suru (「する」) is a functional programming language written in Japanese. This site has the API of the standard library (`lib/`), the built-in functions, the [official libraries](libraries.md) outside the standard library, and guides. The whole language and its decisions are in the [README](https://github.com/suru-lang/suru/blob/main/README.md).
 
 Each API page lists the public names of a file with their description (the comment right above the definition), type declaration, usage and examples (`例えば … は … です`). The pages are made by `suru --文書`. The AI guide (`AIの手引き`) is written in Japanese.
 
@@ -9,6 +9,7 @@ Each API page lists the public names of a file with their description (the comme
 :caption: Guides
 
 組み込み関数
+libraries
 AIの手引き
 publishing-a-library
 ```
