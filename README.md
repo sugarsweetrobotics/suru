@@ -1550,6 +1550,25 @@ suruc --試験 計算.suru 二倍       # the same with the Go compiler, only te
 5. **`kumu 試験` runs them too.** Before the files in `試験/`, it runs the test blocks and examples in the project's source files (not `組.suru`, `試験/` or `出力/`), one binary per file, linked with the project's `Cソース`.
 6. **`lib/` is tested this way.** `lib/算術.suru`, `lib/乱数.suru` and the formatting functions of `lib/標準.suru` have examples and test blocks, and the CI runs `suru --試験 lib/` and `suruc --試験 lib/` on every pull request, next to pytest and `go test`. pytest and `go test` stay for testing the interpreter and the compilers themselves.
 
+### Descriptions of definitions
+
+```suru
+# SPDX-License-Identifier: MIT
+# 計算のライブラリです。
+# 数を何倍かにする関数があります。
+
+# 数を2倍した値です。
+#
+# 負の数もそのまま2倍します。
+数 を 二倍する は 数 を 返す
+x を 二倍する とは x * 2 です
+例えば （3 を 二倍する） は 6 です
+```
+
+1. **The comment right above a definition is its description.** The comment lines (`#`, `＃`, `※`) written directly above the type declaration (or the definition, when there is none), with no blank line between, are the description of that definition. No new syntax was added, so existing comments already work as descriptions. The text after the comment mark and one space is joined line by line as Markdown; a line with only `#` is an empty line (a paragraph break). `# 点検しない` lines are left out (#209).
+2. **The comment at the head of a file describes the file.** The comment lines starting at line 1 are the description of the file (module), without the `SPDX-License-Identifier:` and `Copyright` lines. Even when a definition follows the head comment with no blank line, that comment is not the definition's description.
+3. **Shown on hover in the language server.** Hovering a name shows its description after the type, also for public definitions of imported files (such as `数学内の二乗する`). The Python version (`doc_comments` in `suru.py`) and the Go version (`compiler.DocComments`) read them by the same rules. A tool that makes API documentation from the descriptions comes in a later stage.
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)

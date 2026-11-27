@@ -3524,6 +3524,79 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         _CTX = saved
 
 
+def _comment_text(line: str) -> str | None:
+    """注釈だけの行なら、注釈の印とその後の空白1つを除いた中身(注釈の行でなければ None)"""
+    t = line.lstrip(" \t\u3000")
+    if not t or t[0] not in COMMENT_STARTS:
+        return None
+    t = t[1:]
+    if t[:1] in (" ", "\u3000"):
+        t = t[1:]
+    return t.rstrip(" \t\u3000\r")
+
+
+def _doc_text(lines: list, head: bool) -> str:
+    """注釈の行をつないで説明にする(頭の注釈なら SPDX と Copyright の行を除く)。前後の空の行は除く"""
+    out = []
+    for line in lines:
+        t = _comment_text(line) or ""
+        if t.startswith("点検しない"):
+            continue
+        if head and t.startswith(("SPDX-License-Identifier:", "Copyright", "!")):
+            continue
+        out.append(t)
+    while out and out[0] == "":
+        out.pop(0)
+    while out and out[-1] == "":
+        out.pop()
+    return "\n".join(out)
+
+
+def doc_comments(source: str, program: list) -> tuple:
+    """定義の説明(#209)。(ファイルの頭の注釈, {名前: 説明}) を返す(compiler/doc.go の DocComments と同じ)。
+    定義の型の宣言(なければ定義)のすぐ上に、空行をはさまずに書いた注釈の行がその説明。
+    ファイルの頭の注釈(SPDX-License-Identifier と Copyright の行を除く)がファイルの説明"""
+    lines = source.replace("\r\n", "\n").split("\n")
+    head_end = 0
+    while head_end < len(lines) and _comment_text(lines[head_end]) is not None:
+        head_end += 1
+    module = _doc_text(lines[:head_end], True) if head_end else ""
+    first: dict = {}
+
+    def add(n: Any) -> None:
+        if isinstance(n, Block):
+            for s in n.statements:
+                add(s)
+            return
+        if isinstance(n, Define):
+            if n.test or n.name.startswith("\x00"):
+                return
+        elif not isinstance(n, (TypeSig, TypeDef, TraitDecl)):
+            return
+        line = int(n.line or 0)
+        if not n.name or line <= 0:
+            return
+        if n.name not in first or line < first[n.name]:
+            first[n.name] = line
+
+    for s in program:
+        add(s)
+    names = {}
+    for name, line in first.items():
+        idx = line - 1
+        if idx > len(lines):
+            continue
+        start = idx
+        while start > 0 and _comment_text(lines[start - 1]) is not None:
+            start -= 1
+        if start == idx or start == 0:  # 上の注釈がファイルの頭まで続いていれば、それはファイルの説明
+            continue
+        d = _doc_text(lines[start:idx], False)
+        if d:
+            names[name] = d
+    return module, names
+
+
 def short_type_name(name: str) -> str:
     """表示する型と形の名前: 読み込んだファイルの前置き(「部品内の」)を除く"""
     return name.rpartition(MODULE_SEP)[2]

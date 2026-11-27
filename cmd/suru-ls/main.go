@@ -306,6 +306,9 @@ func (s *server) hover(p textDocumentPosition) any {
 	if t.Def {
 		label = "定義の型"
 	}
+	if doc, ok := d.analysis.Docs[t.Name]; ok {
+		label += "\n\n" + doc
+	}
 	if u, ok := d.analysis.Usages[t.Name]; ok {
 		label += "\n\n使い方: `" + u + "`"
 	}
