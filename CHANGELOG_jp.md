@@ -4,7 +4,7 @@
 
 「する」本体(`suru`・`suruc`・`suru-ls`・`kumu` と同梱の `lib/`)の変更です。0.7.0 より前の版は [GitHub Releases](https://github.com/suru-lang/suru/releases) にあります。VS Code 拡張の版は別です。
 
-## まだ出していないもの
+## 0.10.1
 
 ### 直したもの
 
