@@ -4125,7 +4125,7 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 			ctx.FieldTypes[k] = v
 		}
 	}
-	m := &Module{stem, path, program, privateNames(program), source}
+	m := &Module{stem, path, program, privateNames(program), source, sub.Packages}
 	delete(ctx.Loading, path)
 	ctx.Modules[path] = m
 	return m

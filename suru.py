@@ -3617,6 +3617,279 @@ def parse_program(source: str, ctx: ParseContext | None = None) -> list:
         _CTX = saved
 
 
+def _comment_text(line: str) -> str | None:
+    """注釈だけの行なら、注釈の印とその後の空白1つを除いた中身(注釈の行でなければ None)"""
+    t = line.lstrip(" \t\u3000")
+    if not t or t[0] not in COMMENT_STARTS:
+        return None
+    t = t[1:]
+    if t[:1] in (" ", "\u3000"):
+        t = t[1:]
+    return t.rstrip(" \t\u3000\r")
+
+
+def _doc_text(lines: list, head: bool) -> str:
+    """注釈の行をつないで説明にする(頭の注釈なら SPDX と Copyright の行を除く)。前後の空の行は除く"""
+    out = []
+    for line in lines:
+        t = _comment_text(line) or ""
+        if t.startswith("点検しない"):
+            continue
+        if head and t.startswith(("SPDX-License-Identifier:", "Copyright", "!")):
+            continue
+        out.append(t)
+    while out and out[0] == "":
+        out.pop(0)
+    while out and out[-1] == "":
+        out.pop()
+    return "\n".join(out)
+
+
+def doc_comments(source: str, program: list) -> tuple:
+    """定義の説明(#209)。(ファイルの頭の注釈, {名前: 説明}) を返す(compiler/doc.go の DocComments と同じ)。
+    定義の型の宣言(なければ定義)のすぐ上に、空行をはさまずに書いた注釈の行がその説明。
+    ファイルの頭の注釈(SPDX-License-Identifier と Copyright の行を除く)がファイルの説明"""
+    lines = source.replace("\r\n", "\n").split("\n")
+    head_end = 0
+    while head_end < len(lines) and _comment_text(lines[head_end]) is not None:
+        head_end += 1
+    module = _doc_text(lines[:head_end], True) if head_end else ""
+    first: dict = {}
+
+    def add(n: Any) -> None:
+        if isinstance(n, Block):
+            for s in n.statements:
+                add(s)
+            return
+        if isinstance(n, Define):
+            if n.test or n.name.startswith("\x00"):
+                return
+        elif not isinstance(n, (TypeSig, TypeDef, TraitDecl)):
+            return
+        line = int(n.line or 0)
+        if not n.name or line <= 0:
+            return
+        if n.name not in first or line < first[n.name]:
+            first[n.name] = line
+
+    for s in program:
+        add(s)
+    names = {}
+    for name, line in first.items():
+        idx = line - 1
+        if idx > len(lines):
+            continue
+        start = idx
+        while start > 0 and _comment_text(lines[start - 1]) is not None:
+            start -= 1
+        if start == idx or start == 0:  # 上の注釈がファイルの頭まで続いていれば、それはファイルの説明
+            continue
+        d = _doc_text(lines[start:idx], False)
+        if d:
+            names[name] = d
+    return module, names
+
+
+DOC_KIND_FUNCTION, DOC_KIND_VALUE, DOC_KIND_TYPE, DOC_KIND_TRAIT = "関数", "値", "型", "性質"
+
+
+def _statement_text(lines: list, line: int) -> str:
+    """line(1 から)から始まる一番外の文の字句: その行と、続く字下げした行(compiler/doc.go の statementText と同じ)"""
+    if line < 1 or line > len(lines):
+        return ""
+    first = lines[line - 1]
+    t = first.lstrip(" \t\u3000")
+    if t != first:  # まとまり(以下は外部の…です)の中の行は、その1行だけ
+        return t.rstrip(" \t\r")
+    out = [first.rstrip(" \t\r")]
+    for ln in lines[line:]:
+        if not ln.strip() or not ln.startswith((" ", "\t", "\u3000")) or _comment_text(ln) is not None:
+            break
+        out.append(ln.rstrip(" \t\r"))
+    return "\n".join(out)
+
+
+def _doc_usage(name: str, params: list) -> str:
+    """引数の並びから「n を 三倍する」のような使い方を作る(compiler/analyze.go の usage と同じ)"""
+    out = ""
+    for part, pat in params:
+        if isinstance(pat, str):
+            out += pat.rpartition(MODULE_SEP)[2]
+        elif isinstance(pat, list) and all(isinstance(x, str) for x in pat):
+            out += f" {KW_TO} ".join(x.rpartition(MODULE_SEP)[2] for x in pat)
+        else:
+            out += "…"
+        out += f" {part} "
+    return out + name
+
+
+def _doc_param_simple(pat: Any) -> bool:
+    return isinstance(pat, str) or (isinstance(pat, list) and all(isinstance(x, str) for x in pat))
+
+
+def document(source: str, program: list, private: frozenset = frozenset()) -> dict:
+    """解析したプログラムから API ドキュメントを作る(#209、compiler/doc.go の Document と同じ)"""
+    lines = source.replace("\r\n", "\n").split("\n")
+    module, descs = doc_comments(source, program)
+    items: list = []
+    index: dict = {}
+
+    def item(name: str, line: int) -> dict:
+        if name in index:
+            it = items[index[name]]
+            it["line"] = min(it["line"], line)
+            return it
+        index[name] = len(items)
+        items.append({"name": name, "kind": "", "line": line, "signature": "", "usage": "",
+                      "description": descs.get(name, ""), "examples": []})
+        return items[-1]
+
+    examples = []
+
+    def add(n: Any) -> None:
+        if isinstance(n, Block):
+            for s in n.statements:
+                add(s)
+        elif isinstance(n, Define):
+            if n.example is not None and n.test:
+                examples.append(n)
+                return
+            if n.test or n.name.startswith("\x00") or n.name in private:
+                return
+            it = item(n.name, int(n.line))
+            if n.is_function:
+                it["kind"] = DOC_KIND_FUNCTION
+                simple = all(_doc_param_simple(p) for _, p in n.params)
+                if not it["usage"] or (simple and "…" in it["usage"]):
+                    it["usage"] = _doc_usage(n.name, n.params)
+            elif not it["kind"]:
+                it["kind"] = DOC_KIND_VALUE
+        elif isinstance(n, TypeSig):
+            if n.name in private:
+                return
+            it = item(n.name, int(n.line))
+            it["signature"] = _statement_text(lines, int(n.line))
+            if n.params is not None:
+                it["kind"] = DOC_KIND_FUNCTION
+            elif not it["kind"]:
+                it["kind"] = DOC_KIND_VALUE
+        elif isinstance(n, TypeDef):
+            it = item(n.name, int(n.line))
+            it["kind"], it["signature"] = DOC_KIND_TYPE, _statement_text(lines, int(n.line))
+        elif isinstance(n, TraitDecl):
+            it = item(n.name, int(n.line))
+            it["kind"], it["signature"] = DOC_KIND_TRAIT, _statement_text(lines, int(n.line))
+
+    for s in program:
+        add(s)
+    for x in examples:
+        name = x.test[: -len("の例")] if x.test.endswith("の例") else x.test
+        if name in index:
+            items[index[name]]["examples"].append(_statement_text(lines, int(x.line)))
+    items.sort(key=lambda it: it["line"])
+    return {"file": "", "module": "", "description": module, "items": items}
+
+
+def document_file(path: str) -> dict:
+    """path のファイルを解析して、公開の名前の API ドキュメントを作る"""
+    with open(path, encoding="utf-8") as f:
+        source = f.read()
+    ctx = ParseContext(base_dir=os.path.dirname(os.path.abspath(path)), path=path)
+    program = parse_program(source, ctx)
+    d = document(source, program, private_names(program))
+    d["file"] = path
+    d["module"] = os.path.basename(path)[: -len(".suru")] if path.endswith(".suru") else os.path.basename(path)
+    return d
+
+
+def doc_markdown(d: dict) -> str:
+    """API ドキュメントを Markdown(MyST でも読める形)にする"""
+    out = f"# 「{d['module']}」\n"
+    if d["description"]:
+        out += "\n" + d["description"] + "\n"
+    for it in d["items"]:
+        out += "\n## " + it["name"] + "\n"
+        if it["signature"]:
+            out += "\n```suru\n" + it["signature"] + "\n```\n"
+        if it["usage"]:
+            out += "\n使い方: `" + it["usage"] + "`\n"
+        if it["description"]:
+            out += "\n" + it["description"] + "\n"
+        if it["examples"]:
+            out += "\n例:\n\n```suru\n" + "\n".join(it["examples"]) + "\n```\n"
+    return out
+
+
+def doc_json(d: dict) -> str:
+    import json
+
+    return json.dumps(d, ensure_ascii=False, separators=(",", ":")) + "\n"
+
+
+DOC_USAGE = "使い方: --文書 [--json] [--出力 フォルダ] ファイルかフォルダ …"
+
+
+def doc_command(args: list) -> int:
+    """「suru --文書 …」(#209): ファイル(フォルダなら中の .suru)の公開の名前の API ドキュメントを、
+    Markdown(--json なら1ファイル1行の JSON)で出す。--出力 があれば、ファイルごとに「名前.md」(「名前.json」)を書く"""
+    as_json, out, paths = False, "", []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in JSON_FLAGS:
+            as_json = True
+        elif a in ("--出力", "--out", "-o"):
+            if i + 1 >= len(args):
+                print(DOC_USAGE, file=sys.stderr)
+                return 2
+            out = args[i + 1]
+            i += 1
+        elif a.startswith("--"):
+            print(DOC_USAGE, file=sys.stderr)
+            return 2
+        else:
+            paths.append(a)
+        i += 1
+    files = []
+    for p in paths:
+        if not os.path.exists(p):
+            print(f"「{p}」が見つかりません", file=sys.stderr)
+            print(DOC_USAGE, file=sys.stderr)
+            return 2
+        if os.path.isdir(p):
+            files += sorted(os.path.join(p, n) for n in os.listdir(p)
+                            if n.endswith(".suru") and os.path.isfile(os.path.join(p, n)))
+        else:
+            files.append(p)
+    if not files:
+        print(DOC_USAGE, file=sys.stderr)
+        return 2
+    if out:
+        os.makedirs(out, exist_ok=True)
+    status, first = 0, True
+    for f in files:
+        try:
+            d = document_file(f)
+        except SuruError as e:
+            if as_json:
+                print(error_json(e, "構文", f), file=sys.stderr)
+            else:
+                with open(f, encoding="utf-8") as fh:
+                    print(f + ": " + format_error(e, fh.read()), file=sys.stderr)
+            status = 1
+            continue
+        text, ext = (doc_json(d), ".json") if as_json else (doc_markdown(d), ".md")
+        if out:
+            with open(os.path.join(out, d["module"] + ext), "w", encoding="utf-8") as fh:
+                fh.write(text)
+            continue
+        if not first and not as_json:
+            sys.stdout.write("\n")
+        first = False
+        sys.stdout.write(text)
+    return status
+
+
 def short_type_name(name: str) -> str:
     """表示する型と形の名前: 読み込んだファイルの前置き(「部品内の」)を除く"""
     return name.rpartition(MODULE_SEP)[2]
@@ -8362,6 +8635,7 @@ def repl(files: list[str] | None = None, checking: bool = True) -> None:
         r.feed(source)
 
 CHECK_FLAGS = ("--検査", "--check")  # 型の検査だけを行う(実行はしない)
+DOC_FLAGS = ("--文書", "--doc")  # 公開の名前の API ドキュメントを出す(#209)
 EXPAND_FLAGS = ("--展開", "--expand")  # 準クォートを展開したソースを表示する
 NO_CHECK_FLAGS = ("--検査なし", "--no-check")  # 型の検査をせずに実行する
 COMPILE_FLAGS = ("--翻訳", "--compile")  # バイナリにコンパイルする(suru_compile.py)
@@ -8646,6 +8920,8 @@ def main(argv: list[str]) -> int:
         return lint(paths)
     if len(argv) >= 2 and argv[1] in TEST_FLAGS:
         return run_tests(argv[2:])
+    if len(argv) >= 2 and argv[1] in DOC_FLAGS:
+        return doc_command(argv[2:])
     argv, as_json = _take_json_flag(argv)
     if len(argv) >= 2 and argv[1] in EXPAND_FLAGS:
         if len(argv) != 3:

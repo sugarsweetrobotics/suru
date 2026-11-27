@@ -61,6 +61,7 @@ cd 挨拶
 kumu 実行           # build 出力/挨拶 and run it (run; arguments after -- go to the program)
 kumu 作る           # only build 出力/挨拶 (build; -O0 to -O3 and --検査なし work too)
 kumu 初期化         # create the skeleton in the current folder (init)
+kumu 新規 店 --対象 web   # create a web app for 屋台 (suru-lang/web) in 店/
 kumu 追加 github.com/someone/計算   # add a dependency; without a version, the newest tag (add; …@1.2.0 picks a version)
 kumu 更新           # move dependencies to their newest tags (update; kumu 更新 計算 updates just one)
 kumu 削除 計算      # remove a dependency (remove)
@@ -68,6 +69,7 @@ kumu 取得           # fetch dependencies and write 組.lock (fetch; 作る and
 kumu 試験           # run the tests of the source files, then each 「…試験する」 in 試験/ (test; kumu 試験 二倍 picks by part of the name)
 kumu 点検           # lint every file in the project (check)
 kumu 公開           # check, then put the Git tag vVERSION (publish; push it yourself)
+kumu 文書           # write API documentation of the public names to docs/api (doc; --雛形 writes Sphinx and Read the Docs settings)
 ```
 
 Tests can be written in the same file as the code they test, as test blocks and examples ("Tests in the same file and examples"):
@@ -1093,6 +1095,21 @@ Added for the WebSocket (suru-lang/http) handshake and masking. All give the sam
 5. **`n を 乱数内の乱数バイト列取得する` gives n bytes (1 to 256) of OS randomness.** An action calling getentropy. Used for the masks and keys of WebSocket clients.
 6. **`接続 を 秒 で 通信内の待機時間設定する` changes how many seconds receives and sends wait.** Accepted connections give up after 5 seconds, but connections kept open a long time, like WebSockets, are set to `0` (wait forever). Fractional seconds work. After a timeout failure, reading from the same connection can continue (the binary clears the read flag, and the interpreter recreates its reader).
 
+### SHA-256 and HMAC
+
+Added for signing cookies in the web framework (suru-lang/web). They give the same results in the interpreter and compiled binaries.
+
+```
+「標準」 を 読み込んで 使う
+「ハッシュ」 を 読み込む
+
+「abc」 を バイト列にして ハッシュ内のSHA256にして ハッシュ内の十六進表記にする  # → ba7816bf…
+（「本文」 を バイト列にする） を （「鍵」 を バイト列にする） で ハッシュ内のHMACSHA256にする
+```
+
+1. **SHA-256 and HMAC-SHA256 are also written in Suru in 「ハッシュ」.** `b を SHA256にする` and `b を 鍵 で HMACSHA256にする` (RFC 2104) both give 32 bytes. A key longer than 64 bytes is hashed with SHA-256 first.
+2. **Not for passwords.** A single hash is too fast for storing passwords. Use a slow function made for it, such as bcrypt or Argon2.
+
 ### Small Suru for microcontrollers
 
 1. **Microcontroller targets use a separate code generator with no heap and no GC.** `kumu 作る` (with a target) and `suruc --対象 …` decide value types from the type checker's results and generate LLVM IR with numbers as 32-bit integers, booleans as 0 and 1, and string constants as addresses placed in flash. The runtime library is `runtime/avr/suru_avr.c` (main, clock, pins, PWM, A/D conversion, serial). To fit in the Uno's 2KB of RAM, constructs that build values on the heap are not available.
@@ -1592,6 +1609,57 @@ print(lib.nibai(21))   # 42
 11. **Lists and byte sequences are a pointer and a length.** An argument of type `バイト列`, `数 の リスト`, `小数 の リスト` or `文字列 の リスト` becomes two C arguments, a pointer and a length: `const uint8_t *`, `const int64_t *`, `const double *` or `const char *const *`, followed by `int64_t a1_len`. The contents are copied. A function whose value has one of these types takes one more argument, `int64_t *out_len` (NULL is allowed), returns a new `malloc`ed block (`uint8_t *`, `int64_t *`, `double *` or `char **`) and writes its length to `*out_len`. A list of strings is one block holding the array of pointers (ending with NULL) and the characters, so one `keisan_free` frees it. An empty list is a non-NULL block of length 0, and NULL means an error.
 12. **Other values are handles.** Records, functions, other lists (`整数 の リスト`, `点 の リスト` and so on) and any other type are passed as `keisan_value *`, a handle whose contents the caller doesn't see. A handle returned to the caller keeps the value alive (it is a GC root) until `keisan_release`. A handle passed as an argument is only borrowed. Helper functions read and build handles: `keisan_type` (the Suru type name), `keisan_show` (the text 表示する shows), `keisan_len` and `keisan_get` (a list's length and its i-th item, from 0), `keisan_field` (a record field by name), `keisan_to_int`, `keisan_to_double`, `keisan_to_bool` and `keisan_to_string`, `keisan_from_int`, `keisan_from_double`, `keisan_from_bool`, `keisan_from_string` and `keisan_list` (new handles), and `keisan_call` (call a function value with handles; an action result is carried out). They report errors through `keisan_last_error` like exported functions.
 13. **Not yet.** kumu (stage 4) and Windows .dll (stage 5) are later stages of #208. The example is `examples/export.suru`.
+
+### Descriptions of definitions
+
+```suru
+# SPDX-License-Identifier: MIT
+# 計算のライブラリです。
+# 数を何倍かにする関数があります。
+
+# 数を2倍した値です。
+#
+# 負の数もそのまま2倍します。
+数 を 二倍する は 数 を 返す
+x を 二倍する とは x * 2 です
+例えば （3 を 二倍する） は 6 です
+```
+
+1. **The comment right above a definition is its description.** The comment lines (`#`, `＃`, `※`) written directly above the type declaration (or the definition, when there is none), with no blank line between, are the description of that definition. No new syntax was added, so existing comments already work as descriptions. The text after the comment mark and one space is joined line by line as Markdown; a line with only `#` is an empty line (a paragraph break). `# 点検しない` lines are left out (#209).
+2. **The comment at the head of a file describes the file.** The comment lines starting at line 1 are the description of the file (module), without the `SPDX-License-Identifier:` and `Copyright` lines. Even when a definition follows the head comment with no blank line, that comment is not the definition's description.
+3. **Shown on hover in the language server.** Hovering a name shows its description after the type, also for public definitions of imported files (such as `数学内の二乗する`). The Python version (`doc_comments` in `suru.py`) and the Go version (`compiler.DocComments`) read them by the same rules. API documentation is made from the descriptions with `--文書` (see "API documentation (--文書)").
+
+### API documentation (--文書)
+
+```
+suru --文書 lib/算術.suru                  # Markdown を画面に出す
+suruc --文書 --出力 文書/api lib/          # フォルダの中の .suru ごとに 文書/api/名前.md を書く
+suru --文書 --json lib/算術.suru           # 同じ中身を1ファイル1行の JSON で出す
+```
+
+1. **Lists the public names one by one.** `suru --文書` and `suruc --文書` (also `--doc`) write API documentation listing the public types, traits, values and functions of a file (for a folder, the `.suru` files in it; subfolders are not read) in the order they are written. Names in `… は 非公開とする`, test groups and examples are not listed as names (#209).
+2. **What each name shows.** The type declaration as written (for types and traits, the definition, with its indented continuation lines), for functions the usage (`x を 二倍する`, from the parameter names of a definition without patterns), the description (see "Descriptions of definitions") and the examples of that definition (`例えば … は … です`). Functions and values without a type declaration get no type. A declaration inside an `以下は外部の…です` block is that one line.
+3. **Markdown layout.** The file name as the title (`# 「算術」`), then the file description, then one `## 名前` section per name. Code is fenced with ` ```suru `, so Sphinx's MyST reads it too. `--json` gives JSON with `file`, `module`, `description` and `items` (`name`, `kind` (関数・値・型・性質), `line`, `signature`, `usage`, `description`, `examples`).
+4. **`--出力 フォルダ` writes files.** One `名前.md` per file (`名前.json` with `--json`). Without it, everything goes to standard output. A file that cannot be read (a syntax error, an imported file not found, …) is reported and skipped, and the exit code is 1.
+5. **The Python and Go versions give the same output.** `tests/test_doc.py` checks that both give the same Markdown and JSON for every file in `lib/`. `kumu 文書` and publishing on Read the Docs are in "kumu 文書 and Read the Docs".
+
+### kumu 文書 and Read the Docs
+
+```sh
+kumu 文書 --雛形    # docs/conf.py・docs/index.md・docs/requirements.txt・docs/_ext/suru_lexer.py・.readthedocs.yaml を書く
+kumu 文書           # docs/api/ にファイルごとの API のページ(Markdown)を書く
+pip install -r docs/requirements.txt && sphinx-build docs docs/_build   # 手元で HTML にする
+```
+
+1. **`kumu 文書` documents the top-level files of the project.** After fetching the dependencies (like `取得`), it writes the `.suru` files at the top of the project folder (except `組.suru`) to `docs/api/名前.md`, in the same form as `suru --文書`. Files under `試験/` or `例/` are not API, so they are not read. `--出力 フォルダ` chooses where to write and `--json` writes JSON (#209).
+2. **`kumu 文書 --雛形` writes Sphinx and Read the Docs settings.** Sphinx reads MyST (Markdown), with `language = "ja"` (Japanese search) and the furo theme. `docs/_ext/suru_lexer.py` is a Pygments lexer that highlights Suru code, registered by `conf.py`. The project name is filled in when the files are written; the version is read from `組.suru` on every build. `index.md` gets the head comment of the file named after the project (or else the entry file). Existing files are left as they are, and `/docs/api/` and `/docs/_build/` are added to `.gitignore`.
+3. **Read the Docs only needs the repository connected.** On every build, `.readthedocs.yaml` downloads the Linux kumu of the same version as the one that wrote the files from GitHub Releases, runs `kumu 文書 --出力 docs/api`, then builds the HTML with Sphinx. The generated pages are not committed. Import the GitHub repository on readthedocs.org and it is published on every push and tag.
+4. **The folder is named docs.** Instead of a Japanese folder name like `試験/`, it uses `docs/`, which Read the Docs and Sphinx tools expect.
+
+### Web app skeleton (kumu 新規 --対象 web)
+
+1. **`kumu 新規 店 --対象 web` creates a web app for 屋台 ([suru-lang/web](https://github.com/suru-lang/web)).** `組.suru` depends on `github.com/suru-lang/web@0.1.0`. `店.suru` has the routes (【道】) and handlers, and `本体.suru` reads it and opens the server on port 8080. The pages are in `画面/` (a layout and a top page), static files are in `公開/`, and `試験/道.suru` tests the routes without starting a server. `kumu 実行` runs it, `kumu 試験` runs the tests, and `kumu 作る` makes the binary `出力/店`. The binary reads `画面/` and `公開/` from the folder it runs in, so ship those folders with it. `kumu 初期化 --対象 web` writes the same files into the current folder and keeps files that already exist.
+2. **`web` is not a microcontroller target.** `--対象 web` only chooses the skeleton, so `組.suru` gets no `対象` line and the app is built for this computer. The app's name must not be the name of a standard library or of 屋台 and its dependencies (屋台, HTTP, 雛形, 台帳, 蔵), because the routes file is loaded by that name.
 
 ## License
 

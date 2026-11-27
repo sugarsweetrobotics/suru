@@ -143,6 +143,23 @@ func TestHoverAndDefinition(t *testing.T) {
 	}
 }
 
+// 定義のすぐ上の注釈が説明としてホバーに出る(読み込んだファイルの定義も、#209)
+func TestHoverDescription(t *testing.T) {
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "数学.suru"), []byte("# 数学\n\n# 2乗した値です。\nx を 二乗する とは x * x\n"), 0o644)
+	main := filepath.Join(dir, "本体.suru")
+	u := pathToURI(main)
+	msgs := talk(t, open(u, "「数学」 を 読み込む\n\n# 3倍した値です。\nn を 三倍する とは n * 3\n3 を 数学内の二乗する\n4 を 三倍する\n"),
+		at(1, "textDocument/hover", u, 4, 10),
+		at(2, "textDocument/hover", u, 5, 4))
+	if h := result(t, msgs, 1); !strings.Contains(h, "2乗した値です。") {
+		t.Fatalf("読み込んだファイルの説明: %s", h)
+	}
+	if h := result(t, msgs, 2); !strings.Contains(h, "3倍した値です。") {
+		t.Fatalf("説明: %s", h)
+	}
+}
+
 func TestDefinitionInImportedFile(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "数学.suru"), []byte("x を 二乗する とは x * x\n"), 0o644)

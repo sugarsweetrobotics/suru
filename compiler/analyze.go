@@ -63,6 +63,8 @@ type Analysis struct {
 	Statements  []int             // 一番外の文の始まりの行(昇順)
 	Tests       []TestSymbol      // 試験のまとまりと例(定義の一覧に出す)
 	Words       []Word            // 型・形・性質・フィールドの名前が書かれたところ(色分け用)
+	Docs        map[string]string // 名前 → 説明(定義のすぐ上の注釈。読み込んだファイルの名前は「数学内の…」でも、#209)
+	ModuleDoc   string            // このファイルの頭の注釈(ファイルの説明)
 	// Starts は行ごとの単語の始まり(何文字目か、昇順)。ホバーの範囲を決めるのに使う
 	Starts map[int][]int
 }
@@ -75,7 +77,7 @@ func Analyze(source, baseDir string) *Analysis {
 
 // AnalyzeFile は Analyze の、調べるファイルの道 path が分かっているもの(同じ名前のファイルの読み込みで自分を飛ばす)
 func AnalyzeFile(source, baseDir, path string) (a *Analysis) {
-	a = &Analysis{Starts: map[int][]int{}, Usages: map[string]string{}}
+	a = &Analysis{Starts: map[int][]int{}, Usages: map[string]string{}, Docs: map[string]string{}}
 	srcLines := SplitLines(source)
 	// 構文の間違いが見つかったら、その一番外の文の行を空にして読み直し、ほかの間違いも探す
 	// (行の数は変えないので、位置はそのまま使える)
@@ -130,6 +132,7 @@ func AnalyzeFile(source, baseDir, path string) (a *Analysis) {
 		}
 		a.Defs = collectDefinitions(program, srcLines)
 		a.collectUsages(program)
+		a.collectDocs(source, program)
 		for _, s := range program {
 			if l := firstLine(s); l.Line != 0 {
 				a.Statements = append(a.Statements, l.Line)
@@ -602,6 +605,33 @@ func usage(name string, params []Param) string {
 		b.WriteString(" " + p.Part + " ")
 	}
 	return b.String() + name
+}
+
+// collectDocs はこのファイルと読み込んだファイルの定義の説明を集める(#209)
+func (a *Analysis) collectDocs(source string, program []Node) {
+	mod, names := DocComments(source, program)
+	a.ModuleDoc = mod
+	for k, v := range names {
+		a.Docs[k] = v
+	}
+	// 読み込んだファイル(このファイルが直接読み込んだもの)の公開の名前
+	for _, s := range program {
+		x, ok := s.(*Import)
+		if !ok || x.Module == nil {
+			continue
+		}
+		m := x.Module
+		_, ns := DocComments(m.Source, m.Program)
+		for k, v := range ns {
+			if m.Private[k] {
+				continue
+			}
+			a.Docs[m.Name+ModuleSep+k] = v
+			if _, ok := a.Docs[k]; x.Open && !ok {
+				a.Docs[k] = v
+			}
+		}
+	}
 }
 
 func (a *Analysis) collectUsages(program []Node) {

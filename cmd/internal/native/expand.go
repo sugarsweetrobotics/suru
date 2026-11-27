@@ -115,7 +115,7 @@ func expanderBinary(mod *compiler.Module, src string) (string, error) {
 		defer os.Setenv("SURU_TARGET", t)
 	}
 	base := filepath.Dir(mod.Path)
-	ir, serr := compiler.CompileSource(src, base, filepath.Join(base, "\x00展開の入口.suru"), true)
+	ir, serr := compiler.CompileSourceWith(src, base, filepath.Join(base, "\x00展開の入口.suru"), true, mod.Packages)
 	if serr != nil {
 		return "", fmt.Errorf("展開の関数をコンパイルできません: %s", serr.Message)
 	}
