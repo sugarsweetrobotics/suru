@@ -133,7 +133,7 @@ func (k *kumu) docScaffold(p *Project) int {
 		}
 		fmt.Fprintf(k.stderr, "%s を書きました\n", f.dst)
 	}
-	if err := addGitignore(p.Root, []string{"/docs/api/", "/docs/_build/"}); err != nil {
+	if err := addGitignore(p.Root, []string{"/docs/api/", "/docs/_build/", "__pycache__/"}); err != nil {
 		return k.fail(err)
 	}
 	fmt.Fprintln(k.stderr, "kumu 文書 で docs/api を作り、sphinx-build docs docs/_build で HTML にできます")

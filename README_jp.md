@@ -1648,7 +1648,7 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build   # 手元
 ```
 
 1. **`kumu 文書` はプロジェクトの一番上のファイルを文書にする。** 依存を取ってきてから(`取得` と同じ)、プロジェクトのフォルダの一番上にある `.suru`(`組.suru` を除く)を `suru --文書` と同じ形で `docs/api/名前.md` に書きます。`試験/` や `例/` の下のファイルは API ではないので見ません。`--出力 フォルダ` で書く場所を、`--json` で JSON を選べます(#209)。
-2. **`kumu 文書 --雛形` は Sphinx と Read the Docs の設定を書く。** Sphinx は MyST(Markdown)で読み、`language = "en"`(英語のページ。「英語の API ドキュメント」)、テーマは furo です。`docs/_ext/suru_lexer.py` は する のコードに色を付ける Pygments の lexer で、`conf.py` が登録します。プロジェクトの名前は書いたときに入れ、版はビルドのたびに `組.suru` から読みます。`index.md` には、プロジェクトと同じ名前のファイル(なければ入口のファイル)の頭の注釈を入れます。今あるファイルは変えず、`.gitignore` に `/docs/api/` と `/docs/_build/` を足します。
+2. **`kumu 文書 --雛形` は Sphinx と Read the Docs の設定を書く。** Sphinx は MyST(Markdown)で読み、`language = "en"`(英語のページ。「英語の API ドキュメント」)、テーマは furo です。`docs/_ext/suru_lexer.py` は する のコードに色を付ける Pygments の lexer で、`conf.py` が登録します。プロジェクトの名前は書いたときに入れ、版はビルドのたびに `組.suru` から読みます。`index.md` には、プロジェクトと同じ名前のファイル(なければ入口のファイル)の頭の注釈を入れます。今あるファイルは変えず、`.gitignore` に `/docs/api/`・`/docs/_build/`・`__pycache__/`(Sphinx が lexer を読むときに作るもの)を足します。
 3. **Read the Docs はリポジトリをつなぐだけ。** `.readthedocs.yaml` はビルドのたびに、雛形を書いた kumu と同じ版の Linux 用の kumu を GitHub Releases から取ってきて `kumu 文書 --出力 docs/api` を流し、それから Sphinx で HTML にします。作ったページはコミットしません。readthedocs.org で GitHub のリポジトリを取り込めば、push とタグごとに公開されます。
 4. **フォルダの名前は docs。** 日本語のフォルダの名前(`試験/` など)にそろえず、Read the Docs と Sphinx の道具がふつう使う `docs/` にしました。
 

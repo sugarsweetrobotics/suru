@@ -4,6 +4,12 @@
 
 「する」本体(`suru`・`suruc`・`suru-ls`・`kumu` と同梱の `lib/`)の変更です。0.7.0 より前の版は [GitHub Releases](https://github.com/suru-lang/suru/releases) にあります。VS Code 拡張の版は別です。
 
+## 次の版
+
+### 直したもの
+
+1. **`kumu 文書 --雛形` は `.gitignore` に `__pycache__/` も足す。** Sphinx が lexer を読むと `docs/_ext/__pycache__/` を作るので、うっかりコミットしやすいものでした(#209)。
+
 ## 0.11.0
 
 ### 新しいもの
