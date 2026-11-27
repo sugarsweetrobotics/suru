@@ -1204,7 +1204,8 @@ func quasiHeader(raw string) (name, before string, isExpr, ok bool) {
 	if m := quasiTop.FindStringSubmatch(text); m != nil {
 		return m[1], "", false, true
 	}
-	if m := quasiExpr.FindStringSubmatch(text); m != nil && !strings.Contains(m[1], "「") {
+	// 「x とは」の前に注釈の字があれば、注釈の中に書いたもの(準クォートではない)
+	if m := quasiExpr.FindStringSubmatch(text); m != nil && !strings.Contains(m[1], "「") && !strings.ContainsAny(m[1], "#＃※") {
 		return m[2], m[1], true, true
 	}
 	return
