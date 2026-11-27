@@ -29,6 +29,29 @@ func targetOption(args []string) (rest []string, target string, ok bool) {
 	return rest, target, true
 }
 
+// sharedOption は 新規・初期化 の --共有ライブラリ(--shared)を読み、雛形の印にする(--対象 とは一緒に使えない)
+func sharedOption(args []string, target string, ok bool) ([]string, string, bool) {
+	if !ok {
+		return args, target, false
+	}
+	var rest []string
+	shared := false
+	for _, a := range args {
+		if a == "--共有ライブラリ" || a == "--shared" {
+			shared = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	if shared {
+		if target != "" {
+			return rest, target, false
+		}
+		target = SharedTarget
+	}
+	return rest, target, true
+}
+
 // mcu はマイコン向けの 作る・書き込む(実行・試験はできないので案内する)
 func (k *kumu) mcu(cmd string, p *Project, target, port string) int {
 	b, err := mcu.Lookup(target)

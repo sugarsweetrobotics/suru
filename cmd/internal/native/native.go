@@ -185,6 +185,11 @@ func targetDarwin() bool {
 // 同じ所に C のヘッダ(頭の名前.h)も書く(#208)。
 // 外に見せるのは、出す関数と補助の関数だけ(実行時ライブラリの名前は隠すので、する のライブラリが2つあってもぶつからない)
 func BuildShared(llPath, out, opt string) (string, error) {
+	return BuildSharedWith(llPath, out, opt, nil)
+}
+
+// BuildSharedWith は BuildShared に clang の引数を足す(kumu の Cソースのオブジェクトなど)
+func BuildSharedWith(llPath, out, opt string, extra []string) (string, error) {
 	cc := FindCC()
 	if cc == "" {
 		return "", fmt.Errorf("共有ライブラリを作るには clang が必要です(LLVM IR だけなら --ll を付けてください)")
@@ -233,7 +238,7 @@ func BuildShared(llPath, out, opt string) (string, error) {
 		}
 		args = append(args, "-shared", "-Wl,--version-script="+script)
 	}
-	args = append(append(args, compiler.LinkFlags(string(ir))...), "-lm", "-lpthread")
+	args = append(append(append(args, extra...), compiler.LinkFlags(string(ir))...), "-lm", "-lpthread")
 	if b, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("clang でのビルドに失敗しました:\n%s", b)
 	}

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +48,9 @@ func TestParseConfigErrors(t *testing.T) {
 		{"名前 とは 「a b」\n", "プロジェクトの名前に使えません"},
 		{"名前 とは 「a」\n入口 とは 「../外」\n", "フォルダの中のファイルの名前"},
 		{"名前 とは 「a」\n「x」 を 表示する\n", "定義だけを書きます"},
+		{"名前 とは 「a」\n種類 とは 「部品」\n", "種類には「実行ファイル」か「共有ライブラリ」を書きます"},
+		{"名前 とは 「a」\nライブラリ名 とは 「計算」\n", "ライブラリ名には英字・数字・「_」だけの名前を書きます"},
+		{"名前 とは 「a」\n種類 とは 「共有ライブラリ」\n対象 とは 「arduino-uno」\n", "対象(マイコン)は書けません"},
 	}
 	for _, c := range cases {
 		_, err := ParseConfig(c.src, "/x")
@@ -164,5 +168,80 @@ func TestCommands(t *testing.T) {
 	errb.Reset()
 	if rc := k.run([]string{"作る"}); rc != 1 || !strings.Contains(errb.String(), "が見つかりません") {
 		t.Errorf("組.suru なし: %s", errb)
+	}
+}
+
+// 共有ライブラリのプロジェクト(#208 段階4): 新規 --共有ライブラリ・作る・試験・実行できない・ライブラリ名
+func TestSharedLibProject(t *testing.T) {
+	if native.FindCC() == "" || runtime.GOOS == "windows" {
+		t.Skip("共有ライブラリを作れない")
+	}
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	dir := t.TempDir()
+	k, _, errb := newKumu(dir)
+	if rc := k.run([]string{"新規", "keisan", "--共有ライブラリ"}); rc != 0 {
+		t.Fatalf("新規 --共有ライブラリ が失敗: %s", errb)
+	}
+	root := filepath.Join(dir, "keisan")
+	p, err := FindProject(root)
+	if err != nil || !p.SharedLib() || p.Entry != "keisan" {
+		t.Fatalf("組.suru が違う: %+v %v", p, err)
+	}
+	k, _, errb = newKumu(root)
+	if rc := k.run([]string{"作る", "-O0"}); rc != 0 {
+		t.Fatalf("作る: %s", errb)
+	}
+	lib := native.LibPath(filepath.Join(root, "出力", "libkeisan"))
+	header := filepath.Join(root, "出力", "keisan.h")
+	st1, err := os.Stat(lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := os.ReadFile(header)
+	if err != nil || !strings.Contains(string(h), "int64_t nibai(int64_t a1);") || !strings.Contains(string(h), "char *aisatsu(const char *a1);") {
+		t.Fatalf("ヘッダが違う: %s %v", h, err)
+	}
+	// 変わっていなければ作り直さない
+	time.Sleep(20 * time.Millisecond)
+	errb.Reset()
+	if rc := k.run([]string{"作る", "-O0"}); rc != 0 || errb.Len() != 0 {
+		t.Fatalf("作る(2回目): rc=%d %s", rc, errb)
+	}
+	if st2, _ := os.Stat(lib); !st2.ModTime().Equal(st1.ModTime()) {
+		t.Error("変わっていないのに作り直した")
+	}
+	// 試験は する から呼ぶ
+	k, out, errb := newKumu(root)
+	if rc := k.run([]string{"試験"}); rc != 0 {
+		t.Fatalf("試験: %s %s", out, errb)
+	}
+	// 実行はできない
+	k, _, errb = newKumu(root)
+	if rc := k.run([]string{"実行"}); rc != 1 || !strings.Contains(errb.String(), "実行できません") {
+		t.Errorf("実行が止まらない: rc=%d %s", rc, errb)
+	}
+	// 一番外に文があればエラー
+	os.WriteFile(filepath.Join(root, "keisan.suru"), []byte("「x」 を 表示する\n"), 0o644)
+	k, _, errb = newKumu(root)
+	if rc := k.run([]string{"作る"}); rc != 1 || !strings.Contains(errb.String(), "外部に出す関数") {
+		t.Errorf("出す関数のないファイルで作れてしまう: rc=%d %s", rc, errb)
+	}
+	// 名前が C の名前でなければ、雛形にライブラリ名を書く
+	k, _, errb = newKumu(dir)
+	if rc := k.run([]string{"新規", "計算", "--共有ライブラリ"}); rc != 0 {
+		t.Fatalf("新規 計算: %s", errb)
+	}
+	p, _ = FindProject(filepath.Join(dir, "計算"))
+	if base, err := p.LibBase(); err != nil || base != "mylib" {
+		t.Errorf("ライブラリ名: %q %v", base, err)
+	}
+	p.LibName = ""
+	if _, err := p.LibBase(); err == nil || !strings.Contains(err.Error(), "ライブラリ名 とは") {
+		t.Errorf("C の名前でない名前を使えてしまう: %v", err)
+	}
+	// --対象 とは一緒に使えない
+	k, _, errb = newKumu(dir)
+	if rc := k.run([]string{"新規", "x", "--共有ライブラリ", "--対象", "web"}); rc != 2 {
+		t.Errorf("--共有ライブラリ と --対象 を一緒に使えてしまう: rc=%d %s", rc, errb)
 	}
 }

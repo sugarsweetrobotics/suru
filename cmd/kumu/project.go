@@ -34,6 +34,42 @@ type Project struct {
 	CSources  []string // Cソース: 一緒に作る C のファイル(プロジェクトのフォルダからの道)
 	CFlags    []string // C引数: C のソースをコンパイルするときの引数(${…} は環境変数。空白で分ける)
 	LinkFlags []string // リンク引数: リンクするときの引数(依存のものも全部使う)
+	Kind      string   // 種類: 「実行ファイル」(既定)か「共有ライブラリ」(他の言語から呼ぶ、#208)
+	LibName   string   // ライブラリ名: 共有ライブラリの名前(lib名前.so と 名前.h。なければ名前)
+}
+
+// 組.suru の「種類」
+const (
+	KindExe    = "実行ファイル"
+	KindShared = "共有ライブラリ"
+)
+
+// SharedLib は共有ライブラリにするプロジェクトか
+func (p *Project) SharedLib() bool { return p.Kind == KindShared }
+
+// LibBase は共有ライブラリの名前(英字・数字・「_」だけ)。ライブラリ名か、なければ名前
+func (p *Project) LibBase() (string, error) {
+	name := p.LibName
+	if name == "" {
+		name = p.Name
+	}
+	if !isCName(name) {
+		return "", fmt.Errorf("「%s」は共有ライブラリの名前にできません。%s に「ライブラリ名 とは 「keisan」」のように、英字・数字・「_」だけの名前を書いてください", name, ConfigName)
+	}
+	return name, nil
+}
+
+// isCName は C の名前にできるか(英字か「_」で始まり、英字・数字・「_」だけ)
+func isCName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, c := range s {
+		if !(c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || i > 0 && c >= '0' && c <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // SysDep は 組.suru の外部依存の1つ。「libpcre2-8」か、最低の版を付けた「libpcre2-8@10.30」
@@ -55,7 +91,7 @@ func (p *Project) EntryPath() string {
 }
 
 // configKeys は 組.suru に書ける項目(書く順)
-var configKeys = []string{"名前", "版", "入口", "依存", "外部依存", "導入案内", "対象", "Cソース", "C引数", "リンク引数"}
+var configKeys = []string{"名前", "版", "入口", "依存", "外部依存", "導入案内", "対象", "Cソース", "C引数", "リンク引数", "種類", "ライブラリ名"}
 
 // ParseConfig は 組.suru の中身を読む。する の定義「名前 とは 「…」」だけを書ける
 func ParseConfig(source, root string) (*Project, error) {
@@ -147,7 +183,20 @@ func ParseConfig(source, root string) (*Project, error) {
 				return nil, configError(&compiler.SuruError{Message: err.Error(), Line: pos}, source)
 			}
 			p.Target = s.Value
+		case "種類":
+			if s.Value != KindExe && s.Value != KindShared {
+				return nil, configError(&compiler.SuruError{Message: "種類には「" + KindExe + "」か「" + KindShared + "」を書きます", Line: pos}, source)
+			}
+			p.Kind = s.Value
+		case "ライブラリ名":
+			if !isCName(s.Value) {
+				return nil, configError(&compiler.SuruError{Message: "ライブラリ名には英字・数字・「_」だけの名前を書きます(「keisan」のように)", Line: pos}, source)
+			}
+			p.LibName = s.Value
 		}
+	}
+	if p.SharedLib() && p.Target != "" {
+		return nil, fmt.Errorf("「%s」の種類が「%s」のときは、対象(マイコン)は書けません", ConfigName, KindShared)
 	}
 	if p.Name == "" {
 		return nil, fmt.Errorf("「%s」に「名前 とは 「…」」がありません", ConfigName)
@@ -206,6 +255,14 @@ func FindProject(dir string) (*Project, error) {
 
 // 雛形のファイル
 func configTemplate(name, target string) string {
+	if target == SharedTarget {
+		// 入口は名前と同じファイル(試験から「名前」 を 読み込む で読めるように)
+		s := "名前 とは 「" + name + "」\n版 とは 「0.1.0」\n入口 とは 「" + name + "」\n種類 とは 「" + KindShared + "」\n"
+		if !isCName(name) {
+			s += "ライブラリ名 とは 「mylib」\n"
+		}
+		return s
+	}
 	s := "名前 とは 「" + name + "」\n版 とは 「0.1.0」\n入口 とは 「本体」\n"
 	if target != "" {
 		s += "対象 とは 「" + target + "」\n"
@@ -226,6 +283,38 @@ const testTemplate = `「試験」 を 読み込んで 使う
   1 < 2 を 確認する
   以上です
 `
+
+// SharedTarget は「kumu 新規 名前 --共有ライブラリ」の雛形の印(CreateProject の target に渡す)
+const SharedTarget = "\x00" + KindShared
+
+// sharedEntryTemplate は共有ライブラリの雛形(他の言語から呼ぶ関数を出す、#208)
+const sharedEntryTemplate = `# 他の言語から呼べる共有ライブラリです。kumu 作る で 出力/ にライブラリと C のヘッダを作ります。
+# 一番外には定義だけを書きます(読み込んだだけで何かが行われないように)
+
+数 を 二倍する は 数 を 返す
+x を 二倍する とは x * 2 です
+
+文字列 を 挨拶文にする は 文字列 を 返す
+名前 を 挨拶文にする とは 「こんにちは、」 + 名前 + 「さん」 です
+
+以下は外部に出す関数です
+  二倍する は 「nibai」
+  挨拶文にする は 「aisatsu」
+以上です
+`
+
+// sharedTestTemplate は共有ライブラリの雛形の試験(試験は する から関数を呼ぶ。プロジェクトは名前で読み込む)
+func sharedTestTemplate(name string) string {
+	return `「試験」 を 読み込んで 使う
+「` + name + `」 を 読み込んで 使う
+
+二倍試験する は 真偽 の 動作
+二倍試験する とは 以下の手順です
+  （21 を 二倍する） を 42 に 一致確認する
+  （「世界」 を 挨拶文にする） を 「こんにちは、世界さん」 に 一致確認する
+  以上です
+`
+}
 
 // mcuEntryTemplate はマイコン向けの雛形(基板の LED を点滅させ、シリアルに挨拶する)
 const mcuEntryTemplate = `「マイコン」 を 読み込んで 使う
@@ -251,6 +340,10 @@ func CreateProject(dir, name string, fresh bool, target string) error {
 	if target == WebTarget && (isLibName(name) || contains(webDepNames, name)) {
 		return fmt.Errorf("「%s」は読み込みの名前と重なるので、ウェブアプリの名前に使えません", name)
 	}
+	// 共有ライブラリの入口は「名前.suru」なので、標準のライブラリと同じ名前は使えない
+	if target == SharedTarget && isLibName(name) {
+		return fmt.Errorf("「%s」は標準のライブラリの名前と重なるので、共有ライブラリの名前に使えません", name)
+	}
 	if fresh {
 		if _, err := os.Stat(dir); err == nil {
 			return fmt.Errorf("「%s」は既にあります", dir)
@@ -263,6 +356,17 @@ func CreateProject(dir, name string, fresh bool, target string) error {
 	}
 	if target == WebTarget {
 		return writeFiles(dir, webFiles(name))
+	}
+	if target == SharedTarget {
+		files := []struct{ name, body string }{
+			{ConfigName, configTemplate(name, target)},
+			{name + compiler.SourceSuffix, sharedEntryTemplate},
+			{".gitignore", gitignoreTemplate},
+		}
+		if fresh {
+			files = append(files, struct{ name, body string }{filepath.Join(TestDir, "例"+compiler.SourceSuffix), sharedTestTemplate(name)})
+		}
+		return writeFiles(dir, files)
 	}
 	if target != "" {
 		if _, err := mcu.Lookup(target); err != nil {

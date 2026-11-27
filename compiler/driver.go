@@ -101,7 +101,12 @@ func compileSource(source, baseDir, path string, check, lib bool, pkgs map[strin
 		setLineBase(ctx, source)
 		ir = newCompiler(ctx, source).compile(program, path)
 		if lib {
-			ir = strings.Replace(ir, spTickExe, spTickLib, 1)
+			// 使わないなら宣言も消す(-O0 では、使わない hidden の宣言が TLS でない名前になり、リンクで食い違う)
+			if strings.Count(ir, "@rt_sp_tick") == 1 {
+				ir = strings.Replace(ir, spTickExe+"\n", "", 1)
+			} else {
+				ir = strings.Replace(ir, spTickExe, spTickLib, 1)
+			}
 		}
 	})
 	return
