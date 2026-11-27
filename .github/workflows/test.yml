@@ -4,6 +4,9 @@
 #   3. Windows(MSYS2 UCRT64): 共有ライブラリ(.dll)の試験(#208 段階5)
 # lib/ の する で書いた試験(suru --試験 lib/)は、言語の仕様が落ち着くまで CI では流しません(#230)
 # pytest は pytest-xdist で CPU の数だけ並べて流します(#230)
+# PR では、変わったファイルを見て要るものだけ流します(#230)。main への push では全部流します
+#   - 文書だけ(docs/・*.md)の変更: 文書の試験(test_readme・test_ai_guide・test_doc)だけ
+#   - Windows のジョブ: コンパイラ・実行時・lib/ など、共有ライブラリに関わるファイルが変わったときだけ
 name: 試験
 
 on:
@@ -19,19 +22,77 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # go.mod の toolchain(go1.24.7)を setup-go が入れるので、ほかの版を落としてこない
-  # (落とすと setup-go のキャッシュの復元とぶつかって、毎回キャッシュが効かなかった。#230)
+  # Go は go.mod の toolchain と同じ版を setup-go で入れ、ほかの版を落としてこない
+  # (go.mod の go 1.23.0 を入れると toolchain を落とし、setup-go のキャッシュの復元とぶつかって効かなかった。#230)
   GOTOOLCHAIN: local
+  GO_VERSION: "1.24.7"
 
 jobs:
+  changes:
+    name: 変わったファイル
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+      windows: ${{ steps.diff.outputs.windows }}
+    steps:
+      # PR では、取り出すのは base と PR をマージしたコミット。1つ目の親が base なので、2つあれば違いが分かる
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: diff
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "windows=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git -c core.quotePath=false diff --name-only HEAD^1 HEAD)
+          printf '%s\n' "$files"
+          code=false
+          windows=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              docs/*|*.md) ;;
+              *) code=true ;;
+            esac
+            case "$f" in
+              compiler/*|runtime/*|cmd/*|lib/*|embed.go|go.mod|go.sum|suru.py|suru_compile.py|suru_check.py|\
+              tests/test_shared_lib.py|examples/export.suru|examples/他の言語から/*|.github/workflows/test.yml)
+                windows=true ;;
+            esac
+          done <<< "$files"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "windows=$windows" >> "$GITHUB_OUTPUT"
+          echo "コードの試験: $code・Windows: $windows" >> "$GITHUB_STEP_SUMMARY"
+
+  docs:
+    name: 文書の試験
+    needs: changes
+    if: needs.changes.outputs.code != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - run: |
+          pip install pytest
+          python3 -m pytest tests/test_readme.py tests/test_ai_guide.py tests/test_doc.py
+
   go:
     name: Go 版
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
       - run: |
           test -z "$(gofmt -l compiler cmd)" || { gofmt -l compiler cmd; echo "gofmt で整えてください"; exit 1; }
           go vet ./...
@@ -39,6 +100,8 @@ jobs:
 
   python:
     name: Python 版
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -50,7 +113,7 @@ jobs:
           cache-dependency-path: .github/workflows/test.yml
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: ${{ env.GO_VERSION }}
       # 点検のバイナリと実行時のオブジェクト。名前に中身のハッシュが入るので、古いものを使うことはない
       - uses: actions/cache@v4
         with:
@@ -60,11 +123,13 @@ jobs:
       - name: pytest
         run: |
           pip install pytest pytest-timeout pytest-xdist
-          # CPU の数だけ並べて流す。止まったままの試験があれば、名前とスタックを出して止める
-          python3 -m pytest -n auto --timeout=600 --durations=20 tests/
+          # CPU の数だけ並べて流す。同じファイルの試験は同じワーカーで流し、作ったバイナリ(suruc など)を使い回す。止まったままの試験があれば、名前とスタックを出して止める
+          python3 -m pytest -n auto --dist loadfile --timeout=600 --durations=20 tests/
 
   windows:
     name: Windows の共有ライブラリ
+    needs: changes
+    if: needs.changes.outputs.windows == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:
