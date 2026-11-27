@@ -5614,6 +5614,11 @@ static void lib_setup(void) {
     pthread_cond_init(&main_thread.wcv, NULL);
     source_text = suru_source;
     init_builtins();
+#ifdef _WIN32
+    /* ソケットを使えるようにする(画面の文字コードは呼んだ側のものなので変えない) */
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
+#endif
     const char *e = getenv("SURU_GC_MIN");
     if (e) gc_min = gc_next = (size_t)strtoull(e, NULL, 10) << 10;
     if (gc_min / 16 < gc_batch) gc_batch = gc_min / 16;

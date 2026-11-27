@@ -194,9 +194,6 @@ func BuildSharedWith(llPath, out, opt string, extra []string) (string, error) {
 	if cc == "" {
 		return "", fmt.Errorf("共有ライブラリを作るには clang が必要です(LLVM IR だけなら --ll を付けてください)")
 	}
-	if compiler.TargetWindows() {
-		return "", fmt.Errorf("Windows の共有ライブラリ(.dll)はまだ作れません")
-	}
 	lib := LibPath(out)
 	prefix, err := LibPrefix(lib)
 	if err != nil {
@@ -221,7 +218,32 @@ func BuildSharedWith(llPath, out, opt string, extra []string) (string, error) {
 		return "", err
 	}
 	args := append(TargetArgs(), opt, "-w", "-fPIC", llPath, rt, shim, "-o", lib)
-	if targetDarwin() {
+	linked := func() error { return nil }
+	if compiler.TargetWindows() {
+		// Windows(段階5): 出す名前は .def に並べる。呼ぶ側のリンク用に import ライブラリ(lib名前.dll.a)も作る。
+		// 一時フォルダで同じ名前に作ってから移す(import ライブラリに入る DLL の名前を変えず、GNU ld でも日本語の道に置けるように)
+		def := filepath.Join(dir, "exports.def")
+		if err := os.WriteFile(def, []byte("EXPORTS\n    "+strings.Join(syms, "\n    ")+"\n"), 0o644); err != nil {
+			return "", err
+		}
+		tmp := filepath.Join(dir, filepath.Base(lib))
+		args = append(TargetArgs(), opt, "-w", llPath, rt, shim, def, "-o", tmp, "-shared", "-Wl,--out-implib,"+tmp+".a")
+		if windowsLLD() {
+			args = append(args, "-fuse-ld=lld")
+		}
+		linked = func() error {
+			for _, ext := range []string{"", ".a"} {
+				b, err := os.ReadFile(tmp + ext)
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(lib+ext, b, 0o755); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	} else if targetDarwin() {
 		list := filepath.Join(dir, "exports.txt")
 		var b strings.Builder
 		for _, s := range syms {
@@ -238,14 +260,31 @@ func BuildSharedWith(llPath, out, opt string, extra []string) (string, error) {
 		}
 		args = append(args, "-shared", "-Wl,--version-script="+script)
 	}
-	args = append(append(append(args, extra...), compiler.LinkFlags(string(ir))...), "-lm", "-lpthread")
+	args = append(append(args, extra...), compiler.LinkFlags(string(ir))...)
+	if compiler.TargetWindows() {
+		// pthread(winpthreads)は中に入れて、libwinpthread-1.dll なしで動くようにする(実行ファイルと同じ)
+		args = append(args, "-lm", "-Wl,-Bstatic", "-lpthread", "-Wl,-Bdynamic", "-lws2_32")
+	} else {
+		args = append(args, "-lm", "-lpthread")
+	}
 	if b, err := exec.Command(cc, args...).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("clang でのビルドに失敗しました:\n%s", b)
+	}
+	if err := linked(); err != nil {
+		return "", err
 	}
 	if err := os.WriteFile(HeaderPath(lib, prefix), []byte(compiler.ExportHeader(string(ir), prefix)), 0o644); err != nil {
 		return "", err
 	}
 	return lib, nil
+}
+
+// SharedOutputs は BuildShared が作るファイル(共有ライブラリ・ヘッダ、Windows では import ライブラリ lib名前.dll.a も)
+func SharedOutputs(lib, header string) []string {
+	if compiler.TargetWindows() {
+		return []string{lib, lib + ".a", header}
+	}
+	return []string{lib, header}
 }
 
 // HeaderPath は共有ライブラリと同じ所に置く C のヘッダの道(libkeisan.so → keisan.h、#208 段階2)

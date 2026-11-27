@@ -62,7 +62,7 @@ const usage = `使い方: kumu <命令> [オプション]
 
 他の言語から呼ぶ共有ライブラリ(組.suru に「種類 とは 「共有ライブラリ」」と書く):
   kumu 新規 名前 --共有ライブラリ  雛形を作る(--shared)
-  kumu 作る  出力/ に lib名前.so(macOS は .dylib)と 名前.h を作る
+  kumu 作る  出力/ に lib名前.so(macOS は .dylib、Windows は .dll と .dll.a)と 名前.h を作る
 `
 
 // commands は命令の名前(日本語と英語の別名)→ 正の名前
@@ -271,7 +271,7 @@ func (k *kumu) build(p *Project, opt string, check bool, cb *CBuild) (string, er
 	return exe, nil
 }
 
-// buildShared は入口のファイルを共有ライブラリにして 出力/lib名前.so(.dylib)と 出力/名前.h を作る(#208)。
+// buildShared は入口のファイルを共有ライブラリにして 出力/lib名前.so(.dylib・.dll と .dll.a)と 出力/名前.h を作る(#208)。
 // IR・最適化・実行時ライブラリ・Cソースが前と同じなら clang を呼ばない
 func (k *kumu) buildShared(p *Project, opt string, check bool, cb *CBuild) (string, error) {
 	base, err := p.LibBase()
@@ -296,10 +296,8 @@ func (k *kumu) buildShared(p *Project, opt string, check bool, cb *CBuild) (stri
 	digest := buildDigest(opt, ir, cb, "shared")
 	stamp := filepath.Join(filepath.Dir(lib), "."+filepath.Base(lib)+".stamp")
 	if old, err := os.ReadFile(stamp); err == nil && string(old) == digest {
-		if _, err := os.Stat(lib); err == nil {
-			if _, err := os.Stat(header); err == nil {
-				return lib, nil
-			}
+		if allExist(native.SharedOutputs(lib, header)) {
+			return lib, nil
 		}
 	}
 	llPath := lib + ".ll"
@@ -315,6 +313,16 @@ func (k *kumu) buildShared(p *Project, opt string, check bool, cb *CBuild) (stri
 	}
 	fmt.Fprintf(k.stderr, "「%s」%s を共有ライブラリに組みました(%s・%s)\n", p.Name, p.Version, k.rel(lib), k.rel(header))
 	return lib, nil
+}
+
+// allExist はファイルが全部あるか
+func allExist(paths []string) bool {
+	for _, p := range paths {
+		if _, err := os.Stat(p); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // buildDigest は作り直しの判定に使う値(kumu の版・最適化・IR・実行時ライブラリ・リンク・Cソース・印)

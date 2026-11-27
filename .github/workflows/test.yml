@@ -2,6 +2,7 @@
 #   1. Go 版: go vet と go test
 #   2. Python 版: pytest(全部)。Go 版と同じ IR とエラーを出すかも、ここで確かめます
 #   3. する で書いた試験: suru --試験 lib/ と suruc --試験 lib/(試験のまとまり・例)
+#   4. Windows(MSYS2 UCRT64): 共有ライブラリ(.dll)の試験(#208 段階5)
 # pytest は4つに分けて並べて流します(1つにすると30分を超えます)
 name: 試験
 
@@ -76,3 +77,33 @@ jobs:
       - run: |
           python3 suru.py --試験 lib/
           go run ./cmd/suruc --試験 lib/
+
+  windows:
+    name: Windows の共有ライブラリ
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      # 改行を LF のまま取り出す
+      - run: git config --global core.autocrlf false
+        shell: pwsh
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-lld
+            mingw-w64-ucrt-x86_64-go
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-pytest
+      - name: pytest
+        env:
+          PYTHONUTF8: "1"
+          CC: clang
+        run: |
+          go test ./cmd/kumu -run TestSharedLibProject
+          python -m pytest -v --durations=10 tests/test_shared_lib.py

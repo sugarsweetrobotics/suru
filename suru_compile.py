@@ -1646,8 +1646,6 @@ def build_shared(ll_path: str, out: str, opt: str = "-O2") -> str:
     cc = find_cc()
     if cc is None:
         raise S.SuruError("共有ライブラリを作るには clang が必要です(LLVM IR だけなら --ll を付けてください)")
-    if target_windows():
-        raise S.SuruError("Windows の共有ライブラリ(.dll)はまだ作れません")
     lib = lib_path(out)
     prefix = lib_prefix(lib)
     rt = runtime_object(cc, "suru_rt_lib-", LIB_FLAGS)
@@ -1659,7 +1657,18 @@ def build_shared(ll_path: str, out: str, opt: str = "-O2") -> str:
         with open(shim, "w", encoding="utf-8") as f:
             f.write(lib_shim(prefix))
         cmd = [cc, *target_args(), opt, "-w", "-fPIC", ll_path, rt, shim, "-o", lib]
-        if target_darwin():
+        tmp = None
+        if target_windows():
+            # Windows(段階5): 出す名前は .def に並べ、import ライブラリ(lib名前.dll.a)も作る。
+            # 一時フォルダで同じ名前に作ってから移す(Go 版と同じ)
+            dfile = os.path.join(d, "exports.def")
+            with open(dfile, "w", encoding="utf-8") as f:
+                f.write("EXPORTS\n    " + "\n    ".join(syms) + "\n")
+            tmp = os.path.join(d, os.path.basename(lib))
+            cmd = [cc, *target_args(), opt, "-w", ll_path, rt, shim, dfile, "-o", tmp, "-shared", f"-Wl,--out-implib,{tmp}.a"]
+            if windows_lld():
+                cmd.append("-fuse-ld=lld")
+        elif target_darwin():
             lst = os.path.join(d, "exports.txt")
             with open(lst, "w", encoding="utf-8") as f:
                 f.write("".join(f"_{s}\n" for s in syms))
@@ -1669,10 +1678,21 @@ def build_shared(ll_path: str, out: str, opt: str = "-O2") -> str:
             with open(script, "w", encoding="utf-8") as f:
                 f.write("{\n  global:\n    " + ";\n    ".join(syms) + ";\n  local: *;\n};\n")
             cmd += ["-shared", f"-Wl,--version-script={script}"]
-        cmd += link_flags(ll_path) + ["-lm", "-lpthread"]
+        cmd += link_flags(ll_path)
+        if target_windows():
+            # pthread(winpthreads)は中に入れて、libwinpthread-1.dll なしで動くようにする(実行ファイルと同じ)
+            cmd += ["-lm", "-Wl,-Bstatic", "-lpthread", "-Wl,-Bdynamic", "-lws2_32"]
+        else:
+            cmd += ["-lm", "-lpthread"]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
             raise S.SuruError("clang でのビルドに失敗しました:\n" + r.stderr)
+        if tmp is not None:
+            try:
+                for ext in ("", ".a"):
+                    shutil.copyfile(tmp + ext, lib + ext)
+            except OSError as e:
+                raise S.SuruError(f"共有ライブラリを『{lib}』に書けません({e.strerror})") from None
     with open(header_path(lib, prefix), "w", encoding="utf-8") as f:
         f.write(export_header(ir, prefix))
     return lib

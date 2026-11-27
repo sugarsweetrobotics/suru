@@ -20,7 +20,14 @@ import suru_compile  # noqa: E402
 from suru import SuruError  # noqa: E402
 
 needs_clang = pytest.mark.skipif(suru_compile.find_cc() is None, reason="clang がありません")
-linux_or_mac = pytest.mark.skipif(sys.platform == "win32", reason="Windows の共有ライブラリはまだ作れません")
+WIN = sys.platform == "win32"
+SO = ".dll" if WIN else ".dylib" if sys.platform == "darwin" else ".so"  # 共有ライブラリの拡張子
+EXE = ".exe" if WIN else ""
+
+
+def rpath(d: pathlib.Path) -> list[str]:
+    """共有ライブラリを探す所を実行ファイルに書く引数(Windows では DLL を .exe と同じフォルダから探すので要らない)"""
+    return [] if WIN else [f"-Wl,-rpath,{d}"]
 
 LIB = """数 を 二倍する は 数 を 返す
 x を 二倍する とは x * 2 です
@@ -270,107 +277,101 @@ def test_実行ファイルでは出す関数があっても動く(tmp_path):
 # --- 共有ライブラリを作る ---
 
 @needs_clang
-@linux_or_mac
 def test_一番外の文は共有ライブラリにできない(tmp_path):
     src = tmp_path / "keisan.suru"
     src.write_text(HEAD + "「やあ」 を 表示する\n以下は外部に出す関数です\n  二倍する は 「nibai」\n以上です\n", encoding="utf-8")
-    r = build_py(src, tmp_path / "libkeisan.so")
+    r = build_py(src, tmp_path / ("libkeisan" + SO))
     assert r.returncode == 1
     assert "共有ライブラリにするファイルの一番外には、定義だけを書きます" in r.stderr
 
 
 @needs_clang
-@linux_or_mac
 def test_出す関数がなければ共有ライブラリにできない(tmp_path):
     src = tmp_path / "keisan.suru"
     src.write_text(HEAD, encoding="utf-8")
-    r = build_py(src, tmp_path / "libkeisan.so")
+    r = build_py(src, tmp_path / ("libkeisan" + SO))
     assert r.returncode == 1
     assert "共有ライブラリにするには、「以下は外部に出す関数です」で外部に出す関数を書きます" in r.stderr
 
 
 @needs_clang
-@linux_or_mac
 def test_ライブラリの名前は_C_の名前にする(tmp_path):
     src = tmp_path / "keisan.suru"
     src.write_text(HEAD + "以下は外部に出す関数です\n  二倍する は 「nibai」\n以上です\n", encoding="utf-8")
-    r = build_py(src, tmp_path / "lib計算.so")
+    r = build_py(src, tmp_path / ("lib計算" + SO))
     assert r.returncode == 1
     assert "-o には英字・数字・「_」だけの名前を付けてください" in r.stderr
 
 
 @needs_clang
-@linux_or_mac
 def test_Pythonから呼ぶ(tmp_path):
     src = tmp_path / "keisan.suru"
     src.write_text(LIB, encoding="utf-8")
     r = build_py(src, tmp_path / "libkeisan")
     assert r.returncode == 0, r.stderr
-    lib = tmp_path / ("libkeisan.dylib" if sys.platform == "darwin" else "libkeisan.so")
+    lib = tmp_path / ("libkeisan" + SO)
     assert run_caller(lib) == EXPECTED
 
 
 @needs_clang
-@linux_or_mac
 def test_GCを何度も動かしても大丈夫(tmp_path):
     src = tmp_path / "keisan.suru"
     src.write_text(LIB, encoding="utf-8")
-    lib = tmp_path / "libkeisan.so"
+    lib = tmp_path / ("libkeisan" + SO)
     assert build_py(src, lib).returncode == 0
     assert run_caller(lib, 300, {"SURU_GC_MIN": "0"}) == EXPECTED
 
 
 @needs_clang
-@linux_or_mac
 def test_Go版で作ってPythonから呼ぶ(suruc, tmp_path):
     src = tmp_path / "keisan.suru"
     src.write_text(LIB, encoding="utf-8")
-    lib = tmp_path / "libkeisan.so"
+    lib = tmp_path / ("libkeisan" + SO)
     r = build_go(suruc, src, lib)
     assert r.returncode == 0, r.stderr
     assert run_caller(lib) == EXPECTED
 
 
 @needs_clang
-@linux_or_mac
 def test_Cから呼んで呼び戻す(tmp_path):
     """C → する(適用する)→ C(cb)→ する(二倍する)と入れ子に呼ぶ。いくつものスレッドから"""
     src = tmp_path / "keisan.suru"
     src.write_text(LIB, encoding="utf-8")
-    assert build_py(src, tmp_path / "libkeisan.so").returncode == 0
+    assert build_py(src, tmp_path / ("libkeisan" + SO)).returncode == 0
     (tmp_path / "host.c").write_text(HOST_C, encoding="utf-8")
     cc = suru_compile.find_cc()
-    subprocess.run([cc, "host.c", str(tmp_path / "libkeisan.so"), f"-Wl,-rpath,{tmp_path}", "-lpthread", "-o", "host"],
+    subprocess.run([cc, "host.c", f"-L{tmp_path}", "-lkeisan", *rpath(tmp_path), "-lpthread", "-o", "host" + EXE],
                    cwd=tmp_path, check=True)
-    r = subprocess.run(["./host"], cwd=tmp_path, capture_output=True, text=True, timeout=300)
+    r = subprocess.run([str(tmp_path / ("host" + EXE))], cwd=tmp_path, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, r.stderr
     assert r.stdout == "11 0\n32行目 16文字目: 0 で割ることはできません\n"
 
 
 @needs_clang
-@linux_or_mac
 def test_する_のライブラリ2つと実行ファイル(tmp_path):
     """実行時ライブラリの名前は隠すので、する のライブラリを2つ読み込んでも、する の実行ファイルから読み込んでもぶつからない"""
     src = tmp_path / "keisan.suru"
     src.write_text(LIB, encoding="utf-8")
-    assert build_py(src, tmp_path / "libkeisan.so").returncode == 0
+    assert build_py(src, tmp_path / ("libkeisan" + SO)).returncode == 0
     (tmp_path / "b.suru").write_text("数 を 三倍する は 数\nx を 三倍する とは x * 3\n以下は外部に出す関数です\n  三倍する は 「sanbai」\n以上です\n",
                                      encoding="utf-8")
-    assert build_py(tmp_path / "b.suru", tmp_path / "libb.so").returncode == 0
-    code = ("import ctypes\na = ctypes.CDLL('./libkeisan.so'); b = ctypes.CDLL('./libb.so')\n"
+    assert build_py(tmp_path / "b.suru", tmp_path / ("libb" + SO)).returncode == 0
+    code = (f"import ctypes\na = ctypes.CDLL(r'{tmp_path / ('libkeisan' + SO)}'); b = ctypes.CDLL(r'{tmp_path / ('libb' + SO)}')\n"
             "a.nibai.restype = b.sanbai.restype = ctypes.c_int64\n"
             "a.nibai.argtypes = b.sanbai.argtypes = [ctypes.c_int64]\nprint(a.nibai(5), b.sanbai(5))\n")
     r = subprocess.run([sys.executable, "-c", code], cwd=tmp_path, capture_output=True, text=True)
     assert r.stdout == "10 15\n", r.stderr
     prog = tmp_path / "使う.suru"
-    prog.write_text("外部の「./libkeisan.so」 を 読み込む\n\n以下は外部の関数です\n  数 を 外の二倍する は 「nibai」 で 数 を 返します\n以上です\n\n"
+    # Windows では import ライブラリ(lib名前.dll.a)をリンクし、DLL は .exe と同じフォルダから読む
+    link = "libkeisan.dll.a" if WIN else "libkeisan" + SO
+    prog.write_text(f"外部の「./{link}」 を 読み込む\n\n以下は外部の関数です\n  数 を 外の二倍する は 「nibai」 で 数 を 返します\n以上です\n\n"
                     "（21 を 外の二倍する） を 表示する\n", encoding="utf-8")
     exe = tmp_path / "使う"
     subprocess.run([sys.executable, str(ROOT / "suru.py"), "--翻訳", str(prog), "-o", str(exe)], check=True)
-    assert subprocess.run([str(exe)], capture_output=True, text=True, cwd=tmp_path).stdout == "42\n"
+    assert subprocess.run([str(exe) + EXE], capture_output=True, text=True, cwd=tmp_path).stdout == "42\n"
     nm = shutil.which("nm")
     if nm and sys.platform.startswith("linux"):
-        syms = subprocess.run([nm, "-D", "--defined-only", str(tmp_path / "libb.so")], capture_output=True, text=True).stdout
+        syms = subprocess.run([nm, "-D", "--defined-only", str(tmp_path / ("libb" + SO))], capture_output=True, text=True).stdout
         names = sorted(line.split()[-1] for line in syms.splitlines())
         assert names == sorted(["sanbai"] + suru_compile.lib_helper_symbols("b"))
         assert not [n for n in names if n.startswith(("rt_", "gc_", "suru_"))]
@@ -417,9 +418,8 @@ def test_ヘッダの型と引数なし():
 
 
 @needs_clang
-@linux_or_mac
 def test_ヘッダは_C_と_C_plus_plus_で通る(tmp_path):
-    assert build_py(ROOT / "examples" / "export.suru", tmp_path / "libkeisan.so").returncode == 0
+    assert build_py(ROOT / "examples" / "export.suru", tmp_path / ("libkeisan" + SO)).returncode == 0
     h = tmp_path / "keisan.h"
     assert h.exists()
     cc = suru_compile.find_cc()
@@ -432,12 +432,11 @@ def test_ヘッダは_C_と_C_plus_plus_で通る(tmp_path):
 
 
 @needs_clang
-@linux_or_mac
 def test_Go版とPython版のヘッダは同じ(suruc, tmp_path):
     (tmp_path / "py").mkdir()
     (tmp_path / "go").mkdir()
-    assert build_py(ROOT / "examples" / "export.suru", tmp_path / "py" / "libkeisan.so").returncode == 0
-    r = build_go(suruc, ROOT / "examples" / "export.suru", tmp_path / "go" / "libkeisan.so")
+    assert build_py(ROOT / "examples" / "export.suru", tmp_path / "py" / ("libkeisan" + SO)).returncode == 0
+    r = build_go(suruc, ROOT / "examples" / "export.suru", tmp_path / "go" / ("libkeisan" + SO))
     assert r.returncode == 0, r.stderr
     assert (tmp_path / "go" / "keisan.h").read_text(encoding="utf-8") == (tmp_path / "py" / "keisan.h").read_text(encoding="utf-8")
 
@@ -445,7 +444,7 @@ def test_Go版とPython版のヘッダは同じ(suruc, tmp_path):
 @pytest.fixture(scope="module")
 def keisan(tmp_path_factory):
     """examples/export.suru から作った libkeisan とヘッダのある所"""
-    if suru_compile.find_cc() is None or sys.platform == "win32":
+    if suru_compile.find_cc() is None:
         pytest.skip("共有ライブラリを作れません")
     d = tmp_path_factory.mktemp("keisan")
     r = build_py(ROOT / "examples" / "export.suru", d / "libkeisan")
@@ -454,7 +453,7 @@ def keisan(tmp_path_factory):
 
 
 def libfile(d: pathlib.Path) -> pathlib.Path:
-    return d / ("libkeisan.dylib" if sys.platform == "darwin" else "libkeisan.so")
+    return d / ("libkeisan" + SO)
 
 
 def test_例_Python(keisan):
@@ -466,9 +465,9 @@ def test_例_Python(keisan):
 
 def test_例_C(keisan):
     cc = suru_compile.find_cc()
-    subprocess.run([cc, str(EXAMPLES / "c" / "main.c"), f"-I{keisan}", f"-L{keisan}", "-lkeisan", f"-Wl,-rpath,{keisan}",
-                    "-o", str(keisan / "main_c")], check=True)
-    r = subprocess.run([str(keisan / "main_c")], capture_output=True, text=True, timeout=120)
+    subprocess.run([cc, str(EXAMPLES / "c" / "main.c"), f"-I{keisan}", f"-L{keisan}", "-lkeisan", *rpath(keisan),
+                    "-o", str(keisan / ("main_c" + EXE))], check=True)
+    r = subprocess.run([str(keisan / ("main_c" + EXE))], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
     assert r.stdout == EXAMPLE_OUT
 
@@ -478,8 +477,8 @@ def test_例_C_plus_plus(keisan):
     if cxx is None:
         pytest.skip("C++ のコンパイラがありません")
     subprocess.run([cxx, "-std=c++17", str(EXAMPLES / "cpp" / "main.cpp"), f"-I{keisan}", f"-L{keisan}", "-lkeisan",
-                    f"-Wl,-rpath,{keisan}", "-o", str(keisan / "main_cpp")], check=True)
-    r = subprocess.run([str(keisan / "main_cpp")], capture_output=True, text=True, timeout=120)
+                    *rpath(keisan), "-o", str(keisan / ("main_cpp" + EXE))], check=True)
+    r = subprocess.run([str(keisan / ("main_cpp" + EXE))], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
     assert r.stdout == EXAMPLE_OUT
 
@@ -488,9 +487,9 @@ def test_例_Go(keisan):
     if shutil.which("go") is None:
         pytest.skip("go がありません")
     env = {**os.environ, "CGO_ENABLED": "1", "CGO_CFLAGS": f"-I{keisan}",
-           "CGO_LDFLAGS": f"-L{keisan} -lkeisan -Wl,-rpath,{keisan}"}
-    subprocess.run(["go", "build", "-o", str(keisan / "main_go"), "."], cwd=EXAMPLES / "go", env=env, check=True)
-    r = subprocess.run([str(keisan / "main_go")], capture_output=True, text=True, timeout=120)
+           "CGO_LDFLAGS": " ".join([f"-L{keisan}", "-lkeisan", *rpath(keisan)])}
+    subprocess.run(["go", "build", "-o", str(keisan / ("main_go" + EXE)), "."], cwd=EXAMPLES / "go", env=env, check=True)
+    r = subprocess.run([str(keisan / ("main_go" + EXE))], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr
     assert r.stdout == EXAMPLE_OUT
 
@@ -720,9 +719,9 @@ threads ok
 def run_seq_host(lib_dir: pathlib.Path, env: dict | None = None) -> str:
     (lib_dir / "host.c").write_text(SEQ_HOST, encoding="utf-8")
     cc = suru_compile.find_cc()
-    subprocess.run([cc, "-Wall", "-Werror", "host.c", f"-I{lib_dir}", f"-L{lib_dir}", "-lseq", f"-Wl,-rpath,{lib_dir}",
-                    "-lpthread", "-o", "host"], cwd=lib_dir, check=True)
-    r = subprocess.run(["./host"], cwd=lib_dir, capture_output=True, text=True, timeout=300, env={**os.environ, **(env or {})})
+    subprocess.run([cc, "-Wall", "-Werror", "host.c", f"-I{lib_dir}", f"-L{lib_dir}", "-lseq", *rpath(lib_dir),
+                    "-lpthread", "-o", "host" + EXE], cwd=lib_dir, check=True)
+    r = subprocess.run([str(lib_dir / ("host" + EXE))], cwd=lib_dir, capture_output=True, text=True, timeout=300, env={**os.environ, **(env or {})})
     assert r.returncode == 0, r.stderr
     return r.stdout
 
@@ -747,30 +746,27 @@ def test_リストと手札の型():
 
 
 @needs_clang
-@linux_or_mac
 def test_リストと手札をCから使う(tmp_path):
     (tmp_path / "seq.suru").write_text(SEQ_LIB, encoding="utf-8")
-    r = build_py(tmp_path / "seq.suru", tmp_path / "libseq.so")
+    r = build_py(tmp_path / "seq.suru", tmp_path / ("libseq" + SO))
     assert r.returncode == 0, r.stderr
     assert run_seq_host(tmp_path) == SEQ_OUT
 
 
 @needs_clang
-@linux_or_mac
 def test_リストと手札でGCを何度も動かす(tmp_path):
     (tmp_path / "seq.suru").write_text(SEQ_LIB, encoding="utf-8")
-    assert build_py(tmp_path / "seq.suru", tmp_path / "libseq.so").returncode == 0
+    assert build_py(tmp_path / "seq.suru", tmp_path / ("libseq" + SO)).returncode == 0
     assert run_seq_host(tmp_path, {"SURU_GC_MIN": "0"}) == SEQ_OUT
 
 
 @needs_clang
-@linux_or_mac
 def test_Go版でリストと手札(suruc, tmp_path):
     (tmp_path / "seq.suru").write_text(SEQ_LIB, encoding="utf-8")
-    r = build_go(suruc, tmp_path / "seq.suru", tmp_path / "libseq.so")
+    r = build_go(suruc, tmp_path / "seq.suru", tmp_path / ("libseq" + SO))
     assert r.returncode == 0, r.stderr
     assert run_seq_host(tmp_path) == SEQ_OUT
     py = tmp_path / "py"
     py.mkdir()
-    assert build_py(tmp_path / "seq.suru", py / "libseq.so").returncode == 0
+    assert build_py(tmp_path / "seq.suru", py / ("libseq" + SO)).returncode == 0
     assert (py / "seq.h").read_text(encoding="utf-8") == (tmp_path / "seq.h").read_text(encoding="utf-8")
