@@ -20,10 +20,29 @@ lib.hanbun.argtypes = [ctypes.c_double]
 lib.hanbun.restype = ctypes.c_double
 lib.sei.argtypes = [ctypes.c_int64]
 lib.sei.restype = ctypes.c_int
+lib.goukei.argtypes = [ctypes.POINTER(ctypes.c_int64), ctypes.c_int64]  # 数 の リスト は番地と長さ / a pointer and a length
+lib.goukei.restype = ctypes.c_int64
+lib.ten.argtypes = [ctypes.c_int64, ctypes.c_int64]
+lib.ten.restype = ctypes.c_void_p  # 点 は手札(keisan_value *) / a handle
+lib.keisan_show.argtypes = [ctypes.c_void_p]
+lib.keisan_show.restype = ctypes.c_void_p
+lib.keisan_field.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+lib.keisan_field.restype = ctypes.c_void_p
+lib.keisan_to_int.argtypes = [ctypes.c_void_p]
+lib.keisan_to_int.restype = ctypes.c_int64
+lib.keisan_release.argtypes = [ctypes.c_void_p]
 lib.kiroku.argtypes = [ctypes.c_char_p]
 lib.kiroku.restype = None
 lib.keisan_last_error.restype = ctypes.c_char_p
 lib.keisan_free.argtypes = [ctypes.c_void_p]
+
+
+def take_string(p: int) -> str:
+    """ライブラリが返した文字列を読んで解放する / read and free a string from the library"""
+    try:
+        return ctypes.string_at(p).decode("utf-8")
+    finally:
+        lib.keisan_free(p)
 
 
 def aisatsu(name: str) -> str:
@@ -39,6 +58,14 @@ print("hikizan(3, 10) =", lib.hikizan(3, 10))
 print("aisatsu =", aisatsu("世界"))
 print("hanbun(5) =", lib.hanbun(5.0))
 print("sei(-1) =", lib.sei(-1))
+xs = (ctypes.c_int64 * 4)(1, 2, 3, 4)
+print("goukei([1, 2, 3, 4]) =", lib.goukei(xs, len(xs)))
+p = lib.ten(3, 4)  # 手札は keisan_release で手放す / release handles with keisan_release
+print("ten(3, 4) =", take_string(lib.keisan_show(p)))
+y = lib.keisan_field(p, "縦".encode("utf-8"))
+print("ten(3, 4).縦 =", lib.keisan_to_int(y))
+lib.keisan_release(y)
+lib.keisan_release(p)
 sys.stdout.flush()
 lib.kiroku("記録します".encode("utf-8"))
 

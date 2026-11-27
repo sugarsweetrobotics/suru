@@ -12,6 +12,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 2. **`suruc --共有ライブラリ` also writes a C header.** Building `libkeisan.so` writes `keisan.h` next to it, with the prototypes, the Suru name and types of each function, and notes on errors and freeing strings. `examples/他の言語から/` has examples that call the library from Python, C, C++, Go and Rust. This is stage 2 of #208.
 3. **SHA-256 and HMAC-SHA256 in 「ハッシュ」.** `b を ハッシュ内のSHA256にする` and `b を 鍵 で ハッシュ内のHMACSHA256にする` give 32 bytes, the same in the interpreter and compiled binaries. They are for signing cookies in suru-lang/web (#192).
 4. **`kumu 新規 店 --対象 web` creates a web app for 屋台 (suru-lang/web).** It writes `組.suru` (depending on `github.com/suru-lang/web@0.1.0`), `店.suru` with routes in 【道】, `本体.suru` that opens the server on port 8080, pages in `画面/`, a stylesheet in `公開/` and tests of the routes in `試験/道.suru`. `kumu 初期化 --対象 web` works the same in the current folder (#192).
+5. **Lists, byte sequences and handles cross the boundary.** `バイト列` and lists of numbers, decimals or strings are passed as a pointer and a length (results as a new block plus `int64_t *out_len`), and any other value (records, functions, other lists) as a `keisan_value *` handle with helper functions (`keisan_get`, `keisan_field`, `keisan_to_int`, `keisan_call`, `keisan_release` and so on). Libraries that use self-recursive functions, such as ones that load 「標準」, now link as shared libraries too. This is stage 3 of #208.
 
 ### Fixed
 

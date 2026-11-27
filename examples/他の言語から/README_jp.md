@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-[`examples/export.suru`](../export.suru) の関数(`nibai`・`hikizan`・`aisatsu`・`hanbun`・`sei`・`kiroku`)を、ほかの言語から呼ぶ例です。先に、このフォルダにライブラリとヘッダを作ります。
+[`examples/export.suru`](../export.suru) の関数(`nibai`・`hikizan`・`aisatsu`・`hanbun`・`sei`・`goukei`・`ten`・`kiroku`)を、ほかの言語から呼ぶ例です。先に、このフォルダにライブラリとヘッダを作ります。
 
 ```sh
 suruc --共有ライブラリ ../export.suru -o libkeisan.so   # keisan.h も作る
@@ -26,6 +26,9 @@ hikizan(3, 10) = 7
 aisatsu = こんにちは、世界さん
 hanbun(5) = 2.5
 sei(-1) = 0
+goukei([1, 2, 3, 4]) = 10
+ten(3, 4) = （横 は 3 で 縦 は 4 の 点）
+ten(3, 4).縦 = 4
 記録します
 nibai(2^62) = 0 error: yes
 ```
@@ -34,4 +37,5 @@ nibai(2^62) = 0 error: yes
 
 1. **返った文字列は解放する。** ライブラリが返した `char *` は呼んだ側のものなので、`keisan_free` で解放します。
 2. **呼んだ後にエラーを確かめる。** 失敗した呼び出しは 0 か NULL を返し、`keisan_last_error()` で文を読めます(うまくいけば NULL)。エラーはスレッドごとなので、Go では `runtime.LockOSThread` で goroutine を1つの OS のスレッドに留めます。
-3. **どのスレッドからでも呼べる。** 呼んだ側のスレッドとスタックで動きます。
+3. **リストは番地と長さ、ほかの値は手札。** `goukei` は `const int64_t *` と長さを受け取ります。`ten` は `keisan_value *` の手札を返すので、`keisan_show`・`keisan_field` で読み、`keisan_release` で手放します。
+4. **どのスレッドからでも呼べる。** 呼んだ側のスレッドとスタックで動きます。

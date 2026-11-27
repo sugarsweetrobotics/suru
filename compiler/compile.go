@@ -19,7 +19,7 @@ import (
 
 // ffiIR は外部の関数の C の型 → LLVM IR の型
 var ffiIR = map[string]string{"i64": "i64", "f64": "double", "f32": "float", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr", "bytes": "ptr",
-	"void": "void"}
+	"void": "void", "val": "ptr"} // val は外部に出す関数の手札(#208)
 
 // LinkMark は IR の中の、リンクするライブラリの印(ビルドで読む)
 const LinkMark = "; suru-link: "
@@ -1627,7 +1627,14 @@ func (c *Compiler) module(program []Node, path string) *scope {
 }
 
 // exportCodes は外部に出す関数の C の型 → rt_export に渡す型の字
-var exportCodes = map[string]string{"i64": "l", "i32": "i", "f64": "d", "f32": "f", "bool": "b", "str": "s", "ptr": "p", "void": "v"}
+// (y・L・D・S は番地と長さの2つで渡す。値なら長さを書く所の番地を最後の引数で受け取る。h は中を見ない手札、#208 段階3)
+var exportCodes = map[string]string{"i64": "l", "i32": "i", "f64": "d", "f32": "f", "bool": "b", "str": "s", "ptr": "p", "void": "v",
+	"bytes": "y", "list_i64": "L", "list_f64": "D", "list_str": "S", "val": "h"}
+
+// exportSeq は番地と長さの2つで渡す型か
+func exportSeq(t string) bool {
+	return t == "bytes" || strings.HasPrefix(t, "list_")
+}
 
 // exportWrappers は「以下は外部に出す関数です」の関数を、C の呼び出し規約の関数として出す(#208)。
 // 引数を i64 の並びに置いて rt_export に渡し、実行時ライブラリが値に直して呼ぶ(初期化・スレッド・エラーもそこで扱う)
@@ -1641,37 +1648,62 @@ func (c *Compiler) exportWrappers(program []Node, sc *scope) {
 		n := len(e.Params)
 		var params []string
 		codes := ""
+		slots := 0
 		for k, t := range e.Params {
-			params = append(params, fmt.Sprintf("%s %%a%d", ffiIR[t], k))
+			if exportSeq(t) {
+				params = append(params, fmt.Sprintf("ptr %%a%d, i64 %%n%d", k, k))
+				slots += 2
+			} else {
+				params = append(params, fmt.Sprintf("%s %%a%d", ffiIR[t], k))
+				slots++
+			}
 			codes += exportCodes[t]
+		}
+		if exportSeq(e.Result) {
+			params = append(params, "ptr %outlen")
+			slots++
 		}
 		codes += exportCodes[e.Result]
 		if e.Action {
 			codes += "!"
 		}
 		c.exports = append(c.exports, e.Symbol+" "+codes+" "+e.Name)
-		ret := ffiIR[e.Result]
+		ret := "ptr"
+		if !exportSeq(e.Result) {
+			ret = ffiIR[e.Result]
+		}
 		lines := []string{fmt.Sprintf("define %s @%s(%s) {", ret, e.Symbol, strings.Join(params, ", ")), "entry:"}
-		slots := n
 		if slots == 0 {
 			slots = 1
 		}
 		lines = append(lines, fmt.Sprintf("  %%s = alloca [%d x i64]", slots))
+		j := 0
 		for k, t := range e.Params {
 			p := fmt.Sprintf("%%p%d", k)
-			lines = append(lines, fmt.Sprintf("  %s = getelementptr [%d x i64], ptr %%s, i64 0, i64 %d", p, slots, k))
-			switch t {
-			case "i64":
+			lines = append(lines, fmt.Sprintf("  %s = getelementptr [%d x i64], ptr %%s, i64 0, i64 %d", p, slots, j))
+			j++
+			switch {
+			case exportSeq(t):
+				q := fmt.Sprintf("%%q%d", k)
+				lines = append(lines, fmt.Sprintf("  store ptr %%a%d, ptr %s", k, p),
+					fmt.Sprintf("  %s = getelementptr [%d x i64], ptr %%s, i64 0, i64 %d", q, slots, j),
+					fmt.Sprintf("  store i64 %%n%d, ptr %s", k, q))
+				j++
+			case t == "i64":
 				lines = append(lines, fmt.Sprintf("  store i64 %%a%d, ptr %s", k, p))
-			case "i32", "bool":
+			case t == "i32" || t == "bool":
 				lines = append(lines, fmt.Sprintf("  %%x%d = sext i32 %%a%d to i64", k, k), fmt.Sprintf("  store i64 %%x%d, ptr %s", k, p))
-			case "f64":
+			case t == "f64":
 				lines = append(lines, fmt.Sprintf("  store double %%a%d, ptr %s", k, p))
-			case "f32":
+			case t == "f32":
 				lines = append(lines, fmt.Sprintf("  %%x%d = fpext float %%a%d to double", k, k), fmt.Sprintf("  store double %%x%d, ptr %s", k, p))
 			default: // str・ptr
 				lines = append(lines, fmt.Sprintf("  store ptr %%a%d, ptr %s", k, p))
 			}
+		}
+		if exportSeq(e.Result) {
+			lines = append(lines, fmt.Sprintf("  %%po = getelementptr [%d x i64], ptr %%s, i64 0, i64 %d", slots, j),
+				"  store ptr %outlen, ptr %po")
 		}
 		lines = append(lines, fmt.Sprintf("  %%r = call i64 @rt_export(ptr %s, i32 %d, ptr %s, ptr %%s, ptr %s, i32 %d)",
 			b.g, n, c.cstr(codes), c.cstr(e.Name), posOf(e.Line)))

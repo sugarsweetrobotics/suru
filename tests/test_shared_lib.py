@@ -243,10 +243,8 @@ def test_まとまりの間違い(body, message):
 @pytest.mark.parametrize("source, message", [
     ("x を 三倍する とは x * 3\n以下は外部に出す関数です\n  三倍する は 「a」\n以上です\n",
      "外部に出す関数「三倍する」には型の宣言が必要です"),
-    ("数 の リスト を 合計する は 数\nxs を 合計する とは xs の 先頭\n以下は外部に出す関数です\n  合計する は 「a」\n以上です\n",
-     "外部に出す関数「合計する」の「を」には 数・小数・単精度・整数・真偽・文字列・番地 のどれかの型を書いてください"),
-    ("数 を 対にする は 数 の リスト\nx を 対にする とは x と x\n以下は外部に出す関数です\n  対にする は 「a」\n以上です\n",
-     "外部に出す関数「対にする」の値には 数・小数・単精度・整数・真偽・文字列・番地・無 のどれかの型を書いてください"),
+    ("無 を 空読みする は 数\nx を 空読みする とは 1\n以下は外部に出す関数です\n  空読みする は 「a」\n以上です\n",
+     "外部に出す関数「空読みする」の「を」に 無 は使えません"),
     ("文字列 を 長さ計測する は 数\ns を 長さ計測する とは 外部の「strlen」\n以下は外部に出す関数です\n  長さ計測する は 「a」\n以上です\n",
      "「長さ計測する」は外部の関数なので、外部に出せません"),
     ("文字列 を 長さ計測する は 数\ns を 長さ計測する とは 外部の「strlen」\n" + HEAD
@@ -374,13 +372,15 @@ def test_する_のライブラリ2つと実行ファイル(tmp_path):
     if nm and sys.platform.startswith("linux"):
         syms = subprocess.run([nm, "-D", "--defined-only", str(tmp_path / "libb.so")], capture_output=True, text=True).stdout
         names = sorted(line.split()[-1] for line in syms.splitlines())
-        assert names == ["b_free", "b_init", "b_last_error", "sanbai"]
+        assert names == sorted(["sanbai"] + suru_compile.lib_helper_symbols("b"))
+        assert not [n for n in names if n.startswith(("rt_", "gc_", "suru_"))]
 
 
 # --- ヘッダとほかの言語の例(#208 段階2) ---
 
 EXAMPLES = ROOT / "examples" / "他の言語から"
 EXAMPLE_OUT = ("nibai(21) = 42\nhikizan(3, 10) = 7\naisatsu = こんにちは、世界さん\nhanbun(5) = 2.5\nsei(-1) = 0\n"
+               "goukei([1, 2, 3, 4]) = 10\nten(3, 4) = （横 は 3 で 縦 は 4 の 点）\nten(3, 4).縦 = 4\n"
                "記録します\nnibai(2^62) = 0 error: yes\n")
 
 
@@ -397,7 +397,12 @@ def test_ヘッダの形():
                  "char *aisatsu(const char *a1);", "double hanbun(double a1);", "int sei(int64_t a1);",
                  "/* する: 記録する  文字列 → 無(入出力動作) */\nvoid kiroku(const char *a1);"):
         assert decl in h, decl
-    assert suru_compile.export_symbols(ir) == ["nibai", "hikizan", "aisatsu", "hanbun", "sei", "kiroku"]
+    assert "/* する: 合計する  数 の リスト → 数 */\nint64_t goukei(const int64_t *a1, int64_t a1_len);" in h
+    assert "keisan_value *ten(int64_t a1, int64_t a2);" in h
+    assert "typedef struct keisan_value keisan_value;" in h
+    for name in suru_compile.lib_helper_symbols("keisan"):
+        assert f" {name}(" in h or f"*{name}(" in h, name
+    assert suru_compile.export_symbols(ir) == ["nibai", "hikizan", "aisatsu", "hanbun", "sei", "goukei", "ten", "kiroku"]
 
 
 def test_ヘッダの型と引数なし():
@@ -498,3 +503,274 @@ def test_例_Rust(keisan):
                        timeout=600)
     assert r.returncode == 0, r.stderr
     assert r.stdout == EXAMPLE_OUT
+
+
+# --- バイト列・リスト・手札(#208 段階3) ---
+
+SEQ_LIB = """「標準」 を 読み込んで 使う
+
+数 の リスト を 合計する は 数 を 返す
+xs を 合計する とは xs を 加算する です
+
+小数 の リスト を 平均する は 小数 を 返す
+xs を 平均する とは （xs を 加算する） / （xs の 長さ） です
+
+文字列 の リスト を 横線結合する は 文字列 を 返す
+xs を 横線結合する とは xs を 「-」 で 結合する です
+
+数 を 二乗する は 数 を 返す
+x を 二乗する とは x * x です
+
+数 の リスト を 二乗並びにする は 数 の リスト を 返す
+xs を 二乗並びにする とは xs の それぞれ を 二乗する です
+
+文字列 の リスト を 逆並びにする は 文字列 の リスト を 返す
+xs を 逆並びにする とは xs を 逆順にする です
+
+小数 を 半分にする は 小数 を 返す
+x を 半分にする とは x / 2 です
+
+小数 の リスト を 半分並びにする は 小数 の リスト を 返す
+xs を 半分並びにする とは xs の それぞれ を 半分にする です
+
+バイト列 を 長さ数えする は 数 を 返す
+b を 長さ数えする とは b を バイト長にする です
+
+文字列 を バイト変換する は バイト列 を 返す
+s を バイト変換する とは s を バイト列にする です
+
+数 を 内階乗する は 数 を 返す
+0 を 内階乗する とは 1 です
+n を 内階乗する とは n * （n - 1 を 内階乗する） です
+
+数 を 階乗する は 数 を 返す
+n を 階乗する とは n を 内階乗する です
+
+点 とは 横 と 縦 の 組
+
+数 を 数 で 点にする は 点 を 返す
+x を y で 点にする とは （x と y の 点） です
+
+点 を 横を読みする は 数 を 返す
+p を 横を読みする とは p の 横 です
+
+数 を 加算器にする は （数 を 受け取って 数 を 返すこと） を 返す
+n を 加算器にする とは （x を 受け取って x + n を 返すこと） です
+
+以下は外部に出す関数です
+  合計する は 「goukei」
+  平均する は 「heikin」
+  横線結合する は 「tsunagu」
+  二乗並びにする は 「nijou」
+  逆並びにする は 「gyaku」
+  半分並びにする は 「hanbun」
+  長さ数えする は 「nagasa」
+  バイト変換する は 「baito」
+  階乗する は 「kaijou」
+  点にする は 「ten」
+  横を読みする は 「yoko」
+  加算器にする は 「kasanki」
+以上です
+"""
+
+SEQ_HOST = r"""
+#include <inttypes.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+#include "seq.h"
+
+#define ERR (seq_last_error() ? seq_last_error() : "ok")
+
+static void *work(void *arg) {
+    long k = (long)arg;
+    for (int64_t i = 0; i < 2000; i++) {
+        int64_t xs[3] = {i, k, 1};
+        if (goukei(xs, 3) != i + k + 1) return "goukei";
+        const char *ss[2] = {"a", "b"};
+        char *t = tsunagu(ss, 2);
+        if (strcmp(t, "a-b") != 0) return "tsunagu";
+        seq_free(t);
+        int64_t n;
+        char **g = gyaku(ss, 2, &n);
+        if (n != 2 || strcmp(g[0], "b") != 0 || g[2] != NULL) return "gyaku";
+        seq_free(g);
+        seq_value *p = ten(i, k);
+        if (yoko(p) != i) return "yoko";
+        seq_value *y = seq_field(p, "縦");
+        if (seq_to_int(y) != k) return "field";
+        seq_release(y);
+        seq_release(p);
+        seq_value *f = kasanki(i);
+        seq_value *x = seq_from_int(k);
+        seq_value *r = seq_call(f, &x, 1);
+        if (seq_to_int(r) != i + k) return "call";
+        seq_release(f);
+        seq_release(x);
+        seq_release(r);
+    }
+    return NULL;
+}
+
+int main(void) {
+    int64_t xs[] = {1, 2, 3, 4}, n = -1;
+    printf("goukei %" PRId64 "\n", goukei(xs, 4));
+    int64_t r = goukei(NULL, 0);
+    printf("goukei() %" PRId64 " %s\n", r, ERR);
+    double ds[] = {1.0, 2.0, 4.5};
+    printf("heikin %g\n", heikin(ds, 3));
+    int64_t *sq = nijou(xs, 4, &n);
+    printf("nijou %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " n=%" PRId64 "\n", sq[0], sq[1], sq[2], sq[3], n);
+    seq_free(sq);
+    sq = nijou(xs, 0, &n);
+    printf("nijou() n=%" PRId64 " %s\n", n, sq ? "nonnull" : "null");
+    seq_free(sq);
+    double *h = hanbun(ds, 3, NULL);
+    printf("hanbun %g %g %g\n", h[0], h[1], h[2]);
+    seq_free(h);
+    uint8_t bs[] = {1, 0, 2};
+    printf("nagasa %" PRId64 "\n", nagasa(bs, 3));
+    uint8_t *b = baito("aé", &n);
+    printf("baito n=%" PRId64 " %02x %02x %02x\n", n, b[0], b[1], b[2]);
+    seq_free(b);
+    printf("kaijou %" PRId64 "\n", kaijou(20));
+    int64_t big[] = {1, INT64_C(1) << 62};
+    r = goukei(big, 2);
+    printf("big %" PRId64 " %s\n", r, ERR);
+    sq = nijou(NULL, 3, &n);
+    printf("null %s %s\n", sq ? "nonnull" : "null", ERR);
+    r = goukei(xs, -1);
+    printf("neg %" PRId64 " %s\n", r, ERR);
+    const char *bad[] = {"a", NULL};
+    char *t = tsunagu(bad, 2);
+    printf("nullstr %s %s\n", t ? "nonnull" : "null", ERR);
+
+    seq_value *p = ten(3, 4);
+    const char *ty = seq_type(p);
+    printf("type %s\n", ty);
+    char *s = seq_show(p);
+    printf("show %s\n", s);
+    seq_free(s);
+    seq_value *q = seq_field(p, "高さ");
+    printf("field %s %s\n", q ? "nonnull" : "null", ERR);
+    seq_value *items[3] = {seq_from_int(1), seq_from_string("あ"), p};
+    seq_value *l = seq_list(items, 3);
+    s = seq_show(l);
+    printf("list %s len=%" PRId64 "\n", s, seq_len(l));
+    seq_free(s);
+    seq_value *e = seq_get(l, 1);
+    s = seq_to_string(e);
+    printf("get %s %s\n", s, seq_type(e));
+    seq_free(s);
+    r = seq_to_int(e);
+    printf("to_int %" PRId64 " %s\n", r, ERR);
+    seq_value *g = seq_get(l, 5);
+    printf("get5 %s %s\n", g ? "nonnull" : "null", ERR);
+    r = yoko(NULL);
+    printf("yoko(NULL) %" PRId64 " %s\n", r, ERR);
+    seq_value *d = seq_from_double(2.5), *tr = seq_from_bool(1);
+    double dv = seq_to_double(d);
+    int bv = seq_to_bool(tr);
+    printf("double %g bool %d\n", dv, bv);
+    seq_release(d);
+    seq_release(tr);
+    seq_release(e);
+    seq_release(l);
+    for (int i = 0; i < 3; i++) seq_release(items[i]);
+    seq_release(NULL);
+
+    pthread_t th[6];
+    for (long i = 0; i < 6; i++) pthread_create(&th[i], NULL, work, (void *)i);
+    for (int i = 0; i < 6; i++) {
+        void *res;
+        pthread_join(th[i], &res);
+        if (res) printf("thread failed: %s\n", (char *)res);
+    }
+    printf("threads ok\n");
+    return 0;
+}
+"""
+
+SEQ_OUT = """goukei 10
+goukei() 0 ok
+heikin 2.5
+nijou 1 4 9 16 n=4
+nijou() n=0 nonnull
+hanbun 0.5 1 2.25
+nagasa 3
+baito n=3 61 c3 a9
+kaijou 2432902008176640000
+big 0 52行目 3文字目: 「合計する」に渡したリストの 2 番目の数 4611686018427387904 が大きすぎます(数は ±4611686018427387903 までです)
+null null 55行目 3文字目: 「二乗並びにする」に渡した番地が NULL です(長さは 3)
+neg 0 52行目 3文字目: 「合計する」に渡した長さ -1 が負です
+nullstr null 54行目 3文字目: 「横線結合する」に渡したリストの 2 番目の文字列が NULL です
+type 点
+show （横 は 3 で 縦 は 4 の 点）
+field null 「（横 は 3 で 縦 は 4 の 点）」には「高さ」というフィールドがありません
+list （1 と 「あ」 と （横 は 3 で 縦 は 4 の 点）） len=3
+get あ 文字列
+to_int 0 「手札」の値は整数でなければなりません(「あ」でした)
+get5 null 手札のリストの 5 番目はありません(番号は 0 から 2 まで)
+yoko(NULL) 0 手札が NULL です
+double 2.5 bool 1
+threads ok
+"""
+
+
+def run_seq_host(lib_dir: pathlib.Path, env: dict | None = None) -> str:
+    (lib_dir / "host.c").write_text(SEQ_HOST, encoding="utf-8")
+    cc = suru_compile.find_cc()
+    subprocess.run([cc, "-Wall", "-Werror", "host.c", f"-I{lib_dir}", f"-L{lib_dir}", "-lseq", f"-Wl,-rpath,{lib_dir}",
+                    "-lpthread", "-o", "host"], cwd=lib_dir, check=True)
+    r = subprocess.run(["./host"], cwd=lib_dir, capture_output=True, text=True, timeout=300, env={**os.environ, **(env or {})})
+    assert r.returncode == 0, r.stderr
+    return r.stdout
+
+
+def test_リストと手札の型():
+    ir = suru_compile.compile_source(SEQ_LIB, str(ROOT / "lib"), "seq.suru", True, lib=True)
+    h = suru_compile.export_header(ir, "seq")
+    for decl in ("double heikin(const double *a1, int64_t a1_len);",
+                 "char *tsunagu(const char *const *a1, int64_t a1_len);",
+                 "int64_t *nijou(const int64_t *a1, int64_t a1_len, int64_t *out_len);",
+                 "char **gyaku(const char *const *a1, int64_t a1_len, int64_t *out_len);",
+                 "double *hanbun(const double *a1, int64_t a1_len, int64_t *out_len);",
+                 "int64_t nagasa(const uint8_t *a1, int64_t a1_len);",
+                 "uint8_t *baito(const char *a1, int64_t *out_len);",
+                 "seq_value *ten(int64_t a1, int64_t a2);", "int64_t yoko(seq_value *a1);", "seq_value *kasanki(int64_t a1);"):
+        assert decl in h, decl
+    # 整数 の リスト や 組 の リスト は手札で渡す
+    src = ("点 とは 横 と 縦 の 組\n点 の リスト を 数え上げする は 点 の リスト を 返す\nxs を 数え上げする とは xs です\n"
+           "以下は外部に出す関数です\n  数え上げする は 「f」\n以上です\n")
+    h = suru_compile.export_header(suru_compile.compile_source(src, ".", "x.suru", True, lib=True), "x")
+    assert "/* する: 数え上げする  (手札) → (手札)" in h and "x_value *f(x_value *a1);" in h
+
+
+@needs_clang
+@linux_or_mac
+def test_リストと手札をCから使う(tmp_path):
+    (tmp_path / "seq.suru").write_text(SEQ_LIB, encoding="utf-8")
+    r = build_py(tmp_path / "seq.suru", tmp_path / "libseq.so")
+    assert r.returncode == 0, r.stderr
+    assert run_seq_host(tmp_path) == SEQ_OUT
+
+
+@needs_clang
+@linux_or_mac
+def test_リストと手札でGCを何度も動かす(tmp_path):
+    (tmp_path / "seq.suru").write_text(SEQ_LIB, encoding="utf-8")
+    assert build_py(tmp_path / "seq.suru", tmp_path / "libseq.so").returncode == 0
+    assert run_seq_host(tmp_path, {"SURU_GC_MIN": "0"}) == SEQ_OUT
+
+
+@needs_clang
+@linux_or_mac
+def test_Go版でリストと手札(suruc, tmp_path):
+    (tmp_path / "seq.suru").write_text(SEQ_LIB, encoding="utf-8")
+    r = build_go(suruc, tmp_path / "seq.suru", tmp_path / "libseq.so")
+    assert r.returncode == 0, r.stderr
+    assert run_seq_host(tmp_path) == SEQ_OUT
+    py = tmp_path / "py"
+    py.mkdir()
+    assert build_py(tmp_path / "seq.suru", py / "libseq.so").returncode == 0
+    assert (py / "seq.h").read_text(encoding="utf-8") == (tmp_path / "seq.h").read_text(encoding="utf-8")

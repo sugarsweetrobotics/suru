@@ -32,11 +32,17 @@ RUNTIME = S.data_path("runtime", "suru_rt.c")
 
 # 外部の関数の C の型 → LLVM IR の型
 FFI_IR = {"i64": "i64", "f64": "double", "f32": "float", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr", "bytes": "ptr",
-          "void": "void"}
+          "void": "void", "val": "ptr"}  # val は外部に出す関数の手札(#208)
 LINK_MARK = "; suru-link: "  # IR の中の、リンクするライブラリの印(build が読む)
 EXPORT_MARK = "; suru-export: "  # IR の中の、外部に出す関数の印(「C の名前 型の字 する の名前」、共有ライブラリとヘッダを作るときに読む、#208)
 # 外部に出す関数の C の型 → rt_export に渡す型の字(Go 版の exportCodes と同じ)
-EXPORT_CODES = {"i64": "l", "i32": "i", "f64": "d", "f32": "f", "bool": "b", "str": "s", "ptr": "p", "void": "v"}
+EXPORT_CODES = {"i64": "l", "i32": "i", "f64": "d", "f32": "f", "bool": "b", "str": "s", "ptr": "p", "void": "v",
+                "bytes": "y", "list_i64": "L", "list_f64": "D", "list_str": "S", "val": "h"}
+
+
+def export_seq(t: str) -> bool:
+    """番地と長さの2つで渡す型か(#208 段階3、Go 版の exportSeq と同じ)"""
+    return t == "bytes" or t.startswith("list_")
 PART_IDS = {"を": 0, "に": 1, "で": 2, "から": 3, "へ": 4, "より": 5, "が": 6}
 OPS = {"+": 0, "-": 1, "*": 2, "/": 3, "%": 4, "^": 5, "<": 6, ">": 7, "<=": 8, ">=": 9, "==": 10, "!=": 11}
 CMP_PRED = {"<": "slt", ">": "sgt", "<=": "sle", ">=": "sge", "==": "eq", "!=": "ne"}
@@ -1171,15 +1177,33 @@ class Compiler:
                 continue
             b = sc.vars[e.name]
             n = len(e.params)
-            params = ", ".join(f"{FFI_IR[t]} %a{k}" for k, t in enumerate(e.params))
+            params = []
+            slots = 0
+            for k, t in enumerate(e.params):
+                if export_seq(t):
+                    params.append(f"ptr %a{k}, i64 %n{k}")
+                    slots += 2
+                else:
+                    params.append(f"{FFI_IR[t]} %a{k}")
+                    slots += 1
+            if export_seq(e.result):
+                params.append("ptr %outlen")
+                slots += 1
             codes = "".join(EXPORT_CODES[t] for t in e.params) + EXPORT_CODES[e.result] + ("!" if e.action else "")
             self.exports.append(f"{e.symbol} {codes} {e.name}")
-            slots = n or 1
-            lines = [f"define {FFI_IR[e.result]} @{e.symbol}({params}) {{", "entry:", f"  %s = alloca [{slots} x i64]"]
+            slots = slots or 1
+            ret = "ptr" if export_seq(e.result) else FFI_IR[e.result]
+            lines = [f"define {ret} @{e.symbol}({', '.join(params)}) {{", "entry:", f"  %s = alloca [{slots} x i64]"]
+            j = 0
             for k, t in enumerate(e.params):
                 p = f"%p{k}"
-                lines.append(f"  {p} = getelementptr [{slots} x i64], ptr %s, i64 0, i64 {k}")
-                if t == "i64":
+                lines.append(f"  {p} = getelementptr [{slots} x i64], ptr %s, i64 0, i64 {j}")
+                j += 1
+                if export_seq(t):
+                    lines += [f"  store ptr %a{k}, ptr {p}", f"  %q{k} = getelementptr [{slots} x i64], ptr %s, i64 0, i64 {j}",
+                              f"  store i64 %n{k}, ptr %q{k}"]
+                    j += 1
+                elif t == "i64":
                     lines.append(f"  store i64 %a{k}, ptr {p}")
                 elif t in ("i32", "bool"):
                     lines += [f"  %x{k} = sext i32 %a{k} to i64", f"  store i64 %x{k}, ptr {p}"]
@@ -1189,6 +1213,8 @@ class Compiler:
                     lines += [f"  %x{k} = fpext float %a{k} to double", f"  store double %x{k}, ptr {p}"]
                 else:  # str・ptr
                     lines.append(f"  store ptr %a{k}, ptr {p}")
+            if export_seq(e.result):
+                lines += [f"  %po = getelementptr [{slots} x i64], ptr %s, i64 0, i64 {j}", "  store ptr %outlen, ptr %po"]
             c = self.cstr(codes)
             nm = self.cstr(e.name)
             lines.append(f"  %r = call i64 @rt_export(ptr {b.g}, i32 {n}, ptr {c}, ptr %s, ptr {nm}, i32 {pos_of(e.line)})")
@@ -1255,9 +1281,56 @@ def export_symbols(ir: str) -> list[str]:
     return [sym for sym, _, _ in exports_of(ir)]
 
 
-# 型の字 → ヘッダに書く C の型と する の型
-HEADER_TYPES = {"l": ("int64_t", "数"), "i": ("int", "整数"), "d": ("double", "小数"), "f": ("float", "単精度"),
-                "b": ("int", "真偽"), "s": ("const char *", "文字列"), "p": ("void *", "番地"), "v": ("void", "無")}
+# 共有ライブラリが出す補助の関数(頭の名前_init など): (値の型, 名前, [(引数の型, 名前)], 英語の説明, 日本語の説明)。
+# 実行時ライブラリの rt_lib_名前 を呼ぶ。型の「V」はヘッダでは 頭の名前_value、包みの C では void になる(#208、Go 版の LibHelpers と同じ)
+LIB_HELPERS = [
+    ("int", "init", [], "Initializes the library (the first call also does it). 0 on success, -1 on failure.",
+     "ライブラリを用意します(最初の呼び出しでも行います)。うまくいけば 0、失敗なら -1。"),
+    ("const char *", "last_error", [], "The error message of the last call on this thread, or NULL. The library owns it;\n"
+     " * it stays valid until the next call on this thread (do not free it).",
+     "このスレッドで最後に呼んだ関数のエラーの文(なければ NULL)。ライブラリのもので、\n * このスレッドで次に呼ぶまで使えます(解放しません)。"),
+    ("void", "free", [("void *", "p")], "Frees a string, a list or a バイト列 returned by this library.",
+     "このライブラリが返した文字列・リスト・バイト列を解放します。"),
+    ("void", "release", [("V *", "h")], "Releases a handle (NULL is ignored). Any thread may call it at any time.",
+     "手札を手放します(NULL なら何もしません)。どのスレッドからいつでも呼べます。"),
+    ("const char *", "type", [("const V *", "h")], "The Suru type of the value (リスト, 数, 文字列, a record type ...). Do not free it.",
+     "値の する の型の名前(リスト・数・文字列・組の型の名前など)。解放しません。"),
+    ("char *", "show", [("const V *", "h")], "The value as 表示する shows it. Free it with {free}.",
+     "表示する と同じ形の文字列。{free} で解放します。"),
+    ("int64_t", "len", [("const V *", "h")], "The length of a list or a バイト列.", "リストかバイト列の長さ。"),
+    ("V *", "get", [("const V *", "h"), ("int64_t", "i")], "Item i (from 0) of a list, as a new handle.",
+     "リストの i 番目(0 から)を新しい手札で返します。"),
+    ("V *", "field", [("const V *", "h"), ("const char *", "name")], "The field name of a record, as a new handle.",
+     "組の項目 name を新しい手札で返します。"),
+    ("int64_t", "to_int", [("const V *", "h")], "The value as a 数.", "値を 数 として読みます。"),
+    ("double", "to_double", [("const V *", "h")], "The value as a 小数.", "値を 小数 として読みます。"),
+    ("int", "to_bool", [("const V *", "h")], "The value as a 真偽 (0 or 1).", "値を 真偽(0 か 1)として読みます。"),
+    ("char *", "to_string", [("const V *", "h")], "The value as a 文字列. Free it with {free}.",
+     "値を 文字列 として読みます。{free} で解放します。"),
+    ("V *", "from_int", [("int64_t", "x")], "A new handle holding the 数 x.", "数 x の新しい手札。"),
+    ("V *", "from_double", [("double", "x")], "A new handle holding the 小数 x.", "小数 x の新しい手札。"),
+    ("V *", "from_bool", [("int", "x")], "A new handle holding the 真偽 x.", "真偽 x の新しい手札。"),
+    ("V *", "from_string", [("const char *", "s")], "A new handle holding a copy of the UTF-8 string s.",
+     "UTF-8 の文字列 s の写しの新しい手札。"),
+    ("V *", "list", [("V *const *", "items"), ("int64_t", "n")], "A new handle holding the list of the n handles in items.",
+     "items の n 個の手札のリストの新しい手札。"),
+    ("V *", "call", [("const V *", "f"), ("V *const *", "args"), ("int64_t", "n")],
+     "Calls the function f with n handles. An action result is carried out. A new handle.",
+     "関数 f を n 個の手札で呼びます。値が動作なら行います。新しい手札で返します。"),
+]
+
+# 型の字 → ヘッダに書く引数の C の型・値の C の型・する の型
+# (y・L・D・S は番地と長さの2つで渡し、値なら長さを out_len に書く、#208 段階3)
+HEADER_TYPES = {"l": ("int64_t", "int64_t", "数"), "i": ("int", "int", "整数"), "d": ("double", "double", "小数"),
+                "f": ("float", "float", "単精度"), "b": ("int", "int", "真偽"), "s": ("const char *", "char *", "文字列"), "h": ("V *", "V *", "(手札)"),
+                "p": ("void *", "void *", "番地"), "v": ("void", "void", "無"),
+                "y": ("const uint8_t *", "uint8_t *", "バイト列"), "L": ("const int64_t *", "int64_t *", "数 の リスト"),
+                "D": ("const double *", "double *", "小数 の リスト"), "S": ("const char *const *", "char **", "文字列 の リスト")}
+
+
+def c_decl(t: str, name: str) -> str:
+    """C の型と名前を並べる(「int64_t a1」「const char *a1」、Go 版の cDecl と同じ)"""
+    return t + name if t.endswith("*") else f"{t} {name}"
 
 
 def export_header(ir: str, prefix: str) -> str:
@@ -1270,25 +1343,31 @@ def export_header(ir: str, prefix: str) -> str:
            " *   returns its message (NULL when the last call on this thread succeeded).\n"
            " * Strings: string arguments are UTF-8 and are copied. A returned char * is\n"
            f" *   yours: free it with {prefix}_free().\n"
-           " * Numbers: 数 (int64_t) must be within +-2^62; larger values are an error.\n * Threads: any thread may call these functions, also at the same time.\n"
+           " * Numbers: 数 (int64_t) must be within +-2^62; larger values are an error.\n * Lists and バイト列: an argument is a pointer and a length (aN, aN_len) and is copied;\n *   a result is a new block whose length is written to *out_len.\n * Threads: any thread may call these functions, also at the same time.\n"
            " *\n"
            f" * エラー: 失敗した呼び出しは 0・0.0・NULL を返し、{prefix}_last_error() で文を読めます\n"
            " *   (このスレッドの最後の呼び出しがうまくいったときは NULL)。\n"
            " * 文字列: 引数の文字列は UTF-8 で、写し取ります。返った char * は呼んだ側のもので、\n"
            f" *   {prefix}_free() で解放します。\n"
-           " * 数: 数(int64_t)は ±2^62 までです。超えるとエラーになります。\n * スレッド: どのスレッドからも、同時にでも呼べます。\n"
+           " * 数: 数(int64_t)は ±2^62 までです。超えるとエラーになります。\n * リストとバイト列: 引数は番地と長さ(aN と aN_len)で渡し、写し取ります。\n *   値は新しい塊で、長さを *out_len に書きます。\n * スレッド: どのスレッドからも、同時にでも呼べます。\n"
            " */\n"
            f"#ifndef {guard}\n#define {guard}\n\n#include <stdint.h>\n\n"
            "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n"
-           "/* Initializes the library (the first call also does it). 0 on success, -1 on failure.\n"
-           " * ライブラリを用意します(最初の呼び出しでも行います)。うまくいけば 0、失敗なら -1。 */\n"
-           f"int {prefix}_init(void);\n\n"
-           "/* The error message of the last call on this thread, or NULL. The library owns it;\n * it stays valid until the next call on this thread (do not free it).\n"
-           " * このスレッドで最後に呼んだ関数のエラーの文(なければ NULL)。ライブラリのもので、\n * このスレッドで次に呼ぶまで使えます(解放しません)。 */\n"
-           f"const char *{prefix}_last_error(void);\n\n"
-           "/* Frees a string returned by this library.\n"
-           " * このライブラリが返した文字列を解放します。 */\n"
-           f"void {prefix}_free(void *p);\n"]
+           ]
+    out[-1] = out[-1].removesuffix("\n")
+    for k, (ret, hname, params, en, ja) in enumerate(LIB_HELPERS):
+        if k == 3:
+            out.append("\n/* Handles: a value that is not a number, a string, a バイト列 or a list of numbers,\n"
+                       " * decimals or strings (a record, another list, a function ...) is passed as a\n"
+                       f" * {prefix}_value *. A handle you get stays alive until {prefix}_release(); a handle\n"
+                       " * you pass in is only borrowed.\n"
+                       " * 手札: 数・文字列・バイト列・数や小数や文字列のリストで渡せない値(組・ほかのリスト・関数など)は\n"
+                       f" * {prefix}_value * で渡します。受け取った手札は {prefix}_release() まで使えます。\n"
+                       " * 渡した手札は借りるだけです。 */\n"
+                       f"typedef struct {prefix}_value {prefix}_value;\n")
+        args = ", ".join(c_decl(t.replace("V", f"{prefix}_value"), n) for t, n in params) or "void"
+        doc = f"\n/* {en}\n * {ja} */\n".replace("{free}", f"{prefix}_free()")
+        out.append(doc + c_decl(ret.replace("V", f"{prefix}_value"), f"{prefix}_{hname}") + f"({args});\n")
     for sym, codes0, name in exports_of(ir):
         codes = codes0.removesuffix("!")
         action = codes != codes0
@@ -1296,19 +1375,30 @@ def export_header(ir: str, prefix: str) -> str:
             continue
         cps, sps = [], []
         for k, ch in enumerate(codes[:-1]):
-            ct, st = HEADER_TYPES[ch]
-            cps.append(ct + ("" if ct.endswith("*") else " ") + f"a{k + 1}")
+            ct, _, st = HEADER_TYPES[ch]
+            cps.append(c_decl(ct.replace("V", f"{prefix}_value"), f"a{k + 1}"))
+            if ch in "yLDS":
+                cps.append(f"int64_t a{k + 1}_len")
             sps.append(st)
-        cres, sres = HEADER_TYPES[codes[-1]]
-        if sres == "文字列":
-            cres = "char *"
+        rc = codes[-1]
+        _, cres, sres = HEADER_TYPES[rc]
+        if rc in "yLDS":
+            cps.append("int64_t *out_len")
         line = f"\n/* する: {name}  {' と '.join(sps) or '(なし)'} → {sres}"
         if action:
             line += "(入出力動作)"
-        if sres == "文字列":
+        if rc == "s":
             line += f"\n * The result is yours: free it with {prefix}_free(). / 値は {prefix}_free() で解放します。"
+        elif rc == "S":
+            line += (f"\n * The result is an array of out_len strings ending with NULL, in one block: free it once with {prefix}_free().\n"
+                     f" * 値は out_len 個の文字列の並び(最後に NULL)で、1つの塊です。{prefix}_free() で1回だけ解放します。")
+        elif rc == "h":
+            line += f"\n * The result is a new handle: release it with {prefix}_release(). / 値は新しい手札で、{prefix}_release() で手放します。"
+        elif rc in "yLDS":
+            line += (f"\n * The result has *out_len items (out_len may be NULL); free it with {prefix}_free().\n"
+                     f" * 値の長さは *out_len に書きます(out_len は NULL でもよい)。{prefix}_free() で解放します。")
         line += " */\n"
-        line += cres + ("" if cres.endswith("*") else " ") + f"{sym}({', '.join(cps) or 'void'});\n"
+        line += c_decl(cres.replace("V", f"{prefix}_value"), sym) + f"({', '.join(cps) or 'void'});\n"
         out.append(line)
     out.append(f"\n#ifdef __cplusplus\n}}\n#endif\n\n#endif /* {guard} */\n")
     return "".join(out)
@@ -1328,6 +1418,10 @@ def check_library(program: list) -> None:
             continue
         raise bad("共有ライブラリにするファイルの一番外には、定義だけを書きます(一番外の文は、ライブラリを読み込んだときに行われてしまいます)",
                   S.first_line_of(s) or 0)
+
+
+SP_TICK_EXE = "@rt_sp_tick = external thread_local(localexec) global i32"
+SP_TICK_LIB = "@rt_sp_tick = external hidden thread_local global i32"
 
 
 def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check: bool = True, lib: bool = False) -> str:
@@ -1356,7 +1450,10 @@ def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check
     if lib:
         check_library(program)
     try:
-        return Compiler(ctx, source).compile(program, path)
+        ir = Compiler(ctx, source).compile(program, path)
+        # 共有ライブラリでは、スレッドごとの変数をライブラリの中だけで使う形で読む
+        # (localexec は実行ファイルでしか使えない。再帰の安全点が rt_sp_tick を使う、#208、Go 版と同じ)
+        return ir.replace(SP_TICK_EXE, SP_TICK_LIB, 1) if lib else ir
     except CompileError as e:
         err = S.SuruError(str(e))
         err.kind = "コンパイル"
@@ -1520,12 +1617,22 @@ def lib_prefix(out: str) -> str:
 
 
 def lib_shim(prefix: str) -> str:
-    """補助の関数(頭の名前_init・_last_error・_free)を出す小さな C のファイルの中身(Go 版の libShim と同じ)"""
-    return ('#define E __attribute__((visibility("default")))\n'
-            "int rt_lib_init(void);\nconst char *rt_lib_last_error(void);\nvoid rt_lib_free(void *);\n"
-            f"E int {prefix}_init(void) {{ return rt_lib_init(); }}\n"
-            f"E const char *{prefix}_last_error(void) {{ return rt_lib_last_error(); }}\n"
-            f"E void {prefix}_free(void *p) {{ rt_lib_free(p); }}\n")
+    """補助の関数(頭の名前_init など)を出す小さな C のファイルの中身(Go 版の LibShim と同じ)"""
+    out = ['#include <stdint.h>\n#define E __attribute__((visibility("default")))\n']
+    for ret, name, params, _, _ in LIB_HELPERS:
+        ps = ", ".join(c_decl(t.replace("V", "void"), n) for t, n in params) or "void"
+        ret = ret.replace("V", "void")
+        call = f"rt_lib_{name}({', '.join(n for _, n in params)});"
+        if ret != "void":
+            call = "return " + call
+        out.append(c_decl(ret, f"rt_lib_{name}") + f"({ps});\n")
+        out.append("E " + c_decl(ret, f"{prefix}_{name}") + f"({ps}) {{ {call} }}\n")
+    return "".join(out)
+
+
+def lib_helper_symbols(prefix: str) -> list[str]:
+    """補助の関数の C の名前(Go 版の LibHelperSymbols と同じ)"""
+    return [f"{prefix}_{h[1]}" for h in LIB_HELPERS]
 
 
 def build_shared(ll_path: str, out: str, opt: str = "-O2") -> str:
@@ -1543,7 +1650,7 @@ def build_shared(ll_path: str, out: str, opt: str = "-O2") -> str:
     rt = runtime_object(cc, "suru_rt_lib-", LIB_FLAGS)
     with open(ll_path, encoding="utf-8") as f:
         ir = f.read()
-    syms = export_symbols(ir) + [f"{prefix}_init", f"{prefix}_last_error", f"{prefix}_free"]
+    syms = export_symbols(ir) + lib_helper_symbols(prefix)
     with tempfile.TemporaryDirectory(prefix="suru-lib-") as d:
         shim = os.path.join(d, "shim.c")
         with open(shim, "w", encoding="utf-8") as f:
