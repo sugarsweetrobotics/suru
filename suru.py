@@ -9081,6 +9081,12 @@ def main(argv: list[str]) -> int:
 
 def cli() -> None:
     """pip で入れたときの「suru」コマンド"""
+    if os.name == "nt":
+        # Windows でパイプやファイルに出すと cp1252 などになり、日本語を書けない。
+        # コンパイルしたプログラム(UTF-8 のマニフェスト)と同じく UTF-8 で読み書きする
+        for f in (sys.stdin, sys.stdout, sys.stderr):
+            if f is not None and hasattr(f, "reconfigure") and (f.encoding or "").lower() not in ("utf-8", "utf8"):
+                f.reconfigure(encoding="utf-8")
     sys.exit(main(sys.argv))
 
 
