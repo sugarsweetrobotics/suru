@@ -2,7 +2,7 @@
 # Copyright (c) 2026 sugarsweetrobotics
 """純 Python の wheel から、OS ごとの wheel を作る(suruc・kumu・suru-ls を入れる)。
 
-    python3 packaging/platform_wheels.py dist/suru_lang-0.11.0-py3-none-any.whl bin/ dist/
+    python3 packaging/platform_wheels.py dist/suru_lang-0.12.0-py3-none-any.whl bin/ dist/
 
 bin/ には packaging/build_binaries.sh が作った suru-版-OS-CPU.tar.gz(Windows は .zip)を置いておきます。
 3つのバイナリは wheel の `suru_lang-版.data/scripts/` に入れるので、pip で入れると
@@ -64,7 +64,7 @@ def make_wheel(pure: str, binaries: dict[str, bytes], plat: str, out_dir: str) -
     base = os.path.basename(pure)
     if not base.endswith("-py3-none-any.whl"):
         raise SystemExit(f"{base} は純 Python の wheel(…-py3-none-any.whl)ではありません")
-    stem = base.removesuffix("-py3-none-any.whl")  # suru_lang-0.11.0
+    stem = base.removesuffix("-py3-none-any.whl")  # suru_lang-0.12.0
     dist_info = stem + ".dist-info"
     data_scripts = stem + ".data/scripts"
     target = os.path.join(out_dir, f"{stem}-py3-none-{plat}.whl")
