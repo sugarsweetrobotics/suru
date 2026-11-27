@@ -11,6 +11,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 1. **Build shared libraries that other languages can call.** List exported functions and their C names with `以下は外部に出す関数です` … `二倍する は 「nibai」` … `以上です`, and build a .so or .dylib with `suruc --共有ライブラリ 計算.suru -o libkeisan.so` (`suru --翻訳 --共有ライブラリ` in the Python version). Types come from the type declaration (数, 整数, 小数, 単精度, 真偽, 文字列, 番地, 無), and the functions can be called from Python's ctypes, C and so on. Runtime errors return 0 and can be read with `keisan_last_error()`, and calls work from any thread. This is stage 1 of #208.
 2. **`suruc --共有ライブラリ` also writes a C header.** Building `libkeisan.so` writes `keisan.h` next to it, with the prototypes, the Suru name and types of each function, and notes on errors and freeing strings. `examples/他の言語から/` has examples that call the library from Python, C, C++, Go and Rust. This is stage 2 of #208.
 3. **SHA-256 and HMAC-SHA256 in 「ハッシュ」.** `b を ハッシュ内のSHA256にする` and `b を 鍵 で ハッシュ内のHMACSHA256にする` give 32 bytes, the same in the interpreter and compiled binaries. They are for signing cookies in suru-lang/web (#192).
+4. **`kumu 新規 店 --対象 web` creates a web app for 屋台 (suru-lang/web).** It writes `組.suru` (depending on `github.com/suru-lang/web@0.1.0`), `店.suru` with routes in 【道】, `本体.suru` that opens the server on port 8080, pages in `画面/`, a stylesheet in `公開/` and tests of the routes in `試験/道.suru`. `kumu 初期化 --対象 web` works the same in the current folder (#192).
 
 ### Fixed
 
