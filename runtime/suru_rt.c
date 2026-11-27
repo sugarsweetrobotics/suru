@@ -1147,6 +1147,7 @@ static V impl_fn(Impl *im, const char *name) {
 }
 
 static void cb_mark_tables(void); /* 呼び戻しの表(下で定義) */
+static void export_mark_handles(void); /* 外部に出す関数の手札(下で定義、#208) */
 static V cb_run(Act *a);
 static void gc_mark_tables(void) {
     for (int i = 0; i < nshared; i++) gc_mark((uintptr_t)shared[i].v);
@@ -1156,6 +1157,7 @@ static void gc_mark_tables(void) {
     for (int i = 0; i < nimpls; i++)
         for (int j = 0; j < impls[i].n; j++) gc_mark((uintptr_t)impls[i].fns[j]);
     cb_mark_tables();
+    export_mark_handles();
 }
 
 static const char *SHOWABLE = "表示可能", *TO_STRING = "文字列化する", *MAPPABLE = "写像可能",
@@ -5560,7 +5562,9 @@ extern const char suru_source[];
 /* ------------------------------------------------------------------ */
 /* IR は出す関数ごとに C の呼び出し規約の関数を作り、引数を i64 の並び(小数は double のビット)に置いて rt_export を呼ぶ。
  * 型の字: l 数(int64_t)・i 整数(int)・d 小数(double)・f 単精度(float、並びと値では double)・b 真偽(int)・
- * s 文字列(const char *。値は malloc した写し)・p 番地(void *)・v 無(値だけ)。引数の字の後に値の字、動作なら最後に「!」。
+ * s 文字列(const char *。値は malloc した写し)・p 番地(void *)・v 無(値だけ)・
+ * y バイト列・L 数のリスト・D 小数のリスト・S 文字列のリスト(番地と長さの2つ。値は malloc した並びで、長さは最後の引数の番地に書く)・
+ * h 中を見ない手札。引数の字の後に値の字、動作なら最後に「!」。
  * 実行時エラーは受け止めて 0 を返し、文は rt_lib_last_error で読める(共有ライブラリの形 SURU_LIB のとき) */
 static _Thread_local char *export_error; /* このスレッドで最後に呼んだ出す関数のエラー(なければ NULL) */
 
@@ -5697,6 +5701,9 @@ static void export_end(int back) {
 const char *rt_lib_last_error(void) { return export_error; }
 void rt_lib_free(void *p) { free(p); }
 
+static void *handle_new(V v);
+static V handle_v(const void *h);
+
 /* 呼んだ側の C の値を する の値にする */
 static V export_in(char c, int64_t a, const char *name, int32_t pos) {
     double d;
@@ -5715,6 +5722,7 @@ static V export_in(char c, int64_t a, const char *name, int32_t pos) {
         const char *p = (const char *)(intptr_t)a;
         return cstr(p ? p : "");
     }
+    case 'h': return handle_v((const void *)(intptr_t)a);
     default: return rt_ffi_from_ptr((void *)(intptr_t)a);
     }
 }
@@ -5722,6 +5730,91 @@ static V export_in(char c, int64_t a, const char *name, int32_t pos) {
 __attribute__((noreturn)) static void export_bad(V v, const char *name, const char *want, int32_t pos) {
     fail(pos, "「%s」の値は%sでなければなりません(「%s」でした)", name, want, plain(v).s);
 }
+
+static int64_t export_int(V v, const char *name, int32_t pos) {
+    if (IS_INT(v)) return INT_VAL(v);
+    if (TAG(v) == T_FLT && AS(Flt, v)->d == floor(AS(Flt, v)->d) && fabs(AS(Flt, v)->d) < 4611686018427387904.0)
+        return (int64_t)AS(Flt, v)->d;
+    export_bad(v, name, "整数", pos);
+}
+
+/* 番地と長さで渡されたバイト列・リストを する の値にする(#208 段階3) */
+static V export_in_seq(char c, int64_t a, int64_t n, const char *name, int32_t pos) {
+    const void *p = (const void *)(intptr_t)a;
+    if (n < 0) fail(pos, "「%s」に渡した長さ %lld が負です", name, (long long)n);
+    if (n > 0 && !p) fail(pos, "「%s」に渡した番地が NULL です(長さは %lld)", name, (long long)n);
+    if (c == 'y') return mk_bytes(p, n);
+    if (n == 0) return V_EMPTY;
+    List *l = new_list(n);
+    V lv = (V)(intptr_t)l; /* GC が見る所に置く */
+    for (int64_t i = 0; i < n; i++) {
+        if (c == 'L') {
+            int64_t x = ((const int64_t *)p)[i];
+            if (x > INT_MAX62 || x < INT_MIN62)
+                fail(pos, "「%s」に渡したリストの %lld 番目の数 %lld が大きすぎます(数は ±%lld までです)", name, (long long)i + 1,
+                     (long long)x, (long long)INT_MAX62);
+            l->it[i] = mk_int(x, pos);
+        } else if (c == 'D') {
+            l->it[i] = rt_float(((const double *)p)[i]);
+        } else {
+            const char *q = ((const char *const *)p)[i];
+            if (!q) fail(pos, "「%s」に渡したリストの %lld 番目の文字列が NULL です", name, (long long)i + 1);
+            l->it[i] = cstr(q);
+        }
+    }
+    return lv;
+}
+
+/* する のバイト列・リストを malloc した並びにする。長さは *len に書く(NULL なら書かない)。
+ * 文字列のリストは、番地の並び(最後に NULL)と文字を1つの塊に入れるので、1回の解放で済む(#208 段階3) */
+static int64_t export_out_seq(char c, V v, int64_t *len, const char *name, int32_t pos) {
+    int64_t n;
+    char *out;
+    if (c == 'y') {
+        if (TAG(v) != T_BYTES) export_bad(v, name, "バイト列", pos);
+        Bytes *b = AS(Bytes, v);
+        n = b->n;
+        out = malloc((size_t)n + 1);
+        if (!out) gc_oom();
+        memcpy(out, b->d, (size_t)n);
+    } else {
+        const char *want = c == 'L' ? "数のリスト" : c == 'D' ? "小数のリスト" : "文字列のリスト";
+        if (TAG(v) != T_LIST) export_bad(v, name, want, pos);
+        List *l = AS(List, v);
+        n = l->n;
+        size_t chars = 0;
+        for (int64_t i = 0; i < n; i++) { /* 先に確かめる(途中で止まっても malloc したものが残らないように) */
+            V x = rt_force(l->it[i]);
+            if (c == 'L') export_int(x, name, pos);
+            else if (c == 'D' && !is_num(x)) export_bad(v, name, want, pos);
+            else if (c == 'S') {
+                if (TAG(x) != T_STR) export_bad(v, name, want, pos);
+                chars += (size_t)AS(Str, x)->n + 1;
+            }
+        }
+        size_t head = (size_t)n * 8 + (c == 'S' ? 8 : 0);
+        out = malloc(head + chars + 1);
+        if (!out) gc_oom();
+        char *q = out + head;
+        for (int64_t i = 0; i < n; i++) {
+            V x = rt_force(l->it[i]); /* 遅延の値は前の繰り返しで計算済み */
+            if (c == 'L') ((int64_t *)out)[i] = export_int(x, name, pos);
+            else if (c == 'D') ((double *)out)[i] = num_d(x);
+            else {
+                Str *t = AS(Str, x);
+                memcpy(q, t->s, (size_t)t->n);
+                q[t->n] = 0;
+                ((char **)out)[i] = q;
+                q += t->n + 1;
+            }
+        }
+        if (c == 'S') ((char **)out)[n] = NULL;
+    }
+    if (len) *len = n;
+    return (int64_t)(intptr_t)out;
+}
+
+static int export_is_seq(char c) { return c == 'y' || c == 'L' || c == 'D' || c == 'S'; }
 
 /* する の値を呼んだ側の C の値にする */
 static int64_t export_out(char c, V v, const char *name, int32_t pos) {
@@ -5731,10 +5824,7 @@ static int64_t export_out(char c, V v, const char *name, int32_t pos) {
     case 'v': return 0;
     case 'l':
     case 'i':
-        if (IS_INT(v)) out = INT_VAL(v);
-        else if (TAG(v) == T_FLT && AS(Flt, v)->d == floor(AS(Flt, v)->d) && fabs(AS(Flt, v)->d) < 4611686018427387904.0)
-            out = (int64_t)AS(Flt, v)->d;
-        else export_bad(v, name, "整数", pos);
+        out = export_int(v, name, pos);
         if (c == 'i' && (out < INT32_MIN || out > INT32_MAX)) export_bad(v, name, "-2147483648 から 2147483647 までの整数", pos);
         return out;
     case 'd':
@@ -5755,13 +5845,17 @@ static int64_t export_out(char c, V v, const char *name, int32_t pos) {
         p[s->n] = 0;
         return (int64_t)(intptr_t)p;
     }
+    case 'h': return (int64_t)(intptr_t)handle_new(v);
     default:
         if (TAG(v) != T_ADDR) export_bad(v, name, "番地", pos);
         return (int64_t)(intptr_t)AS(Addr, v)->p;
     }
 }
 
-int64_t rt_export(V *slot, int32_t n, const char *codes, int64_t *a, const char *name, int32_t pos) {
+/* 出す関数と手札の補助の関数の入口: 呼んだスレッドを する の世界に入れ、実行時エラーを受け止めて 0 を返す
+ * (文は rt_lib_last_error で読める)。f は ctx を受け取って値を返す */
+typedef int64_t (*LibFn)(void *ctx);
+static int64_t lib_run(LibFn fn, void *ctx) {
     int back = export_begin(__builtin_frame_address(0));
     free(export_error);
     export_error = NULL;
@@ -5779,11 +5873,7 @@ int64_t rt_export(V *slot, int32_t n, const char *codes, int64_t *a, const char 
     f.cpos = call_pos;
     try_top = &f;
     if (setjmp(f.jb) == 0) {
-        V args[16];
-        for (int i = 0; i < n; i++) args[i] = export_in(codes[i], a[i], name, pos);
-        V r = rt_force(apply(*slot, n, args, pos));
-        if (codes[n + 1] == '!' && (TAG(r) == T_ACT || TAG(r) == T_PURE)) r = rt_force(perform(r));
-        out = export_out(codes[n], r, name, pos);
+        out = fn(ctx);
         try_top = f.prev;
     } else {
         export_error = fail_last_full ? fail_last_full : strdup("実行時エラー");
@@ -5792,6 +5882,157 @@ int64_t rt_export(V *slot, int32_t n, const char *codes, int64_t *a, const char 
     }
     export_end(back);
     return out;
+}
+
+typedef struct { V *slot; int32_t n; const char *codes; int64_t *a; const char *name; int32_t pos; } ExportCall;
+
+static int64_t export_call(void *p) {
+    ExportCall *c = p;
+    const char *codes = c->codes;
+    int64_t *a = c->a;
+    V args[16];
+    int j = 0; /* a の中の場所(バイト列・リストは番地と長さの2つ) */
+    for (int i = 0; i < c->n; i++) {
+        if (export_is_seq(codes[i])) {
+            args[i] = export_in_seq(codes[i], a[j], a[j + 1], c->name, c->pos);
+            j += 2;
+        } else args[i] = export_in(codes[i], a[j++], c->name, c->pos);
+    }
+    V r = rt_force(apply(*c->slot, c->n, args, c->pos));
+    if (codes[c->n + 1] == '!' && (TAG(r) == T_ACT || TAG(r) == T_PURE)) r = rt_force(perform(r));
+    if (export_is_seq(codes[c->n])) return export_out_seq(codes[c->n], r, (int64_t *)(intptr_t)a[j], c->name, c->pos);
+    return export_out(codes[c->n], r, c->name, c->pos);
+}
+
+int64_t rt_export(V *slot, int32_t n, const char *codes, int64_t *a, const char *name, int32_t pos) {
+    ExportCall c = {slot, n, codes, a, name, pos};
+    return lib_run(export_call, &c);
+}
+
+/* --- 中を見ない手札(#208 段階3) ---
+ * 数・文字列などで渡せない値(組・ほかのリスト・関数など)は、手札(malloc した LibHandle の番地)で渡す。
+ * 手札は rt_lib_release で手放すまで GC の根になる。手札の中身は補助の関数(頭の名前_len・_get・_field など)で読む */
+typedef struct LibHandle { V v; struct LibHandle *prev, *next; } LibHandle;
+static pthread_mutex_t handle_mu = PTHREAD_MUTEX_INITIALIZER;
+static LibHandle *handles;
+
+static void *handle_new(V v) {
+    LibHandle *h = malloc(sizeof *h);
+    if (!h) gc_oom();
+    h->v = v;
+    h->prev = NULL;
+    pthread_mutex_lock(&handle_mu);
+    h->next = handles;
+    if (handles) handles->prev = h;
+    handles = h;
+    pthread_mutex_unlock(&handle_mu);
+    return h;
+}
+
+static V handle_v(const void *h) {
+    if (!h) fail(0, "手札が NULL です");
+    return rt_force(((const LibHandle *)h)->v);
+}
+
+static void export_mark_handles(void) {
+    pthread_mutex_lock(&handle_mu);
+    for (LibHandle *h = handles; h; h = h->next) gc_mark((uintptr_t)h->v);
+    pthread_mutex_unlock(&handle_mu);
+}
+
+/* 手札を手放す(する の世界に入らないので、いつでも呼べる。NULL なら何もしない) */
+void rt_lib_release(void *p) {
+    LibHandle *h = p;
+    if (!h) return;
+    pthread_mutex_lock(&handle_mu);
+    if (h->prev) h->prev->next = h->next;
+    else handles = h->next;
+    if (h->next) h->next->prev = h->prev;
+    pthread_mutex_unlock(&handle_mu);
+    free(h);
+}
+
+typedef struct { const void *h; int64_t i; double d; const char *s; void *const *items; int64_t n; } LibArgs;
+
+static int64_t lib_type(void *p) { return (int64_t)(intptr_t)type_name_of(handle_v(((LibArgs *)p)->h)); }
+static int64_t lib_show(void *p) { return (int64_t)(intptr_t)show(handle_v(((LibArgs *)p)->h)); }
+static int64_t lib_len(void *p) {
+    V v = handle_v(((LibArgs *)p)->h);
+    if (TAG(v) == T_LIST) return AS(List, v)->n;
+    if (TAG(v) == T_BYTES) return AS(Bytes, v)->n;
+    fail(0, "手札の長さを読めません(リストかバイト列ではなく「%s」でした)", type_name_of(v));
+}
+static int64_t lib_get(void *p) {
+    LibArgs *x = p;
+    V v = handle_v(x->h);
+    if (TAG(v) != T_LIST) fail(0, "手札の要素を読めません(リストではなく「%s」でした)", type_name_of(v));
+    if (x->i < 0 || x->i >= AS(List, v)->n)
+        fail(0, "手札のリストの %lld 番目はありません(番号は 0 から %lld まで)", (long long)x->i, (long long)AS(List, v)->n - 1);
+    return (int64_t)(intptr_t)handle_new(rt_force(AS(List, v)->it[x->i]));
+}
+static int64_t lib_field(void *p) {
+    LibArgs *x = p;
+    V v = handle_v(x->h);
+    if (!x->s) fail(0, "項目の名前が NULL です");
+    if (TAG(v) != T_REC) fail(0, "手札の項目「%s」を読めません(組ではなく「%s」でした)", x->s, type_name_of(v));
+    return (int64_t)(intptr_t)handle_new(rt_force(rt_field(v, x->s, 0)));
+}
+static int64_t lib_to_int(void *p) { return export_out('l', handle_v(((LibArgs *)p)->h), "手札", 0); }
+static int64_t lib_to_double(void *p) { return export_out('d', handle_v(((LibArgs *)p)->h), "手札", 0); }
+static int64_t lib_to_bool(void *p) { return export_out('b', handle_v(((LibArgs *)p)->h), "手札", 0); }
+static int64_t lib_to_string(void *p) { return export_out('s', handle_v(((LibArgs *)p)->h), "手札", 0); }
+static int64_t lib_from_int(void *p) { return (int64_t)(intptr_t)handle_new(export_in('l', ((LibArgs *)p)->i, "手札", 0)); }
+static int64_t lib_from_double(void *p) { return (int64_t)(intptr_t)handle_new(rt_float(((LibArgs *)p)->d)); }
+static int64_t lib_from_bool(void *p) { return (int64_t)(intptr_t)handle_new(rt_bool(((LibArgs *)p)->i != 0)); }
+static int64_t lib_from_string(void *p) {
+    LibArgs *x = p;
+    if (!x->s) fail(0, "文字列が NULL です");
+    return (int64_t)(intptr_t)handle_new(cstr(x->s));
+}
+static int64_t lib_list(void *p) {
+    LibArgs *x = p;
+    if (x->n < 0) fail(0, "リストの長さ %lld が負です", (long long)x->n);
+    if (x->n > 0 && !x->items) fail(0, "リストの番地が NULL です(長さは %lld)", (long long)x->n);
+    if (x->n == 0) return (int64_t)(intptr_t)handle_new(V_EMPTY);
+    List *l = new_list(x->n);
+    V lv = (V)(intptr_t)l;
+    for (int64_t i = 0; i < x->n; i++) l->it[i] = handle_v(x->items[i]);
+    return (int64_t)(intptr_t)handle_new(lv);
+}
+static int64_t lib_call(void *p) {
+    LibArgs *x = p;
+    V f = handle_v(x->h);
+    if (x->n < 0 || x->n > 16) fail(0, "引数の数 %lld は使えません(0 から 16 まで)", (long long)x->n);
+    if (x->n > 0 && !x->items) fail(0, "引数の番地が NULL です(数は %lld)", (long long)x->n);
+    V args[16];
+    for (int64_t i = 0; i < x->n; i++) args[i] = handle_v(x->items[i]);
+    V r = rt_force(apply(f, (int)x->n, args, 0));
+    if (TAG(r) == T_ACT || TAG(r) == T_PURE) r = rt_force(perform(r));
+    return (int64_t)(intptr_t)handle_new(r);
+}
+
+#define LIB_RUN(fn, ...) lib_run(fn, &(LibArgs){__VA_ARGS__})
+const char *rt_lib_type(const void *h) { return (const char *)(intptr_t)LIB_RUN(lib_type, .h = h); }
+char *rt_lib_show(const void *h) { return (char *)(intptr_t)LIB_RUN(lib_show, .h = h); }
+int64_t rt_lib_len(const void *h) { return LIB_RUN(lib_len, .h = h); }
+void *rt_lib_get(const void *h, int64_t i) { return (void *)(intptr_t)LIB_RUN(lib_get, .h = h, .i = i); }
+void *rt_lib_field(const void *h, const char *name) { return (void *)(intptr_t)LIB_RUN(lib_field, .h = h, .s = name); }
+int64_t rt_lib_to_int(const void *h) { return LIB_RUN(lib_to_int, .h = h); }
+double rt_lib_to_double(const void *h) {
+    int64_t r = LIB_RUN(lib_to_double, .h = h);
+    double d;
+    memcpy(&d, &r, sizeof d);
+    return d;
+}
+int rt_lib_to_bool(const void *h) { return (int)LIB_RUN(lib_to_bool, .h = h); }
+char *rt_lib_to_string(const void *h) { return (char *)(intptr_t)LIB_RUN(lib_to_string, .h = h); }
+void *rt_lib_from_int(int64_t x) { return (void *)(intptr_t)LIB_RUN(lib_from_int, .i = x); }
+void *rt_lib_from_double(double x) { return (void *)(intptr_t)LIB_RUN(lib_from_double, .d = x); }
+void *rt_lib_from_bool(int x) { return (void *)(intptr_t)LIB_RUN(lib_from_bool, .i = x); }
+void *rt_lib_from_string(const char *s) { return (void *)(intptr_t)LIB_RUN(lib_from_string, .s = s); }
+void *rt_lib_list(void *const *items, int64_t n) { return (void *)(intptr_t)LIB_RUN(lib_list, .items = items, .n = n); }
+void *rt_lib_call(const void *f, void *const *args, int64_t n) {
+    return (void *)(intptr_t)LIB_RUN(lib_call, .h = f, .items = args, .n = n);
 }
 
 /* ------------------------------------------------------------------ */

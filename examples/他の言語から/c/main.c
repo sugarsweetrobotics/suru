@@ -16,6 +16,16 @@ int main(void) {
     keisan_free(s); /* 返った文字列は呼んだ側が解放する / the caller frees returned strings */
     printf("hanbun(5) = %g\n", hanbun(5.0));
     printf("sei(-1) = %d\n", sei(-1));
+    int64_t xs[] = {1, 2, 3, 4}; /* 数 の リスト は番地と長さ / a pointer and a length */
+    printf("goukei([1, 2, 3, 4]) = %" PRId64 "\n", goukei(xs, 4));
+    keisan_value *p = ten(3, 4); /* 点 は手札 / a handle */
+    char *shown = keisan_show(p);
+    printf("ten(3, 4) = %s\n", shown);
+    keisan_free(shown);
+    keisan_value *y = keisan_field(p, "縦");
+    printf("ten(3, 4).縦 = %" PRId64 "\n", keisan_to_int(y));
+    keisan_release(y); /* 手札は keisan_release で手放す / release handles */
+    keisan_release(p);
     fflush(stdout);
     kiroku("記録します");
 

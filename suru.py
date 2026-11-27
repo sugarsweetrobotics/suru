@@ -4162,15 +4162,23 @@ def _attach_externs(statements: list) -> None:
 
 # 外部に出す C の名前に使えない頭(実行時ライブラリと IR の名前)
 EXPORT_RESERVED = ("rt_", "suru_", "gc_")
-# 外部に出す関数の引数と値に使える型(書く順。無は値だけ)
-EXPORT_TYPE_NAMES = ("数", "小数", "単精度", "整数", "真偽", "文字列", "番地", "無")
+# 外部に出す関数で、C の値でそのまま渡せる型(無は値だけ)
+EXPORT_TYPE_NAMES = ("数", "小数", "単精度", "整数", "真偽", "文字列", "番地", "バイト列", "無")
+# 外部に出す関数に使えるリストの型(要素の型 → 型の名前、#208 段階3)。C では番地と長さの2つで渡す
+EXPORT_LIST_TYPES = {"数": "list_i64", "小数": "list_f64", "文字列": "list_str"}
 
 
 def _export_type(te: Any, e: Export, what: str) -> str:
-    names = EXPORT_TYPE_NAMES if what == "値" else EXPORT_TYPE_NAMES[:-1]
-    if isinstance(te, TypeName) and not te.args and te.name in names:
+    """出す関数の引数・値の型 → C での渡し方。数などはそのまま、数・小数・文字列のリストとバイト列は番地と長さ、
+    ほかの型(組・ほかのリスト・関数など)は中を見ない手札(val)で渡す(#208 段階3)"""
+    if isinstance(te, TypeName) and not te.args and te.name in EXPORT_TYPE_NAMES:
+        if te.name == "無" and what != "値":
+            raise SuruError(f"外部に出す関数「{e.name}」の{what}に 無 は使えません(無 は値だけに書けます)", e.line)
         return FFI_TYPES[te.name]
-    raise SuruError(f"外部に出す関数「{e.name}」の{what}には {'・'.join(names)} のどれかの型を書いてください", e.line)
+    if (isinstance(te, TypeName) and te.name == "リスト" and len(te.args) == 1 and isinstance(te.args[0], TypeName)
+            and not te.args[0].args and te.args[0].name in EXPORT_LIST_TYPES):
+        return EXPORT_LIST_TYPES[te.args[0].name]
+    return "val"
 
 
 def _attach_exports(statements: list) -> None:

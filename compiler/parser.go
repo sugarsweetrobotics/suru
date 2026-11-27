@@ -3361,23 +3361,35 @@ func attachExports(statements []Node) {
 	}
 }
 
-// exportTypeNames は外部に出す関数の引数と値に使える型(書く順)
-var exportTypeNames = []string{"数", "小数", "単精度", "整数", "真偽", "文字列", "番地", "無"}
+// exportTypeNames は外部に出す関数で、C の値でそのまま渡せる型(無は値だけ)
+var exportTypeNames = []string{"数", "小数", "単精度", "整数", "真偽", "文字列", "番地", "バイト列", "無"}
 
+// exportListTypes は外部に出す関数に使えるリストの型(要素の型 → 型の名前、#208 段階3)。C では番地と長さの2つで渡す
+var exportListTypes = []string{"数", "list_i64", "小数", "list_f64", "文字列", "list_str"}
+
+// exportType は出す関数の引数・値の型 → C での渡し方。数などはそのまま、数・小数・文字列のリストとバイト列は番地と長さ、
+// ほかの型(組・ほかのリスト・関数など)は中を見ない手札(val)で渡す(#208 段階3)
 func exportType(te Node, e *Export, what string) string {
-	names := exportTypeNames
-	if what != "値" {
-		names = names[:len(names)-1]
-	}
 	if tn, ok := te.(*TypeName); ok && len(tn.Args) == 0 {
-		for _, n := range names {
+		for _, n := range exportTypeNames {
 			if n == tn.Name {
+				if n == "無" && what != "値" {
+					raise(e.Line, "外部に出す関数「"+e.Name+"」の"+what+"に 無 は使えません(無 は値だけに書けます)")
+				}
 				return ffiTypes[n]
 			}
 		}
 	}
-	raise(e.Line, "外部に出す関数「"+e.Name+"」の"+what+"には "+strings.Join(names, "・")+" のどれかの型を書いてください")
-	return ""
+	if tn, ok := te.(*TypeName); ok && tn.Name == "リスト" && len(tn.Args) == 1 {
+		if el, ok := tn.Args[0].(*TypeName); ok && len(el.Args) == 0 {
+			for k := 0; k < len(exportListTypes); k += 2 {
+				if exportListTypes[k] == el.Name {
+					return exportListTypes[k+1]
+				}
+			}
+		}
+	}
+	return "val"
 }
 
 func isCSymbol(sym string) bool {

@@ -181,15 +181,6 @@ func targetDarwin() bool {
 	return strings.Contains(t, "apple") || strings.Contains(t, "darwin")
 }
 
-// libShim は補助の関数(頭の名前_init・_last_error・_free)を出す小さな C のファイルの中身
-func libShim(prefix string) string {
-	return "#define E __attribute__((visibility(\"default\")))\n" +
-		"int rt_lib_init(void);\nconst char *rt_lib_last_error(void);\nvoid rt_lib_free(void *);\n" +
-		"E int " + prefix + "_init(void) { return rt_lib_init(); }\n" +
-		"E const char *" + prefix + "_last_error(void) { return rt_lib_last_error(); }\n" +
-		"E void " + prefix + "_free(void *p) { rt_lib_free(p); }\n"
-}
-
 // BuildShared は llPath の LLVM IR を、共有ライブラリの形の実行時ライブラリとつないで共有ライブラリにし、
 // 同じ所に C のヘッダ(頭の名前.h)も書く(#208)。
 // 外に見せるのは、出す関数と補助の関数だけ(実行時ライブラリの名前は隠すので、する のライブラリが2つあってもぶつからない)
@@ -214,14 +205,14 @@ func BuildShared(llPath, out, opt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	syms := append(compiler.ExportSymbols(string(ir)), prefix+"_init", prefix+"_last_error", prefix+"_free")
+	syms := append(compiler.ExportSymbols(string(ir)), compiler.LibHelperSymbols(prefix)...)
 	dir, err := os.MkdirTemp("", "suru-lib-")
 	if err != nil {
 		return "", err
 	}
 	defer os.RemoveAll(dir)
 	shim := filepath.Join(dir, "shim.c")
-	if err := os.WriteFile(shim, []byte(libShim(prefix)), 0o644); err != nil {
+	if err := os.WriteFile(shim, []byte(compiler.LibShim(prefix)), 0o644); err != nil {
 		return "", err
 	}
 	args := append(TargetArgs(), opt, "-w", "-fPIC", llPath, rt, shim, "-o", lib)

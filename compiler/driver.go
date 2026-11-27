@@ -91,9 +91,19 @@ func compileSource(source, baseDir, path string, check, lib bool) (ir string, er
 		checkDefinitions(program, ctx)
 		setLineBase(ctx, source)
 		ir = newCompiler(ctx, source).compile(program, path)
+		if lib {
+			ir = strings.Replace(ir, spTickExe, spTickLib, 1)
+		}
 	})
 	return
 }
+
+// 共有ライブラリでは、スレッドごとの変数をライブラリの中だけで使う形で読む
+// (localexec は実行ファイルでしか使えない。再帰の安全点が rt_sp_tick を使う、#208)
+const (
+	spTickExe = "@rt_sp_tick = external thread_local(localexec) global i32"
+	spTickLib = "@rt_sp_tick = external hidden thread_local global i32"
+)
 
 // CheckSource は する のプログラムの構文と型だけを調べる(suru --検査 と同じ)。間違いがあれば *SuruError
 func CheckSource(source, baseDir, path string) *SuruError {
