@@ -10,6 +10,7 @@
 //	suruc --検査 prog.suru      # 構文と型だけを調べる(suru --検査 と同じ)
 //	suruc --json prog.suru     # エラーを1行の JSON で出す(suru --json と同じ形)
 //	suruc --展開 prog.suru     # 準クォートを展開したソースを出す
+//	suruc --文書 lib/          # 公開の名前の API ドキュメントを Markdown で出す(--json・--出力 フォルダ)
 //	suruc --共有ライブラリ prog.suru -o libprog.so  # 他の言語から呼べる共有ライブラリ(#208)
 package main
 
@@ -32,7 +33,8 @@ import (
 var version = "0.10.1"
 
 const usage = "使い方: suruc [--ll] [--検査 | --検査なし | --展開] [--共有ライブラリ] [--json] [-O0|-O1|-O2|-O3] [--対象 基板] プログラム.suru [-o 出力]\n" +
-	"       suruc --試験 [-O0|-O1|-O2|-O3] ファイルかフォルダ … [名前 …]"
+	"       suruc --試験 [-O0|-O1|-O2|-O3] ファイルかフォルダ … [名前 …]\n" +
+	"       suruc --文書 [--json] [--出力 フォルダ] ファイルかフォルダ …"
 
 // runTests は「suruc --試験 ファイルかフォルダ … [名前 …]」(#193): 試験のまとまり・例・「…試験する」を、
 // ファイルごとに1つのバイナリにして動かす。道でない引数は名前の一部。不合格があれば 1
@@ -90,6 +92,9 @@ func run(args []string) int {
 	}
 	if len(args) >= 1 && (args[0] == "--試験" || args[0] == "--test") {
 		return runTests(args[1:])
+	}
+	if len(args) >= 1 && (args[0] == "--文書" || args[0] == "--doc") {
+		return compiler.DocCommand(args[1:], os.Stdout, os.Stderr) // API ドキュメント(#209)
 	}
 	llOnly := false
 	check := true

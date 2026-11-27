@@ -1623,7 +1623,21 @@ x を 二倍する とは x * 2 です
 
 1. **The comment right above a definition is its description.** The comment lines (`#`, `＃`, `※`) written directly above the type declaration (or the definition, when there is none), with no blank line between, are the description of that definition. No new syntax was added, so existing comments already work as descriptions. The text after the comment mark and one space is joined line by line as Markdown; a line with only `#` is an empty line (a paragraph break). `# 点検しない` lines are left out (#209).
 2. **The comment at the head of a file describes the file.** The comment lines starting at line 1 are the description of the file (module), without the `SPDX-License-Identifier:` and `Copyright` lines. Even when a definition follows the head comment with no blank line, that comment is not the definition's description.
-3. **Shown on hover in the language server.** Hovering a name shows its description after the type, also for public definitions of imported files (such as `数学内の二乗する`). The Python version (`doc_comments` in `suru.py`) and the Go version (`compiler.DocComments`) read them by the same rules. A tool that makes API documentation from the descriptions comes in a later stage.
+3. **Shown on hover in the language server.** Hovering a name shows its description after the type, also for public definitions of imported files (such as `数学内の二乗する`). The Python version (`doc_comments` in `suru.py`) and the Go version (`compiler.DocComments`) read them by the same rules. API documentation is made from the descriptions with `--文書` (see "API documentation (--文書)").
+
+### API documentation (--文書)
+
+```
+suru --文書 lib/算術.suru                  # Markdown を画面に出す
+suruc --文書 --出力 文書/api lib/          # フォルダの中の .suru ごとに 文書/api/名前.md を書く
+suru --文書 --json lib/算術.suru           # 同じ中身を1ファイル1行の JSON で出す
+```
+
+1. **Lists the public names one by one.** `suru --文書` and `suruc --文書` (also `--doc`) write API documentation listing the public types, traits, values and functions of a file (for a folder, the `.suru` files in it; subfolders are not read) in the order they are written. Names in `… は 非公開とする`, test groups and examples are not listed as names (#209).
+2. **What each name shows.** The type declaration as written (for types and traits, the definition, with its indented continuation lines), for functions the usage (`x を 二倍する`, from the parameter names of a definition without patterns), the description (see "Descriptions of definitions") and the examples of that definition (`例えば … は … です`). Functions and values without a type declaration get no type. A declaration inside an `以下は外部の…です` block is that one line.
+3. **Markdown layout.** The file name as the title (`# 「算術」`), then the file description, then one `## 名前` section per name. Code is fenced with ` ```suru `, so Sphinx's MyST reads it too. `--json` gives JSON with `file`, `module`, `description` and `items` (`name`, `kind` (関数・値・型・性質), `line`, `signature`, `usage`, `description`, `examples`).
+4. **`--出力 フォルダ` writes files.** One `名前.md` per file (`名前.json` with `--json`). Without it, everything goes to standard output. A file that cannot be read (a syntax error, an imported file not found, …) is reported and skipped, and the exit code is 1.
+5. **The Python and Go versions give the same output.** `tests/test_doc.py` checks that both give the same Markdown and JSON for every file in `lib/`. Sphinx settings, `kumu 文書` and publishing on Read the Docs are later stages.
 
 ## License
 

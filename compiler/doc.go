@@ -1,6 +1,11 @@
 package compiler
 
-import "strings"
+import (
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
 
 // 定義の説明(#209): 定義の型の宣言(なければ定義)のすぐ上に、空行をはさまずに書いた注釈の行がその説明。
 // ファイルの頭の注釈(SPDX-License-Identifier と Copyright の行を除く)がファイル(モジュール)の説明。
@@ -118,4 +123,205 @@ func docText(lines []string, head bool) string {
 		out = out[:len(out)-1]
 	}
 	return strings.Join(out, "\n")
+}
+
+// DocItem は API ドキュメントの1つの名前(#209)
+type DocItem struct {
+	Name        string   `json:"name"`
+	Kind        string   `json:"kind"` // 関数・値・型・性質
+	Line        int      `json:"line"`
+	Signature   string   `json:"signature"`   // 書いた型の宣言(型・性質なら定義)。なければ ""
+	Usage       string   `json:"usage"`       // 関数の使い方(「x を 二倍する」)。関数でなければ ""
+	Description string   `json:"description"` // すぐ上の注釈
+	Examples    []string `json:"examples"`    // 「例えば … は … です」
+}
+
+// DocFile は1つのファイルの API ドキュメント
+type DocFile struct {
+	File        string    `json:"file"`
+	Module      string    `json:"module"` // 読み込むときの名前(ファイルの名前から .suru を除いたもの)
+	Description string    `json:"description"`
+	Items       []DocItem `json:"items"`
+}
+
+// DocumentFile は path のファイルを解析して、公開の名前の API ドキュメントを作る
+func DocumentFile(path string) (doc *DocFile, err error) {
+	b, rerr := os.ReadFile(path)
+	if rerr != nil {
+		return nil, rerr
+	}
+	source := string(b)
+	c := NewParseContext(filepath.Dir(absPath(path)))
+	c.Path = filePath(path)
+	var program []Node
+	if e := try(func() { program = ParseProgram(source, c) }); e != nil {
+		return nil, e
+	}
+	var private map[string]bool
+	if e := try(func() { private = privateNames(program) }); e != nil {
+		return nil, e
+	}
+	d := Document(source, program, private)
+	d.File = path
+	d.Module = strings.TrimSuffix(filepath.Base(path), ".suru")
+	return d, nil
+}
+
+// Document は解析したプログラムから API ドキュメントを作る(private は外から見えない名前)
+func Document(source string, program []Node, private map[string]bool) *DocFile {
+	lines := SplitLines(source)
+	module, descs := DocComments(source, program)
+	d := &DocFile{Description: module, Items: []DocItem{}}
+	index := map[string]int{}
+	item := func(name string, line int) *DocItem {
+		if i, ok := index[name]; ok {
+			if line < d.Items[i].Line {
+				d.Items[i].Line = line
+			}
+			return &d.Items[i]
+		}
+		index[name] = len(d.Items)
+		d.Items = append(d.Items, DocItem{Name: name, Line: line, Description: descs[name], Examples: []string{}})
+		return &d.Items[len(d.Items)-1]
+	}
+	var examples []*Define
+	var add func(n Node)
+	add = func(n Node) {
+		switch x := n.(type) {
+		case *Block:
+			for _, s := range x.Statements {
+				add(s)
+			}
+		case *Define:
+			if x.Example != nil && x.Test != "" {
+				examples = append(examples, x)
+				return
+			}
+			if x.Test != "" || strings.HasPrefix(x.Name, "\x00") || private[x.Name] {
+				return
+			}
+			it := item(x.Name, x.Line.Line)
+			if x.IsFunction {
+				it.Kind = DocKindFunction
+				simple := true
+				for _, p := range x.Params {
+					if p.Pat != nil {
+						simple = false
+					}
+				}
+				if it.Usage == "" || simple && strings.Contains(it.Usage, "…") {
+					it.Usage = docUsage(x.Name, x.Params)
+				}
+			} else if it.Kind == "" {
+				it.Kind = DocKindValue
+			}
+		case *TypeSig:
+			if private[x.Name] {
+				return
+			}
+			it := item(x.Name, x.Line.Line)
+			it.Signature = statementText(lines, x.Line.Line)
+			if x.HasParams {
+				it.Kind = DocKindFunction
+			} else if it.Kind == "" {
+				it.Kind = DocKindValue
+			}
+		case *TypeDef:
+			it := item(x.Name, x.Line.Line)
+			it.Kind, it.Signature = DocKindType, statementText(lines, x.Line.Line)
+		case *TraitDecl:
+			it := item(x.Name, x.Line.Line)
+			it.Kind, it.Signature = DocKindTrait, statementText(lines, x.Line.Line)
+		}
+	}
+	for _, s := range program {
+		add(s)
+	}
+	for _, x := range examples {
+		if i, ok := index[strings.TrimSuffix(x.Test, "の例")]; ok {
+			d.Items[i].Examples = append(d.Items[i].Examples, statementText(lines, x.Line.Line))
+		}
+	}
+	sort.SliceStable(d.Items, func(i, j int) bool { return d.Items[i].Line < d.Items[j].Line })
+	return d
+}
+
+// docUsage は usage と同じ使い方を作る。引数の名前に付いた「表内の」は除く(読み込んだファイルの形と同じ名前の引数)
+func docUsage(name string, params []Param) string {
+	ps := make([]Param, len(params))
+	for i, p := range params {
+		ps[i] = p
+		ps[i].Name = shortName(p.Name)
+		if p.Names != nil {
+			ps[i].Names = make([]string, len(p.Names))
+			for j, n := range p.Names {
+				ps[i].Names[j] = shortName(n)
+			}
+		}
+	}
+	return usage(name, ps)
+}
+
+func shortName(n string) string {
+	if i := strings.LastIndex(n, ModuleSep); i >= 0 {
+		return n[i+len(ModuleSep):]
+	}
+	return n
+}
+
+// 名前の種類
+const (
+	DocKindFunction = "関数"
+	DocKindValue    = "値"
+	DocKindType     = "型"
+	DocKindTrait    = "性質"
+)
+
+// statementText は line(1 から)から始まる一番外の文の字句: その行と、続く字下げした行
+func statementText(lines []string, line int) string {
+	if line < 1 || line > len(lines) {
+		return ""
+	}
+	first := lines[line-1]
+	if t := strings.TrimLeft(first, " \t　"); t != first {
+		// まとまり(以下は外部の…です)の中の行は、その1行だけ
+		return strings.TrimRight(t, " \t\r")
+	}
+	out := []string{strings.TrimRight(first, " \t\r")}
+	for i := line; i < len(lines); i++ {
+		l := lines[i]
+		if strings.TrimSpace(l) == "" || !(strings.HasPrefix(l, " ") || strings.HasPrefix(l, "\t") || strings.HasPrefix(l, "　")) {
+			break
+		}
+		if _, ok := commentText(l); ok {
+			break
+		}
+		out = append(out, strings.TrimRight(l, " \t\r"))
+	}
+	return strings.Join(out, "\n")
+}
+
+// Markdown は API ドキュメントを Markdown(MyST でも読める形)にする
+func (d *DocFile) Markdown() string {
+	var b strings.Builder
+	b.WriteString("# 「" + d.Module + "」\n")
+	if d.Description != "" {
+		b.WriteString("\n" + d.Description + "\n")
+	}
+	for _, it := range d.Items {
+		b.WriteString("\n## " + it.Name + "\n")
+		if it.Signature != "" {
+			b.WriteString("\n```suru\n" + it.Signature + "\n```\n")
+		}
+		if it.Usage != "" {
+			b.WriteString("\n使い方: `" + it.Usage + "`\n")
+		}
+		if it.Description != "" {
+			b.WriteString("\n" + it.Description + "\n")
+		}
+		if len(it.Examples) > 0 {
+			b.WriteString("\n例:\n\n```suru\n" + strings.Join(it.Examples, "\n") + "\n```\n")
+		}
+	}
+	return b.String()
 }
