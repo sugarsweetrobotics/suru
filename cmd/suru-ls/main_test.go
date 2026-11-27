@@ -309,3 +309,19 @@ func TestSeveralSyntaxErrors(t *testing.T) {
 		t.Fatalf("構文の間違い2つと型の間違い1つが出ていません: %v", d)
 	}
 }
+
+func TestTestSymbols(t *testing.T) {
+	// 試験のまとまりと例は、表示の名前で定義の一覧に出す(中だけの名前「《例》3」は出さない #193)
+	setupLib()
+	src := "数 を 二倍する は 数\nx を 二倍する とは x * 2\n例えば （2 を 二倍する） は 4 です\n\n以下は「二倍」の試験です\n  （2 を 二倍する） を 4 に 一致確認する\n  以上です\n"
+	msgs := talk(t, open(uri, src),
+		map[string]any{"id": 1, "method": "textDocument/documentSymbol", "params": map[string]any{"textDocument": map[string]any{"uri": uri}}},
+		at(2, "textDocument/hover", uri, 5, 9))
+	s := result(t, msgs, 1)
+	if !strings.Contains(s, `"name":"二倍するの例(3行)"`) || !strings.Contains(s, `"detail":"試験","kind":12,"location":{"range":{"end":{"character":12,"line":4},"start":{"character":0,"line":4}}`) || strings.Contains(s, "《") {
+		t.Fatalf("定義の一覧: %s", s)
+	}
+	if h := result(t, msgs, 2); !strings.Contains(h, "二倍する は （数 を 受け取って 数 を 返すこと）") {
+		t.Fatalf("試験のまとまりの中のホバー: %s", h)
+	}
+}

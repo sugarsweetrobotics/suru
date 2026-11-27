@@ -67,6 +67,20 @@ def build() -> dict:
             "name": "comment.line.suru",
             "match": "(?<![^\\s　、。（）()」])[#＃※].*$",
         },
+        # 試験のまとまりの頭「以下は「二倍」の試験です」と、例の「例えば」(#193)
+        "test": {
+            "patterns": [
+                {
+                    "match": f"{not_before}(以下[ 　]*は[ 　]*)(「[^「」]*」)([ 　]*の[ 　]*試験)",
+                    "captures": {
+                        "1": {"name": "keyword.control.suru"},
+                        "2": {"name": "string.quoted.other.suru"},
+                        "3": {"name": "keyword.control.suru"},
+                    },
+                },
+                {"name": "keyword.control.suru", "match": f"^[ 　]*{suru.KW_EXAMPLE}{not_after}"},
+            ]
+        },
         "string": {
             "patterns": [
                 # 文字列の中の「」は入れ子として数える(「失敗: 「abc」は数にできません」)
@@ -180,7 +194,7 @@ def build() -> dict:
 
     def rules(call_rule):
         return [{"include": f"#{k}"} for k in
-                ["comment", "string", "quoted-name", "import", "module", "lambda", "returns", "builtin", call_rule,
+                ["comment", "test", "string", "quoted-name", "import", "module", "lambda", "returns", "builtin", call_rule,
                  "kanji-keyword", "number", "operator", "punctuation", "hiragana", "name"]]
 
     # 「。」か「、」を含む行(文字列・『』・コメントの中は数えない)は句読点の書き方、それ以外は空白の書き方

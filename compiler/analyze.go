@@ -36,6 +36,13 @@ type TypeInfo struct {
 	Def  bool
 }
 
+// TestSymbol は試験のまとまりか例の、書いた行と表示の名前(「二倍」「二倍するの例(4行)」)
+type TestSymbol struct {
+	Label   string
+	Line    int
+	Example bool
+}
+
 // Definition は名前を定義したところ(File が "" なら本体)
 type Definition struct {
 	Name string
@@ -53,6 +60,7 @@ type Analysis struct {
 	Usages      map[string]string // 関数の名前 → 使い方(「n を 三倍する」)
 	Names       []NamePos         // 名前の単語が書かれたところ全部(引数の名前の変更に使う)
 	Statements  []int             // 一番外の文の始まりの行(昇順)
+	Tests       []TestSymbol      // 試験のまとまりと例(定義の一覧に出す)
 	Words       []Word            // 型・形・性質・フィールドの名前が書かれたところ(色分け用)
 	// Starts は行ごとの単語の始まり(何文字目か、昇順)。ホバーの範囲を決めるのに使う
 	Starts map[int][]int
@@ -125,6 +133,9 @@ func AnalyzeFile(source, baseDir, path string) (a *Analysis) {
 			if l := firstLine(s); l.Line != 0 {
 				a.Statements = append(a.Statements, l.Line)
 			}
+			if d, ok := s.(*Define); ok && d.Test != "" {
+				a.Tests = append(a.Tests, TestSymbol{testLabel(d), d.Line.Line, d.Example != nil})
+			}
 		}
 		remember := func(c *Checker) {
 			checker = c
@@ -134,6 +145,9 @@ func AnalyzeFile(source, baseDir, path string) (a *Analysis) {
 				}
 				pos := u.Pos
 				name := displayName(u.Name)
+				if u.Def && isTestName(name) {
+					continue // 試験のまとまりと例の中だけの名前(書いたところがない)
+				}
 				if u.Def {
 					pos = nameAt(srcLines, pos, name)
 				}

@@ -18,6 +18,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 8. **`suruc --試験 ファイルかフォルダ [名前]` runs the same tests with the Go compiler.** Each file becomes one test binary (built with -O0 unless another -O is given), and each test runs in its own process. The output is the same as `suru --試験` (#193).
 9. **Deriving JSON.** `会員 は 【JSON】 を 導出する` defines `会員JSON化する` and `会員JSON復元する` (`（会員 と 文字列） の 成否`). Records become objects, and types with several forms get a `形` item. Fields can be `数`, `文字列`, `真偽`, `JSON`, `X の リスト` and other types that derive 【JSON】 (#192).
 10. **`kumu 試験` also runs the test blocks and examples in the project's source files.** Each source file (other than `組.suru` and the files in `試験/` and `出力/`) with tests becomes one test binary, linked with the project's C sources, and runs in the project folder. `kumu 試験 名前` selects them by name as before (#193).
+11. **The tools read test blocks and examples.** `lib/字句.suru` and `lib/構文.suru` (and so `suru --点検`) read `以下は「二倍」の試験です … 以上です` and `例えば … は … です` like `suru.py`, so files in `lib/` can now have tests. The language server lists test blocks and examples in the outline by their test names (`二倍`, `二倍するの例(4行)`), and the VS Code grammar highlights the test head and `例えば` (#193).
 
 ### Fixed
 
