@@ -1692,6 +1692,23 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build
 5. **`suruc --実行 prog.suru args …`.** The same compile-and-run is available from `suruc` directly (`--検査なし`, `--json` and `-O0` to `-O3` can come before the file; the default is `-O0`).
 6. **How much faster.** On Linux x86_64, fib(25) takes 1.57 s with the interpreter, 0.15 s for the first run (compiling included) and 0.08 s after that; mapping and folding 200,000 numbers takes 1.43 s, 0.20 s and 0.09 s. Most of the 0.08 s is starting Python; the binary itself runs fib(25) in 0.005 s. The compiled program behaves the same, except for the differences in "Compiler" (integers up to ±2^62, `大文字にする` changes only Latin letters, deep recursion works).
 
+### Connecting with a time limit
+
+1. **`ホスト に ポート で 秒 を 通信内の期限付き接続する` gives up connecting after that many seconds.** It is `接続する` with a limit on the connection itself (the TCP handshake; looking up the name is not counted). When the time passes, it is the runtime error 「「期限付き接続する」で通信に失敗しました(時間切れ)」, which `試行する` can catch. Fractional seconds work, and the seconds must be more than 0. Once connected, the connection waits as long as `接続する` does; use `待機時間設定する` to limit receives and sends. It is for clients that must not hang on an unreachable peer, such as `curl --connect-timeout`.
+
+```
+「通信」 を 読み込む
+「標準」 を 読み込んで 使う
+
+始めする とは 以下の手順です
+  r とは （「example.com」 に 80 で 5 を 通信内の期限付き接続する） を 試行した 結果
+  r を 表示する
+  以上です
+始めする
+```
+2. **Every timeout has the same reason.** A receive or send that passes the time of `待機時間設定する`, and a connection that passes its limit, all fail with 「…で通信に失敗しました(時間切れ)」, on every OS, in the interpreter and in binaries (before, the reason was the OS's own text, such as `Resource temporarily unavailable` or `timed out`). Programs can tell a timeout from other failures by this text.
+3. **`接続 を 通信内の記述子取得する` gives the OS socket number.** It is for handing a connection to a C library, such as OpenSSL's `SSL_set_fd`, so that a TLS connection can use `期限付き接続する` and `待機時間設定する` too. The connection still belongs to Suru: close it with `切断する` after the library is done. In the interpreter, `待機時間設定する` on such a connection sets the OS timeouts (`SO_RCVTIMEO` and `SO_SNDTIMEO`) like a binary does, so the C library sees a blocking socket.
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)

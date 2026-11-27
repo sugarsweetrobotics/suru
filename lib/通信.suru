@@ -9,6 +9,8 @@
 # - `ポート を アドレス に 待受開始する`: listens only on that address (「127.0.0.1」 accepts only from the same machine)
 # - `待受口 から 接続受付する`: the number of a connection (waits for the next one)
 # - `ホスト に ポート で 接続する`: the number of a connection (connecting out; the host is a name or an IP address)
+# - `ホスト に ポート で 秒 を 期限付き接続する`: the same, giving up after that many seconds (「(時間切れ)」)
+# - `接続 を 記述子取得する`: the OS socket number of a connection (to hand it to a C library such as OpenSSL; close it with `切断する`)
 # - `接続 から 行受信する`: one line as a string (with the newline; 「」 if the other side closed)
 # - `接続 から バイト数 を 受信する`: a string of up to that many bytes (read as UTF-8)
 # - `接続 から バイト数 を バイト列受信する`: up to that many bytes (not broken in the middle of a character)
@@ -16,7 +18,7 @@
 # - `バイト列 を 接続 へ バイト列送信する`: the number of bytes sent (the bytes as they are)
 # - `番号 を 切断する`: closes a connection or listener (gives the number)
 #
-# When communication fails (for example when the other side disconnects) it is the runtime error 「通信に失敗しました」.
+# When communication fails (for example when the other side disconnects) it is the runtime error 「通信に失敗しました」. A timeout (of `待機時間設定する` or `期限付き接続する`) has the reason 「(時間切れ)」.
 #
 # UDP sends and receives one message at a time. There is no connection; messages can be lost or arrive out of order.
 #

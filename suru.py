@@ -6061,6 +6061,7 @@ class _Net:
     def __init__(self) -> None:
         self.socks: dict = {}
         self.files: dict = {}  # 接続の読み込み用(行で読むため)
+        self.raw: set = set()  # 記述子取得する で C に渡した接続(待つ時間は OS の設定で決める)
         self.next = 1
 
     def add(self, sock: Any) -> int:
@@ -6105,6 +6106,8 @@ def _net_action(name: str, run: Any) -> Any:
         def perform(it2: "Interpreter") -> Any:
             try:
                 return run(_net(it2), a, line)
+            except TimeoutError:  # 待機時間設定する・期限付き接続する の時間切れ(OS によらず同じ文に)
+                raise SuruError(f"「{name}」で通信に失敗しました(時間切れ)", line) from None
             except OSError as e:
                 raise SuruError(f"「{name}」で通信に失敗しました({e.strerror or e})", line) from None
         return Action(name, perform)
@@ -6142,16 +6145,22 @@ def _listen(net: _Net, a: dict, line: int) -> int:
     return net.add(sock)
 
 
-def _connect(net: _Net, a: dict, line: int) -> int:
+def _connect(net: _Net, a: dict, line: int, name: str = "接続する") -> int:
     import socket
     host = _str(a["に"], "「接続する」の「に」", line)
     port = _num(a["で"], line)
     if not isinstance(port, int) or not 0 <= port <= 65535:
         raise SuruError(f"「{format_value(a['で'])}」はポートの番号ではありません", line)
+    limit = None  # 期限付き接続する の秒
+    if WO in a:
+        limit = _num(a[WO], line)
+        if isinstance(limit, bool) or not limit > 0:
+            raise SuruError(f"「{format_value(a[WO])}」は待つ秒数ではありません(0 より大きい数です)", line)
     try:
-        sock = socket.create_connection((host, port))
+        sock = socket.create_connection((host, port), timeout=limit)
     except socket.gaierror as e:
-        raise SuruError(f"「接続する」で通信に失敗しました({e.strerror or e})", line) from None
+        raise SuruError(f"「{name}」で通信に失敗しました({e.strerror or e})", line) from None
+    sock.settimeout(None)
     # 応答を待つ時間は区切らない(LLM のように最初の応答まで長くかかる相手もいるため)
     return net.add(sock)
 
@@ -6200,7 +6209,11 @@ def _set_timeout(net: _Net, a: dict, line: int) -> int:
     sec = _num(a["で"], line)
     if isinstance(sec, bool) or sec < 0:
         raise SuruError(f"「{format_value(a['で'])}」は待つ秒数ではありません(0 以上の数です)", line)
-    net.get(a[WO], "接続", line).settimeout(sec if sec > 0 else None)
+    sock = net.get(a[WO], "接続", line)
+    if a[WO] in net.raw:
+        _os_timeout(sock, sec)
+    else:
+        sock.settimeout(sec if sec > 0 else None)
     return a[WO]
 
 
@@ -6208,6 +6221,7 @@ def _close(net: _Net, a: dict, line: int) -> int:
     v = a[WO]
     sock = net.get(v, "待受口か接続", line)
     f = net.files.pop(v, None)
+    net.raw.discard(v)
     if f is not None:
         f.close()
     sock.close()
@@ -6250,6 +6264,26 @@ def _udp_recv(net: _Net, a: dict, line: int) -> Record:
     sys.stdout.flush()  # 待つ前に、それまでの表示を出しておく(コンパイルしたものと同じ)
     data, addr = net.get(a["から"], "UDPの口", line).recvfrom(65536)
     return Record("UDP便", "UDP便", ("中身", "送り主", "ポート"), (data, addr[0], addr[1]))
+
+
+def _sock_fd(net: _Net, a: dict, line: int) -> int:
+    """「接続 を 記述子取得する」: OS のソケットの番号(OpenSSL などの C の関数に渡す)"""
+    sock = net.get(a[WO], "接続", line)
+    net.raw.add(a[WO])
+    return sock.fileno()
+
+
+def _os_timeout(sock: Any, sec: float) -> None:
+    """C が読み書きするソケットは、ブロックするまま OS に待つ時間を決めさせる(コンパイルしたものと同じ)"""
+    import socket
+    import struct
+    sock.settimeout(None)
+    if sys.platform == "win32":
+        v = struct.pack("I", int(sec * 1000))
+    else:
+        v = struct.pack("ll", int(sec), int((sec - int(sec)) * 1e6))
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVTIMEO, v)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, v)
 
 
 def _local_port(net: _Net, a: dict, line: int) -> int:
@@ -6303,6 +6337,8 @@ NET_PRIMITIVES = [
     Builtin("待受開始する", [(WO, True), ("に", False)], _net_action("待受開始する", _listen)),
     Builtin("接続受付する", [("から", True)], _net_action("接続受付する", _accept)),
     Builtin("接続する", [("に", True), ("で", True)], _net_action("接続する", _connect)),
+    Builtin("期限付き接続する", [("に", True), ("で", True), (WO, True)],
+            _net_action("期限付き接続する", lambda net, a, line: _connect(net, a, line, "期限付き接続する"))),
     Builtin("行受信する", [("から", True)], _net_action("行受信する", _recv_line)),
     Builtin("受信する", [("から", True), (WO, True)], _net_action("受信する", _recv)),
     Builtin("バイト列受信する", [("から", True), (WO, True)], _net_action("バイト列受信する", _recv_bytes)),
@@ -6314,6 +6350,7 @@ NET_PRIMITIVES = [
     Builtin("UDPバイト列送信する", [(WO, True), ("から", True), ("に", True), ("で", True)], _net_action("UDPバイト列送信する", _udp_send)),
     Builtin("UDPバイト列受信する", [("から", True)], _net_action("UDPバイト列受信する", _udp_recv)),
     Builtin("ポート取得する", [(WO, True)], _net_action("ポート取得する", _local_port)),
+    Builtin("記述子取得する", [(WO, True)], _net_action("記述子取得する", _sock_fd)),
     Builtin("相手アドレス取得する", [(WO, True)], _net_action("相手アドレス取得する", _peer_addr)),
     Builtin("相手ポート取得する", [(WO, True)], _net_action("相手ポート取得する", _peer_port)),
     Builtin("ブロードキャスト許可する", [(WO, True)], _net_action("ブロードキャスト許可する", _broadcast)),

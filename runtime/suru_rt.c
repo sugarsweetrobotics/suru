@@ -39,6 +39,7 @@
 #include <netdb.h>
 #include <sys/file.h>
 #include <sys/mman.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <unistd.h>
@@ -153,7 +154,7 @@ typedef struct Fn {
 enum { A_SHOW, A_INPUT, A_RUNALL, A_CHAIN, A_FMAP, A_LISTEN, A_ACCEPT, A_CONNECT, A_RECVLINE, A_RECV, A_SEND, A_SENDB, A_CLOSE, A_TRY, A_CALL, A_PEEK, A_POKE, A_ERRNO, A_FAIL, A_ARGS, A_EXIT, A_MEMR, A_MEMW, A_STRUCTR, A_STRUCTW, A_CB_NEW, A_CB_CHAN, A_CB_FREE,
        A_SPAWN, A_JOIN, A_NCPU, A_CH_NEW, A_CH_PIPE, A_CH_FIFO_NEW, A_CH_FIFO_OPEN, A_CH_FIFO_DEL, A_CH_SEND, A_CH_RECV, A_CH_CLOSE, A_CH_EACH,
        A_LOCK_NEW, A_LOCKED, A_SLOT_NEW, A_SLOTTED, A_BOX_NEW, A_BOX_GET, A_BOX_UPDATE, A_BOX_SET, A_FINALLY, A_INPUT_OPT, A_RECVB, A_TIMEOUT,
-       A_UDP_OPEN, A_UDP_SEND, A_UDP_RECV, A_LOCAL_PORT, A_PEER_ADDR, A_PEER_PORT,
+       A_UDP_OPEN, A_UDP_SEND, A_UDP_RECV, A_LOCAL_PORT, A_SOCK_FD, A_PEER_ADDR, A_PEER_PORT,
        A_BROADCAST, A_MC_JOIN, A_MC_LEAVE };
 typedef struct { int32_t tag, kind; const char *name; V a, b; int32_t pos; V c, d; int32_t upos; } Act; /* upos: 作ったときの call_pos */
 /* C形(「C形作成する」): 見本の組と欄。ctype は C_MEM の番号か -1(構造体)、count は配列の要素の数(配列でなければ -1) */
@@ -1857,7 +1858,7 @@ static V act_run(Act *a) {
         return mk_str(line, n);
     }
     case A_LISTEN: case A_ACCEPT: case A_CONNECT: case A_RECVLINE: case A_RECV: case A_RECVB: case A_SEND: case A_SENDB: case A_CLOSE: case A_TIMEOUT:
-    case A_UDP_OPEN: case A_UDP_SEND: case A_UDP_RECV: case A_LOCAL_PORT: case A_PEER_ADDR: case A_PEER_PORT:
+    case A_UDP_OPEN: case A_UDP_SEND: case A_UDP_RECV: case A_LOCAL_PORT: case A_SOCK_FD: case A_PEER_ADDR: case A_PEER_PORT:
     case A_BROADCAST: case A_MC_JOIN: case A_MC_LEAVE:
         return net_run(a);
     case A_TRY: {
@@ -2672,6 +2673,50 @@ static size_t sin_read(SockIn *r, char *p, size_t n) {
     r->pos += (int)k;
     return k;
 }
+/* 秒を限りにつなぐ(期限付き接続する)。時間切れは errno を ETIMEDOUT にして -1 */
+static int connect_within(int fd, const struct sockaddr *ad, socklen_t len, double sec) {
+#ifdef _WIN32
+    u_long on = 1, off = 0;
+    ioctlsocket(fd, FIONBIO, &on);
+    int c = connect(fd, ad, len);
+    if (c < 0 && WSAGetLastError() == WSAEWOULDBLOCK) {
+        fd_set w, x;
+        FD_ZERO(&w); FD_ZERO(&x);
+        FD_SET((SOCKET)fd, &w); FD_SET((SOCKET)fd, &x);
+        struct timeval tv = {(long)sec, (long)((sec - floor(sec)) * 1e6)};
+        int k = select(0, NULL, &w, &x, &tv);
+        if (k == 0) { WSASetLastError(WSAETIMEDOUT); errno = ETIMEDOUT; c = -1; }
+        else if (k < 0) c = -1;
+        else {
+            int err = 0, el = sizeof err;
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, (char *)&err, &el);
+            if (err) { WSASetLastError(err); c = -1; } else c = 0;
+        }
+    }
+    ioctlsocket(fd, FIONBIO, &off);
+    return c;
+#else
+    int fl = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    int c = connect(fd, ad, len);
+    if (c < 0 && errno == EINPROGRESS) {
+        struct pollfd p = {fd, POLLOUT, 0};
+        int k;
+        do k = poll(&p, 1, (int)(sec * 1000)); while (k < 0 && errno == EINTR);
+        if (k == 0) { errno = ETIMEDOUT; c = -1; }
+        else if (k > 0) {
+            int err = 0;
+            socklen_t el = sizeof err;
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &el);
+            if (err) { errno = err; c = -1; } else c = 0;
+        }
+    }
+    int e = errno;
+    fcntl(fd, F_SETFL, fl);
+    errno = e;
+    return c;
+#endif
+}
 /* 送る・受け取るのを待つ時間(0 なら待ち続ける) */
 static int sock_timeout(int fd, double sec) {
 #ifdef _WIN32
@@ -2729,7 +2774,19 @@ static Sock sock_get2(V v, const char *what, int want_in, int32_t pos) {
     return s;
 }
 static Sock sock_get(V v, const char *what, int32_t pos) { return sock_get2(v, what, 0, pos); }
-__attribute__((noreturn)) static void net_fail(Act *a) { fail(a->pos, "「%s」で通信に失敗しました(%s)", a->name, net_strerror()); }
+/* 待つ時間を過ぎた(待機時間設定する・期限付き接続する)か */
+static int net_timed_out(void) {
+#ifdef _WIN32
+    int w = WSAGetLastError();
+    if (w == WSAETIMEDOUT || w == WSAEWOULDBLOCK) return 1;
+#endif
+    return errno == EAGAIN || errno == EWOULDBLOCK || errno == ETIMEDOUT;
+}
+/* 時間切れは理由を「時間切れ」にそろえる(OS ごとの文で見分けなくてよいように) */
+__attribute__((noreturn)) static void net_fail(Act *a) {
+    if (net_timed_out()) fail(a->pos, "「%s」で通信に失敗しました(時間切れ)", a->name);
+    fail(a->pos, "「%s」で通信に失敗しました(%s)", a->name, net_strerror());
+}
 
 static Bytes *need_bytes(V v, const char *what, int32_t pos);
 /* ソケットのアドレス(IPv4 か IPv6) */
@@ -2851,6 +2908,12 @@ static V net_run(Act *a) {
         V v = need_num(a->b, pos);
         int64_t port = IS_INT(v) ? INT_VAL(v) : -1;
         if (port < 0 || port > 65535) fail(pos, "「%s」はポートの番号ではありません", plain(v).s);
+        double limit = 0; /* 期限付き接続する の秒(0 なら OS に任せる) */
+        if (a->c) {
+            V t = need_num(a->c, pos);
+            limit = IS_INT(t) ? (double)INT_VAL(t) : AS(Flt, t)->d;
+            if (!(limit > 0)) fail(pos, "「%s」は待つ秒数ではありません(0 より大きい数です)", plain(t).s);
+        }
         ignore_sigpipe(); /* 相手が切れても止まらず、送信のエラーにする */
         char hs[256], ps[8];
         if (host->n >= (int64_t)sizeof hs) fail(pos, "「%s」はホストの名前として長すぎます", plain(a->a).s);
@@ -2868,7 +2931,8 @@ static V net_run(Act *a) {
                 fd = socket(r->ai_family, r->ai_socktype, r->ai_protocol);
                 if (fd < 0) { e = errno; continue; }
                 int c;
-                do c = connect(fd, r->ai_addr, r->ai_addrlen); while (c < 0 && errno == EINTR);
+                if (limit > 0) c = connect_within(fd, r->ai_addr, r->ai_addrlen, limit);
+                else do c = connect(fd, r->ai_addr, r->ai_addrlen); while (c < 0 && errno == EINTR);
                 if (c == 0) break;
                 e = errno;
                 sock_close(fd);
@@ -2877,7 +2941,7 @@ static V net_run(Act *a) {
             freeaddrinfo(res);
         }
         world_acquire();
-        if (g != 0) fail(pos, "「接続する」で通信に失敗しました(%s)", gai_strerror(g));
+        if (g != 0) fail(pos, "「%s」で通信に失敗しました(%s)", a->name, gai_strerror(g));
         errno = e;
         if (fd < 0) net_fail(a);
         /* 応答を待つ時間は区切らない(LLM のように最初の応答まで長くかかる相手もいるため) */
@@ -3017,6 +3081,8 @@ static V net_run(Act *a) {
         if (a->kind != A_PEER_ADDR) return mk_int(addr_port(&ad), pos);
         return addr_text(&ad);
     }
+    case A_SOCK_FD: /* 接続 を 記述子取得する: OS のソケットの番号(C の関数に渡す。閉じるのは 切断する で) */
+        return mk_int(sock_get(a->a, "接続", pos).fd, pos);
     case A_BROADCAST: { /* 口 を ブロードキャスト許可する */
         int fd = sock_get(a->a, "UDPの口", pos).fd;
         int one = 1;
@@ -3075,6 +3141,11 @@ BI(s_finally) { /* を, で */
 BI(n_listen) { return mk_net(A_LISTEN, "待受開始する", a[0], a[1], pos); } /* を, に(省ける) */
 BI(n_accept) { return mk_net(A_ACCEPT, "接続受付する", a[0], 0, pos); }
 BI(n_connect) { return mk_net(A_CONNECT, "接続する", a[0], a[1], pos); } /* に, で */
+BI(n_connect_within) { /* に, で, を(秒) */
+    V v = mk_net(A_CONNECT, "期限付き接続する", a[0], a[1], pos);
+    AS(Act, v)->c = a[2];
+    return v;
+}
 BI(n_recvline) { return mk_net(A_RECVLINE, "行受信する", a[0], 0, pos); }
 BI(n_recv) { return mk_net(A_RECV, "受信する", a[0], a[1], pos); }  /* から, を */
 BI(n_recvb) { return mk_net(A_RECVB, "バイト列受信する", a[0], a[1], pos); }  /* から, を */
@@ -3084,6 +3155,7 @@ BI(n_close) { return mk_net(A_CLOSE, "切断する", a[0], 0, pos); }
 BI(n_timeout) { return mk_net(A_TIMEOUT, "待機時間設定する", a[0], a[1], pos); } /* を, で */
 BI(n_udp_open) { return mk_net(A_UDP_OPEN, "UDP開始する", a[0], a[1], pos); } /* を, に(省ける) */
 BI(n_local_port) { return mk_net(A_LOCAL_PORT, "ポート取得する", a[0], 0, pos); }
+BI(n_sock_fd) { return mk_net(A_SOCK_FD, "記述子取得する", a[0], 0, pos); }
 BI(n_peer_addr) { return mk_net(A_PEER_ADDR, "相手アドレス取得する", a[0], 0, pos); }
 BI(n_peer_port) { return mk_net(A_PEER_PORT, "相手ポート取得する", a[0], 0, pos); }
 BI(n_broadcast) { return mk_net(A_BROADCAST, "ブロードキャスト許可する", a[0], 0, pos); }
@@ -3099,7 +3171,7 @@ BI(n_udp_recv) { return mk_net(A_UDP_RECV, "UDPバイト列受信する", a[0], 
 
 static const int32_t P1_DE[] = {P_DE}, P2_DE_WO[] = {P_DE, P_WO}, P1_WO[] = {P_WO}, P2_WO_NI[] = {P_WO, P_NI}, P2_KARA_WO[] = {P_KARA, P_WO},
                      P2_WO_DE[] = {P_WO, P_DE}, P2_KARA_DE[] = {P_KARA, P_DE}, P3_WO_KARA_DE[] = {P_WO, P_KARA, P_DE},
-                     P2_GA_WO[] = {P_GA, P_WO}, P1_KARA[] = {P_KARA}, P2_WO_HE[] = {P_WO, P_HE}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P3_WO_HE_DE[] = {P_WO, P_HE, P_DE}, P3_WO_DE_NI[] = {P_WO, P_DE, P_NI}, P3_KARA_DE_WO[] = {P_KARA, P_DE, P_WO}, P4_WO_HE_DE_NI[] = {P_WO, P_HE, P_DE, P_NI}, P2_GA_DE[] = {P_GA, P_DE}, P2_NI_DE[] = {P_NI, P_DE},
+                     P2_GA_WO[] = {P_GA, P_WO}, P1_KARA[] = {P_KARA}, P2_WO_HE[] = {P_WO, P_HE}, P3_WO_KARA_HE[] = {P_WO, P_KARA, P_HE}, P3_WO_HE_DE[] = {P_WO, P_HE, P_DE}, P3_WO_DE_NI[] = {P_WO, P_DE, P_NI}, P3_KARA_DE_WO[] = {P_KARA, P_DE, P_WO}, P4_WO_HE_DE_NI[] = {P_WO, P_HE, P_DE, P_NI}, P2_GA_DE[] = {P_GA, P_DE}, P2_NI_DE[] = {P_NI, P_DE}, P3_NI_DE_WO[] = {P_NI, P_DE, P_WO},
                      P4_WO_KARA_NI_DE[] = {P_WO, P_KARA, P_NI, P_DE}, P2_WO_KARA[] = {P_WO, P_KARA};
 static const uint8_t R_OPT1[] = {0}, R_1_OPT[] = {1, 0};
 
@@ -5142,6 +5214,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"待機時間設定する", 2, P2_WO_DE, NULL, n_timeout},
     {"接続受付する", 1, P1_KARA, NULL, n_accept},
     {"接続する", 2, P2_NI_DE, NULL, n_connect},
+    {"期限付き接続する", 3, P3_NI_DE_WO, NULL, n_connect_within},
     {"行受信する", 1, P1_KARA, NULL, n_recvline},
     {"受信する", 2, P2_KARA_WO, NULL, n_recv},
     {"バイト列受信する", 2, P2_KARA_WO, NULL, n_recvb},
@@ -5150,6 +5223,7 @@ static const BuiltinDef STD_PRIMITIVES[] = {
     {"切断する", 1, P1_WO, NULL, n_close},
     {"UDP開始する", 2, P2_WO_NI, R_1_OPT, n_udp_open},
     {"ポート取得する", 1, P1_WO, NULL, n_local_port},
+    {"記述子取得する", 1, P1_WO, NULL, n_sock_fd},
     {"相手アドレス取得する", 1, P1_WO, NULL, n_peer_addr},
     {"相手ポート取得する", 1, P1_WO, NULL, n_peer_port},
     {"ブロードキャスト許可する", 1, P1_WO, NULL, n_broadcast},
