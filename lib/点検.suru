@@ -1,21 +1,21 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」の点検(linter)のライブラリです。する で書いたもので、`suru --点検 ファイル…` から使います。
-# エラーにはならないけれど、直すと読みやすくなる書き方を「道:行:桁: 規則: 説明」の形で知らせます。
+# The linter library of Suru (written in Suru), used by `suru --点検 ファイル…`.
+# It reports ways of writing that are not errors but would read better if fixed, in the form 「道:行:桁: 規則: 説明」 (path:line:column: rule: message).
 #
-# - `行群 を 点検する`: 行(文字列)のリストを調べて、知らせ のリスト(行・桁の順)を返す
-# - `行群 を 外群 で 資料込み点検する`: 読み込んで使うファイルの中の名前(資料 のリスト)も使って調べる
+# - `行群 を 点検する`: checks a list of lines (strings) and gives the list of `知らせ` (findings, ordered by line and column)
+# - `行群 を 外群 で 資料込み点検する`: also uses the names in the loaded files (a list of 資料)
 # - `知 を 道 で 知らせ文にする`: 「道:行:桁: 規則: 説明」
-# - `知 を 道 で 知らせJSON化する`: 1行の JSON(`suru --点検 --json` の形)
-# - `点検実行する`: 引数のファイルを全部調べて表示する動作。知らせがあれば終了コード 1。引数に --json があれば JSON で表示する
+# - `知 を 道 で 知らせJSON化する`: one-line JSON (the form of `suru --点検 --json`)
+# - `点検実行する`: an action that checks every file in the arguments and prints the findings. The exit code is 1 if there are any. With --json in the arguments it prints JSON
 #
-# 規則は次のとおりです。
+# The rules are:
 #
-# - 段階1(字句と行だけで分かるもの): 行末の空白 / 字下げの混在 / 全角半角の混在 / 丁寧語の混在 / 不要な二重かぎ / 字句の誤り
-# - 段階2(定義と使用): 未使用の定義 / 未使用の引数 / 未使用の読み込み / 組み込みの上書き / 型の宣言なし(ライブラリだけ) / 書き方の混在 / 値の再定義 / 定義の間の空行
-# - 段階3(構文木を使うもの。「構文」で読めないプログラムでは調べない): 冗長な真偽 / 同じ枝 / 自分との比較 / 不要な括弧 / 定数の条件
+# - Stage 1 (seen from tokens and lines alone): `行末の空白` / `字下げの混在` / `全角半角の混在` / `丁寧語の混在` / `不要な二重かぎ` / `字句の誤り`
+# - Stage 2 (definitions and uses): `未使用の定義` / `未使用の引数` / `未使用の読み込み` / `組み込みの上書き` / `型の宣言なし` (libraries only) / `書き方の混在` / `値の再定義` / `定義の間の空行`
+# - Stage 3 (using the syntax tree; not checked for programs that 「構文」 cannot read): `冗長な真偽` / `同じ枝` / `自分との比較` / `不要な括弧` / `定数の条件`
 #
-# 知らせを黙らせるには、その行か、すぐ前の注釈だけの行に「# 点検しない」と書きます(その行の知らせを全部)。「# 点検しない: 規則名」と書くとその規則だけです。
+# To silence findings, write 「# 点検しない」 on the line or on a comment-only line right before it (all findings of that line). 「# 点検しない: 規則名」 silences only that rule.
 
 「標準」 を 読み込んで 使う
 「文字」 を 読み込んで 使う
@@ -63,7 +63,7 @@ xs を 末尾空白計数する とは
 「　」 を 空白名にする とは 「全角スペース」
 c を 空白名にする とは 「タブ」
 
-# ファイルで最初に字下げした行の最初の文字を基準にして、ほかの文字で字下げした行を知らせる
+# Takes the first character of the first indented line in the file as the standard, and reports lines indented with other characters.
 文字列 の リスト を 字下げ点検する は 知らせ の リスト
 行群 を 字下げ点検する とは
   頭群 とは 行群 を （生 を 受け取って （生 を 文字分解して 字下げ文字にする） を 返すこと） で 写像する
@@ -121,7 +121,7 @@ t を 字幅分類にする とは
 
 # --- 丁寧語の混在 ---
 
-# 文の終わりの呼び出し(論理行の最後の字句が「…する」「…します」のもの)
+# The call at the end of a sentence (when the last token of the logical line is 「…する」 or 「…します」).
 論理行 の リスト を 文末呼出にする は 字句 の リスト
 群 を 文末呼出にする とは
   末群 とは （群 から （l を 受け取って l の 字句列 != 空 を 返すこと） で 選別する） を （l を 受け取って l の 字句列 の 最後 を 返すこと） で 写像する
@@ -153,10 +153,10 @@ t を 字幅分類にする とは
 # --- 定義と使用(段階2) ---
 # 行のまとまり(節: 字下げなしの行と、そのあとの字下げした行)ごとに、何を定義して何を使っているかを調べる。
 
-# 何も指さない字句(名前のない節に使う)
+# A token that points to nothing (for a node without a name).
 空字句 とは 「」 と 「」 を 0 で 0 に 字句化する
 
-# 組み込みの関数(読み込まなくても使える)と、「標準」「通信」を 読み込んで 使う と使えるようになる関数
+# Built-in functions (usable without loading anything) and functions that become usable with `「標準」 を 読み込んで 使う` or `「通信」 を 読み込んで 使う`.
 組込名一覧 とは
   「表示する」 と 「続表示する」 と 「入力する」 と 「実行する」 と 「数値にする」 と 「絶対値にする」 と 「加算する」 と 「乗算する」
     と 「減算する」 と 「除算する」 と 「追加する」 と 「挿入する」 と 「適用する」 と 「選別する」 と 「畳み込みする」
@@ -196,14 +196,14 @@ t を 字幅分類にする とは
 「スレッド」 を 原始名群にする とは スレッド原始名一覧
 名 を 原始名群にする とは 空
 
-# 読み込むファイルの名前と、その中で定義している関数・値の名前と、型・性質の名前(型はどこからでも見える)
+# The name of a loaded file, the names of the functions and values defined in it, and the names of its types and traits (types are visible from anywhere).
 資料 とは 資名 と 資語群 と 資型群 と 資形群 と 資型名群 の 組
 
-# 節 は 類(関数・値・型・性質・実装・宣言・公開指定・読込・読込使用・外部読込・準・文・他)、名前の字句、引数の字句、
-# 使っている名前、中で定義している名前の字句
+# A node: 類 (関数, 値, 型, 性質, 実装, 宣言, 公開指定, 読込, 読込使用, 外部読込, 準, 文 or 他), the name token, the parameter tokens,
+# the names it uses and the tokens of the names defined inside.
 節 とは 節類 と 節字 と 節引数 と 節使用 と 節局所 の 組
 
-# 括弧の外(深さ 0)の字句だけ
+# Only the tokens outside parentheses (depth 0).
 字句 の リスト を 数 で 表層収集する は 字句 の リスト
 空 を d で 表層収集する とは 空
 先頭 は t で 残り は 他 を d で 表層収集する とは
@@ -212,7 +212,7 @@ t を 字幅分類にする とは
   そうでなければ もし d = 0 ならば t を （他 を d で 表層収集する） に 挿入する
   そうでなければ 他 を d で 表層収集する
 
-# 括弧の外にある最初の「とは」が何番目か(なければ 0)
+# Which token is the first 「とは」 outside parentheses (0 if none).
 字句 の リスト から 数 で 数 に 定義位置探索する は 数
 字群 から i で d に 定義位置探索する とは
   もし i > 字群 の 長さ ならば 0
@@ -234,7 +234,7 @@ t を 字幅分類にする とは
   そうでなければ もし 字群 の 先頭 が 「ただし」 で 予約語一致である ならば 字群 の 残り
   そうでなければ 字群
 
-# 「とは」より前の、括弧の外の字句(先頭の「ただし」は除く)
+# The tokens outside parentheses before 「とは」 (without a leading 「ただし」).
 字句 の リスト を 定義頭にする は 字句 の リスト
 字群 を 定義頭にする とは
   k とは 字群 を 定義位置にする
@@ -259,23 +259,23 @@ t が 名前類である とは t の 種類 = 「名前」 または t の 種�
   導群 とは （（字群 から （t を 受け取って t の 種類 = 「導」 を 返すこと） で 選別する） を 導出使用語群にすること で 写像する） を 連結する
   名群 + 準群 + 導群
 
-# 導出「会員 は 【JSON】 を 導出する」が使う名前: 型の名前と、導出の関数「JSON導出する」
+# The names used by a derivation 「会員 は 【JSON】 を 導出する」: the type name and the derivation function 「JSON導出する」.
 字句 を 導出使用語群にする は 文字列 の リスト
 t を 導出使用語群にする とは t の 値 を （（t の 形 を 「 」 で 分割する） を （x を 受け取って x + 「導出する」 を 返すこと） で 写像する） に 挿入する
 
-# 準クォート【道】が使う名前: 展開の関数「道展開する」と、中身の語(空白・括弧・句読点で区切ったもの)。
-# 展開したコードはここでは見えないので、中身に書いた名前は使っているとみなす
+# The names used by a quasi-quote 【道】: the expansion function 「道展開する」 and the words of the contents (split at spaces, parentheses and punctuation).
+# The expanded code is not visible here, so names written in the contents count as used.
 字句 を 準使用語群にする は 文字列 の リスト
 t を 準使用語群にする とは
   区切 とは 「 　『』()（）【】,、。」 + 左鉤 + 右鉤 + （9 を 文字にする） + （10 を 文字にする）
   語群 とは （（（t の 形 を 文字分解する） を （c を 受け取って もし 区切 が c を 含有である ならば 「 」 そうでなければ c を 返すこと） で 写像する） を 「」 で 結合する） を 「 」 で 分割する
   （t の 値 + 「展開する」） を （語群 から （w を 受け取って w != 「」 を 返すこと） で 選別する） に 挿入する
 
-# 行で使っている名前(定義の行なら「とは」より後だけ)
+# The names used in a line (only after 「とは」 for a definition line).
 論理行 を 使用語群にする は 文字列 の リスト
 l を 使用語群にする とは （l の 字句列 から （l の 字句列 を 定義位置にする） を 先頭削除する） を 語値群にする
 
-# 行で定義している名前の字句(定義の行でなければ 空)
+# The tokens of the names a line defines (空 unless it is a definition line).
 論理行 を 局所名群にする は 字句 の リスト
 l を 局所名群にする とは
   頭 とは l の 字句列 を 定義頭にする
@@ -285,7 +285,7 @@ l を 局所名群にする とは
   そうでなければ もし 頭 が 「名前」 で 単一字句である ならば 頭
   そうでなければ 空
 
-# 関数の定義の頭の、引数の名前の字句(「先頭 は x で」のような形の中の名前と、括弧の中は除く)
+# The parameter name tokens of the head of a function definition (without names inside forms like 「先頭 は x で」 and without what is in parentheses).
 字句 の リスト を 引数抽出する は 字句 の リスト
 頭 を 引数抽出する とは
   番群 とは 1 から 頭 の 長さ を 範囲にする
@@ -304,7 +304,7 @@ l を 局所名群にする とは
   そうでなければ 字群 の 先頭 の 種類 = 「文字列」 かつ （字群 から 2 を 番目取得する） の 値 = 「を」
     かつ （「読み込む」 と 「読み込みます」 と 「読み込んで」） が （字群 から 3 を 番目取得する） の 値 を 含有である
 
-# 「確保する と 解放する は 非公開とする」「… は 公開とする」
+# 「確保する と 解放する は 非公開とする」, 「… は 公開とする」
 字句 の リスト が 公開指定文である は 真偽
 字群 が 公開指定文である とは
   もし 字群 = 空 ならば 偽
@@ -315,7 +315,7 @@ l を 局所名群にする とは
   もし 字群 = 空 ならば 偽
   そうでなければ 字群 の 先頭 の 値 = 「外部の」 かつ （字群 が 「読み込む」 で 予約語有である または 字群 が 「読み込みます」 で 予約語有である）
 
-# 試験のまとまり「以下は「二倍」の試験です」か例「例えば … は … です」の行か(#193)
+# Whether the line is a test group 「以下は「二倍」の試験です」 or an example 「例えば … は … です」 (#193).
 字句 の リスト が 試験節である は 真偽
 字群 が 試験節である とは
   もし 字群 = 空 ならば 偽
@@ -340,7 +340,7 @@ l を 局所名群にする とは
     もし 全字 が 「組」 で 予約語有である または 全字 が 「か」 で 予約語有である ならば 「型」 そうでなければ 「値」
   そうでなければ 「他」
 
-# 型の宣言(「数 を 階乗する は 数」)で宣言している関数の名前の字句(なければ 空字句)
+# The token of the function name declared by a type declaration (「数 を 階乗する は 数」); 空字句 if none.
 字句 の リスト を 宣言名字にする は 字句
 字群 を 宣言名字にする とは
   層 とは 字群 を 0 で 表層収集する
@@ -348,14 +348,14 @@ l を 局所名群にする とは
   呼群 とは 前 から （t を 受け取って t の 種類 = 「呼出」 を 返すこと） で 選別する
   もし 呼群 = 空 ならば 空字句 そうでなければ 呼群 の 最後
 
-# 語 の予約語が何番目か(なければ 長さ + 1)
+# The position of the keyword 語 (length + 1 if none).
 字句 の リスト から 数 で 文字列 より 予約語位置探索する は 数
 字群 から i で 語 より 予約語位置探索する とは
   もし i > 字群 の 長さ ならば i
   そうでなければ もし （字群 から i を 番目取得する） が 語 で 予約語一致である ならば i
   そうでなければ 字群 から i + 1 で 語 より 予約語位置探索する
 
-# 定義の本体が C の関数(外部の「…」)か
+# Whether the body of the definition is a C function (`外部の「…」`).
 字句 の リスト が 外部本体である は 真偽
 字群 が 外部本体である とは
   体 とは 字群 から （字群 を 定義位置にする） を 先頭削除する
@@ -380,7 +380,7 @@ l を 局所名群にする とは
     節使用 は （もし 類 = 「性質」 または 類 = 「実装」 または 類 = 「型」 ならば 全名 そうでなければ もし 類 = 「宣言」 または 類 = 「公開指定」 または 類 = 「読込」 または 類 = 「読込使用」 または 類 = 「外部読込」 ならば 空 そうでなければ 使用） で
     節局所 は （もし 類 = 「関数」 または 類 = 「値」 または 類 = 「文」 または 類 = 「他」 ならば 局所 そうでなければ 空） の 節）
 
-# 字下げしていない行(「ただし」で始まる行は除く)から次の字下げしていない行の前までを、1つの節にする
+# Makes one node from an unindented line (except one starting with 「ただし」) up to the next unindented line.
 論理行 が 継続行である は 真偽
 l が 継続行である とは
   もし l の 段 > 0 ならば 真
@@ -402,7 +402,7 @@ s が 定義節である とは s の 節類 = 「関数」 または s の 節�
 （文字列 と 数） の 表 に 文字列 を 計数追加する は （文字列 と 数） の 表
 t に w を 計数追加する とは t を w から （t から w を 0 で 表内の既定取得する） + 1 へ 表内の登録する
 
-# 定義した節の中で、その名前自身を使っている数(再帰だけで使っている定義は使われていないとみなす)
+# How many times a defined node uses its own name (a definition used only recursively counts as unused).
 （文字列 と 数） の 表 に 節 を 自己使用追加する は （文字列 と 数） の 表
 t に s を 自己使用追加する とは
   名 とは s の 節字 の 値
@@ -428,7 +428,7 @@ s を 数表 で 引数未使用にする とは
       を （p を 受け取って （p の 行 で p の 桁 に 「未使用の引数」 より （「引数」 + （p の 値 を 鉤囲する） + 「は」 + （名 を 鉤囲する） + 「の中で使われていません」） を 知らせ化する） を 返すこと） で 写像する
   そうでなければ 空
 
-# 引数の名前そのものも、関数の引数を名前+「する」で呼んだ形(処理する・処理して・処理した・処理すること)もなければ使っていない
+# A parameter is unused when neither its name nor a call of it as name + 「する」 (`処理する`, `処理して`, `処理した`, `処理すること`) appears.
 文字列 の リスト が 文字列 を 引数未使用である は 真偽
 使用 が 名 を 引数未使用である とは 使用 が （w を 受け取って w = 名 または （（「する」 と 「して」 と 「した」 と 「すること」 と 「しない」 と 「せず」） が （w から （名 の 長さ） を 先頭削除する） を 含有である かつ w が 名 で 先頭一致である） を 返すこと） で 一部真でない
 
@@ -456,7 +456,7 @@ d を 外群 で 上書点検する とは
   そうでなければ もし 該 = 空 ならば 空
   そうでなければ （d の 行 で d の 桁 に 「組み込みの上書き」 より （（d の 値 を 鉤囲する） + 「は」 + （該 の 先頭 の 資名 を 鉤囲する） + 「の関数と同じ名前です」） を 知らせ化する） を 空 に 挿入する
 
-# 隠群 は外から使えない一番外の名前(非公開とした名前)。ライブラリでは、これだけを「未使用の定義」の対象にする
+# 隠群 are the top-level names not usable from outside (the names made 非公開). In a library only these are checked for 「未使用の定義」.
 節 の リスト を 資料 の リスト で 文字列 の リスト に 定義点検する は 知らせ の リスト
 節群 を 外群 で 隠群 に 定義点検する とは
   使用 とは （節群 を （s を 受け取って s の 節使用 を 返すこと） で 写像する） を 連結する
@@ -477,7 +477,7 @@ d を 外群 で 上書点検する とは
     + （もし 文有 ならば 空 そうでなければ 節群 から 初群 で 型宣言点検する）
     + （定群 を 値再定義点検する）
 
-# 同じ名前の値を2回定義している(後の定義が使われる)。関数は場合ごとに定義できるので除く(#155)
+# A value with the same name defined twice (the later one is used). Functions are excluded because they can be defined case by case (#155).
 節 の リスト を 値再定義点検する は 知らせ の リスト
 節群 を 値再定義点検する とは
   値字群 とは （節群 から （s を 受け取って s の 節類 = 「値」 を 返すこと） で 選別する） を （s を 受け取って s の 節字 を 返すこと） で 写像する
@@ -490,7 +490,7 @@ d を 外群 で 上書点検する とは
     （d の 行 で d の 桁 に 「値の再定義」 より （（d の 値 を 鉤囲する） + 「は前にも定義しています(後の定義が使われます)」） を 知らせ化する） を （他 を 既 で 再定義収集する） に 挿入する
   そうでなければ 他 を （d の 値 を 既 に 挿入する） で 再定義収集する
 
-# ライブラリの一番外の関数に型の宣言がない(宣言はファイルのどこに書いてもよい)
+# A top-level function of a library without a type declaration (the declaration may be anywhere in the file).
 節 の リスト から 字句 の リスト で 型宣言点検する は 知らせ の リスト
 節群 から 初群 で 型宣言点検する とは
   宣名群 とは （節群 から （s を 受け取って s の 節類 = 「宣言」 を 返すこと） で 選別する） を （s を 受け取って s の 節字 の 値 を 返すこと） で 写像する
@@ -505,7 +505,7 @@ d を 外群 で 上書点検する とは
 # 「以下は外部の入出力動作です … 以上です」のまとまりは1つの組。組のすぐ上の注釈の行は組に含める(空行は注釈の上に入れる)。
 # 値・型・性質の定義、読み込み、式の文は組ではないので調べない
 
-# 組名 は関数の名前(まとまりなら「」で 組外 が 真、組でなければ 組名 も「」)、組字 は最初の字句、組行数 は論理行の数
+# 組名 is the function name (「」 with 組外 真 for a block; 組名 is 「」 too if it is not a group), 組字 is the first token and 組行数 is the number of logical lines.
 空行組 とは 組名 と 組外 と 組字 と 組行数 の 組
 
 空行組 が 関数組である は 真偽
@@ -526,7 +526,7 @@ s を 単空行組にする とは
   名 とは もし n の 節類 = 「関数」 または n の 節類 = 「宣言」 ならば n の 節字 の 値 そうでなければ 「」
   名 と 偽 と （s の 先頭 の 字句列 の 先頭） と s の 長さ の 空行組
 
-# まとまりの頭の節から「以上」の節までを1つの組にする
+# Makes one group from the head node of a block to its 「以上」 node.
 論理行 の リスト を 論理行 の リスト の リスト で 外部空行組化する は 空行組 の リスト
 s を 他 で 外部空行組化する とは
   内閉 とは s の 残り が 構文内の以上行であること で 一部真である
@@ -540,7 +540,7 @@ s を 他 で 外部空行組化する とは
 先頭 は s で 残り は 他 を 以上前取得する とは
   もし s の 先頭 が 構文内の以上行である ならば 空 そうでなければ s を （他 を 以上前取得する） に 挿入する
 
-# 続けて書いた同じ関数の組(型の宣言と場合ごとの定義)をまとめる
+# Merges consecutive groups of the same function (the type declaration and the case-by-case definitions).
 空行組 の リスト を 空行組併合する は 空行組 の リスト
 空 を 空行組併合する とは 空
 先頭 は g で 残り は 他 を 空行組併合する とは
@@ -564,7 +564,7 @@ s を 他 で 外部空行組化する とは
       を （他 を g で 行群 に 空行続点検する） に 挿入する
   そうでなければ 他 を g で 行群 に 空行続点検する
 
-# n 行目から上へ、注釈だけの行を飛ばして、空行があるか(ファイルの始まりも空行とみなす)
+# Whether there is a blank line above line n, skipping comment-only lines (the start of the file counts as a blank line).
 文字列 の リスト から 数 で 上空行有である は 真偽
 行群 から n で 上空行有である とは
   もし n < 1 ならば 真
@@ -578,7 +578,7 @@ s を 他 で 外部空行組化する とは
 
 # --- 書き方の混在 ---
 
-# 句読点の書き方の文と空白の書き方の文が両方あれば、少ないほうの書き方の最初の文で1つだけ知らせる
+# When there are sentences in both the punctuation style and the space style, reports only the first sentence of the less used style.
 論理行 が 句読点文である は 真偽
 l が 句読点文である とは l の 閉 または （l の 字句列 が 「区切り」 で 種類有である） または （l の 字句列 が 「句点」 で 種類有である）
 
@@ -597,7 +597,7 @@ l が 句読点文である とは l の 閉 または （l の 字句列 が �
 
 # --- 構文木を使う規則 ---
 
-# 読み込むファイルの型と形も使ってプログラムを読み、木の中の式を全部調べる。外せる括弧も知らせる
+# Reads the program using the types and forms of the loaded files too, and checks every expression in the tree. Also reports removable parentheses.
 論理行 の リスト を 資料 の リスト で 構文点検する は 知らせ の リスト
 群 を 外群 で 構文点検する とは
   形群 とは （外群 を （d を 受け取って d の 資形群 を 返すこと） で 写像する） を 連結する
@@ -626,7 +626,7 @@ a が b に 同形である とは （a を 構文内の無行表示文にする
 文字列 が 比較演算である は 真偽
 o が 比較演算である とは o = 「==」 または o = 「!=」 または o = 「<」 または o = 「<=」 または o = 「>」 または o = 「>=」
 
-# 行 の字句で、値が 語群 のどれかの最初のものの桁。なければその行の最初の字句の桁(どちらもなければ 1)
+# The column of the first token of the line whose value is one of 語群. Otherwise the column of the first token of the line (1 if neither).
 字句 の リスト から 数 で 文字列 の リスト より 桁探索する は 数
 字群 から 行番 で 語群 より 桁探索する とは
   行字 とは 字群 から （t を 受け取って t の 行 = 行番 を 返すこと） で 選別する
@@ -664,7 +664,7 @@ e を 字群 で 式点検する とは 空
 無式 が 無式である とは 真
 e が 無式である とは 偽
 
-# パターンが名前を束ねないか(束ねる名前を本体が使うと、同じに見える本体でも値が違う)
+# Whether the pattern binds no names (if the body uses bound names, bodies that look the same can have different values).
 式 が 束縛無である は 真偽
 （n の 束型） が 束縛無である とは 偽
 （xs の 並型） が 束縛無である とは xs が 束縛無であること で 全部真である
@@ -677,7 +677,7 @@ e が 束縛無である とは 真
 （a の 値型） が 値型である とは 真
 e が 値型である とは 偽
 
-# 外群 を作る(ファイルを読む): 「X」 を 読み込む / 読み込んで 使う と書いた行の X
+# Building 外群 (reading files): the X of a line 「「X」 を 読み込む」 or 「… 読み込んで 使う」.
 文字列 が 読込行である は 真偽
 生 が 読込行である とは
   s とは 生 を 空白除去する
@@ -691,13 +691,13 @@ e が 値型である とは 偽
 文字列 の リスト を 読込名群にする は 文字列 の リスト
 行群 を 読込名群にする とは （行群 から 読込行であること で 選別する） を 読込名にすること で 写像する
 
-# ファイルの道のフォルダの部分(「a/b.suru」なら「a/」)
+# The folder part of a file path (「a/」 for 「a/b.suru」).
 文字列 を 基道にする は 文字列
 道 を 基道にする とは
   部 とは 道 を 「/」 で 分割する
   もし 部 の 長さ <= 1 ならば 「」 そうでなければ （（部 から 部 の 長さ - 1 を 先頭取得する） を 「/」 で 結合する） + 「/」
 
-# ファイルの中で定義している関数・値の名前と、型・性質の名前(作り方の名前・性質の関数も含む)
+# The names of the functions and values defined in the file and the names of its types and traits (including constructor names and trait functions).
 文字列 の リスト から 文字列 で 資料化する は 資料
 行群 から 名 で 資料化する とは
   群 とは 行群 を 末尾復帰除去して 字句解析する
@@ -711,7 +711,7 @@ e が 値型である とは 偽
 節 の リスト を 定義名群にする は 文字列 の リスト
 節群 を 定義名群にする とは （節群 から 定義節であること で 選別する） を （s を 受け取って s の 節字 の 値 を 返すこと） で 写像する
 
-# 全語群 のうち外から使えない名前。「… は 公開とする」が1つでもあれば一覧にない名前、なければ「… は 非公開とする」の名前
+# The names in 全語群 not usable from outside. If there is any 「… は 公開とする」, the names not in its list; otherwise the names in 「… は 非公開とする」.
 論理行 の リスト から 文字列 の リスト で 非公開名群にする は 文字列 の リスト
 群 から 全語群 で 非公開名群にする とは
   指定群 とは （群 から （l を 受け取って l の 字句列 が 公開指定文である を 返すこと） で 選別する） を （l を 受け取って l の 字句列 を 返すこと） で 写像する
@@ -720,14 +720,14 @@ e が 値型である とは 偽
   もし 公開群 != 空 ならば 全語群 から （w を 受け取って 公開群 が w を 含有でない を 返すこと） で 選別する
   そうでなければ 全語群 から （w を 受け取って 非公開群 が w を 含有である を 返すこと） で 選別する
 
-# 「a と b は 非公開とする」の a・b
+# The a and b of 「a と b は 非公開とする」.
 字句 の リスト を 指定名群にする は 文字列 の リスト
 字群 を 指定名群にする とは （字群 から 字群 の 長さ - 1 を 先頭取得する） を 語値群にする
 
 文字列 を 安全読込する は 文字列 の リスト の 動作
 道 を 安全読込する とは もし 道 = 「」 ならば 空 を 結果にする そうでなければ 道 を ファイル内の行分割読込する
 
-# 読み込むファイルを、調べるファイルと同じフォルダ、なければ SURU_LIB のフォルダから探して読む(なければ 空)
+# Finds a loaded file in the folder of the checked file, or else in the SURU_LIB folder, and reads it (空 if not found).
 文字列 から 文字列 を 資料読取する は 資料 の リスト の 動作
 基 から 名 を 資料読取する とは 以下の手順です
   庫 とは 「SURU_LIB」 を 環境内の環境変数取得した 結果
@@ -742,13 +742,13 @@ e が 値型である とは 偽
 
 # --- 黙らせる ---
 
-# 注釈だけの行か
+# Whether the line has only a comment.
 文字列 が 注釈行である は 真偽
 生 が 注釈行である とは
   t とは 生 を 空白除去する
   （t が 「#」 で 先頭一致である） または （t が 「＃」 で 先頭一致である） または （t が 「※」 で 先頭一致である）
 
-# 「# 点検しない」なら 「*」、「# 点検しない: 規則名 …」なら規則名のリスト、書いていなければ 空
+# 「*」 for 「# 点検しない」, the list of rule names for 「# 点検しない: rule …」, 空 if not written.
 文字列 を 黙指定にする は 文字列 の リスト
 生 を 黙指定にする とは
   部分 とは 生 を 「点検しない」 で 分割する
@@ -796,7 +796,7 @@ a から b へ 済 で 併合続行する とは
 文字列 の リスト を 点検する は 知らせ の リスト
 元群 を 点検する とは 元群 を 空 で 資料込み点検する
 
-# 外群 は「X」 を 読み込んで 使う で読み込むファイルの、中で定義している名前(未使用の読み込み・組み込みの上書きに使う)
+# 外群 are the names defined in the files loaded with 「「X」 を 読み込んで 使う」 (for unused loading and overriding built-ins).
 文字列 の リスト を 資料 の リスト で 資料込み点検する は 知らせ の リスト
 元群 を 外群 で 資料込み点検する とは
   元行群 とは 元群 を 末尾復帰除去する
@@ -816,10 +816,7 @@ a から b へ 済 で 併合続行する とは
 知 を 道 で 知らせ文にする とは
   道 + 「:」 + （知 の 知行 を 文字列化する） + 「:」 + （知 の 知桁 を 文字列化する） + 「: 」 + 知 の 規則 + 「: 」 + 知 の 説明
 
-# 1つのファイルを調べて表示し、知らせの数を結果にする動作
-# 1つのファイルを調べて表示し、知らせの数を結果にする動作。対 は （読む道 と 見せる道）
-# (エディターは保存していない中身を別のファイルに書いて渡すので、読む道と、知らせに出す道・読み込みを探す道を分ける)
-# 1行の JSON。{"file": 道, "line": 行, "column": 桁, "kind": "点検", "rule": 規則, "message": 説明}(エラーの JSON と同じ形)
+# One-line JSON: {"file": path, "line": line, "column": column, "kind": "点検", "rule": rule, "message": message} (the same shape as the JSON of errors).
 知らせ を 文字列 で 知らせJSON化する は 文字列
 知 を 道 で 知らせJSON化する とは
   項目群 とは （「file」 と （道 の JSON文字列） の JSON項目） と （「line」 と （知 の 知行 の JSON数） の JSON項目）
@@ -827,7 +824,7 @@ a から b へ 済 で 併合続行する とは
     と （「rule」 と （知 の 規則 の JSON文字列） の JSON項目） と （「message」 と （知 の 説明 の JSON文字列） の JSON項目）
   （項目群 の JSON物） を JSON文字列にする
 
-# 知らせを表示する形にする。形式 は 「文」 か 「JSON」
+# Formats findings for display. 形式 is 「文」 or 「JSON」.
 知らせ を 文字列 で 文字列 に 表示形にする は 文字列
 知 を 道 で 形式 に 表示形にする とは もし 形式 = 「JSON」 ならば 知 を 道 で 知らせJSON化する そうでなければ 知 を 道 で 知らせ文にする
 
@@ -841,7 +838,7 @@ a から b へ 済 で 併合続行する とは
   知群 の 長さ を 結果にする
   以上です
 
-# 引数を （読む道 と 見せる道） の対にする。「--代わり 読む道 見せる道」と書けば、読む道の中身を見せる道のものとして調べる
+# Turns the arguments into pairs of the path to read and the path to show (`（読む道 と 見せる道）`). With 「--代わり 読む道 見せる道」, the contents of the read path are checked as if they were at the shown path.
 文字列 の リスト を 道対化する は 文字列 の リスト の リスト
 道群 を 道対化する とは
   もし 道群 = 空 ならば 空

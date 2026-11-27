@@ -1,79 +1,79 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」の算術ライブラリです。三角関数・指数・対数などを使えます。
-# 使うファイルに `「算術」 を 読み込む` と書き、`算術内の正弦にする` のように「算術内の」を付けて使います。
+# The arithmetic library of Suru: trigonometric, exponential and logarithmic functions and more.
+# Write `「算術」 を 読み込む` in your file and use the names with the `算術内の` prefix, like `算術内の正弦にする`.
 #
-# 三角関数・指数・対数は C の libm を外部の関数として呼びます。角度はラジアンです。
+# The trigonometric, exponential and logarithmic functions call C's libm as external functions. Angles are in radians.
 外部の「m」 を 読み込む
 「標準」 を 読み込んで 使う
 
-# 円の周りの長さと直径の比(π)です。
+# The ratio of a circle's circumference to its diameter (π).
 円周率 は 数
 円周率 とは 3.141592653589793
 
-# 自然対数の底(e)です。
+# The base of the natural logarithm (e).
 ネイピア数 は 数
 ネイピア数 とは 2.718281828459045
 
 # --- C の libm ---
 
 以下は外部の関数です
-  # x の正弦(sin)です。
+  # The sine of x.
   小数 を 正弦にする は 「sin」 で 小数 を 返します
-  # x の余弦(cos)です。
+  # The cosine of x.
   小数 を 余弦にする は 「cos」 で 小数 を 返します
-  # x の正接(tan)です。
+  # The tangent of x.
   小数 を 正接にする は 「tan」 で 小数 を 返します
-  # 逆正弦(asin)です。結果は -π/2 から π/2 のラジアンです。
+  # The arcsine, in radians from -π/2 to π/2.
   小数 を 逆正弦にする は 「asin」 で 小数 を 返します
-  # 逆余弦(acos)です。結果は 0 から π のラジアンです。
+  # The arccosine, in radians from 0 to π.
   小数 を 逆余弦にする は 「acos」 で 小数 を 返します
-  # 逆正接(atan)です。結果は -π/2 から π/2 のラジアンです。
+  # The arctangent, in radians from -π/2 to π/2.
   小数 を 逆正接にする は 「atan」 で 小数 を 返します
-  # `y を x で 偏角にする` で、点 (x, y) の向きの角度(atan2)です。結果は -π から π のラジアンです。
+  # `y を x で 偏角にする` is the angle of the point (x, y) (atan2), in radians from -π to π.
   小数 を 小数 で 偏角にする は 「atan2」 で 小数 を 返します
-  # 双曲線正弦(sinh)です。
+  # The hyperbolic sine.
   小数 を 双曲線正弦にする は 「sinh」 で 小数 を 返します
-  # 双曲線余弦(cosh)です。
+  # The hyperbolic cosine.
   小数 を 双曲線余弦にする は 「cosh」 で 小数 を 返します
-  # 双曲線正接(tanh)です。
+  # The hyperbolic tangent.
   小数 を 双曲線正接にする は 「tanh」 で 小数 を 返します
-  # e の x 乗です。
+  # e to the power of x.
   小数 を 指数関数にする は 「exp」 で 小数 を 返します
-  # e を底とする対数です。
+  # The natural logarithm (base e).
   小数 を 自然対数にする は 「log」 で 小数 を 返します
-  # 10 を底とする対数です。
+  # The base-10 logarithm.
   小数 を 常用対数にする は 「log10」 で 小数 を 返します
-  # `x を y で 累乗する` で、x の y 乗です。
+  # `x を y で 累乗する` is x to the power of y.
   小数 を 小数 で 累乗する は 「pow」 で 小数 を 返します
-  # 3乗すると x になる数です(負の数にも使えます)。
+  # The cube root (also for negative numbers).
   小数 を 立方根にする は 「cbrt」 で 小数 を 返します
 以上です
 
 # --- する で書いたもの ---
 
-# `x を 底 で 対数にする` で、底 を底とする x の対数です。
+# `x を 底 で 対数にする` is the logarithm of x to the given base.
 数 を 数 で 対数にする は 数
 x を 底 で 対数にする とは （x を 自然対数にする） / （底 を 自然対数にする）
 例えば （8 を 2 で 対数にする） は 3 です
 
-# ラジアンを度にします。
+# Converts radians to degrees.
 数 を 度にする は 数
 x を 度にする とは x * 180 / 円周率
 例えば （円周率 を 度にする） は 180 です
 
-# 度をラジアンにします。
+# Converts degrees to radians.
 数 を ラジアンにする は 数
 x を ラジアンにする とは x * 円周率 / 180
 例えば （180 を ラジアンにする） は 円周率 です
 
-# 2つの整数の最大公約数です(結果は 0 以上)。
+# The greatest common divisor of two integers (0 or more).
 数 を 数 で 最大公約数にする は 数
 a を b で 最大公約数にする とは もし b = 0 ならば a を 絶対値にする そうでなければ b を （a % b） で 最大公約数にする
 例えば （12 を 18 で 最大公約数にする） は 6 です
 例えば （-4 を 0 で 最大公約数にする） は 4 です
 
-# 2つの整数の最小公倍数です。どちらかが 0 なら 0 です。
+# The least common multiple of two integers. 0 if either is 0.
 数 を 数 で 最小公倍数にする は 数
 a を b で 最小公倍数にする とは
   もし a = 0 または b = 0 ならば 0
@@ -81,13 +81,13 @@ a を b で 最小公倍数にする とは
 例えば （4 を 6 で 最小公倍数にする） は 12 です
 例えば （0 を 6 で 最小公倍数にする） は 0 です
 
-# n の階乗(1 から n までの積)です。n が 2 より小さければ 1 です。
+# The factorial of n (the product of 1 to n). 1 when n is less than 2.
 数 を 階乗する は 数
 n を 階乗する とは もし n < 2 ならば 1 そうでなければ n * （n - 1 を 階乗する）
 例えば （0 を 階乗する） は 1 です
 例えば （20 を 階乗する） は 2432902008176640000 です
 
-# 正なら 1、負なら -1、0 なら 0 です。
+# 1 for a positive number, -1 for a negative number and 0 for 0.
 数 を 符号にする は 数
 x を 符号にする とは もし x > 0 ならば 1 そうでなければ もし x < 0 ならば -1 そうでなければ 0
 例えば （-3 を 符号にする） は -1 です

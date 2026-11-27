@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」の動的リンクのライブラリです。C の dlopen・dlsym・dlclose を外部の関数として呼びます。
-# 使うファイルに `「動的リンク」 を 読み込む` と書き、`動的リンク内のライブラリ開封する` のように「動的リンク内の」を付けて使います。
+# The dynamic linking library of Suru. It calls C's dlopen, dlsym and dlclose as external functions.
+# Write `「動的リンク」 を 読み込む` in your file and use the names with the `動的リンク内の` prefix, like `動的リンク内のライブラリ開封する`.
 #
-# プログラムを書いたときに決まっていないライブラリを、動かしている間に開いて、その中の関数の番地を取り出します。
-# 取り出した番地の関数は、型の宣言をした「外部の（f）」の定義で呼びます(README_jp.md の「動的リンク」)。どれも動作です。
+# It opens, while running, a library that was not known when the program was written, and takes out the addresses of functions in it.
+# Call a function at such an address with a 「外部の（f）」 definition that has a type declaration ("Dynamic linking" in README.md). All of them are actions.
 外部の「c」 を 読み込む
 「標準」 を 読み込んで 使う
 
@@ -28,7 +28,7 @@
   （何 + 「に失敗しました(」 + e + 「)」） を 失敗する
   以上です
 
-# ライブラリを開きます。道は「libm.so.6」のような名前か、/ を含む道です。結果は開いたライブラリ(番地)です。
+# Opens a library. The path is a name like 「libm.so.6」 or a path containing /. Gives the opened library (an address).
 文字列 を ライブラリ開封する は 番地 の 動作
 道 を ライブラリ開封する とは 以下の手順です
   最後のエラー取得する
@@ -40,14 +40,14 @@
   もし （h を 番地数値にする） = 0 ならば （「ライブラリ『」 + 道 + 「』を開くの」） を 動的失敗する そうでなければ h を 結果にする
   以上です
 
-# 実行しているプログラム自身と、リンク済みのライブラリ(libc など)を開いたものです。
+# Opens the running program itself and the libraries linked to it (libc and so on).
 自分取得する は 番地 の 動作
 自分取得する とは 以下の手順です
   h とは （0 を 番地にする） を 2 で 低水準開封した 結果
   もし （h を 番地数値にする） = 0 ならば 「プログラム自身を開くの」 を 動的失敗する そうでなければ h を 結果にする
   以上です
 
-# `h から 名前 を 記号取得する` で、その名前の関数(や変数)の番地です。
+# `h から 名前 を 記号取得する` is the address of the function (or variable) with that name.
 番地 から 文字列 を 記号取得する は 番地 の 動作
 h から 名前 を 記号取得する とは 以下の手順です
   最後のエラー取得する
@@ -55,7 +55,7 @@ h から 名前 を 記号取得する とは 以下の手順です
   もし （p を 番地数値にする） = 0 ならば （「『」 + 名前 + 「』を取り出すの」） を 動的失敗する そうでなければ p を 結果にする
   以上です
 
-# 閉じます(取り出した番地は使えなくなります)。
+# Closes the library (addresses taken from it can no longer be used).
 番地 を ライブラリ閉鎖する は 数 の 動作
 h を ライブラリ閉鎖する とは 以下の手順です
   r とは h を 動的低水準閉鎖した 結果

@@ -3817,11 +3817,11 @@ def doc_markdown(d: dict) -> str:
         if it["signature"]:
             out += "\n```suru\n" + it["signature"] + "\n```\n"
         if it["usage"]:
-            out += "\n使い方: `" + it["usage"] + "`\n"
+            out += "\nUsage: `" + it["usage"] + "`\n"
         if it["description"]:
             out += "\n" + it["description"] + "\n"
         if it["examples"]:
-            out += "\n例:\n\n```suru\n" + "\n".join(it["examples"]) + "\n```\n"
+            out += "\nExamples:\n\n```suru\n" + "\n".join(it["examples"]) + "\n```\n"
     return out
 
 

@@ -1,5 +1,5 @@
-# Sphinx の設定(kumu 文書 --雛形 が書いたもの。自由に直してかまいません)
-# API のページ(api/)は、ビルドの前に kumu 文書 --出力 docs/api が作ります。
+# Sphinx settings (written by kumu 文書 --雛形; feel free to change them).
+# The API pages (api/) are made before the build by kumu 文書 --出力 docs/api.
 import os
 import re
 import sys
@@ -14,7 +14,7 @@ _m = re.search(r"^版\s*とは\s*「([^」]*)」", _text, re.M)
 project = "{{名前}}"
 release = _m.group(1) if _m else ""
 version = release
-language = "ja"
+language = "en"
 
 extensions = ["myst_parser"]
 source_suffix = {".md": "markdown"}
@@ -22,7 +22,7 @@ myst_heading_anchors = 3
 exclude_patterns = ["_build"]
 html_theme = "furo"
 html_title = f"「{project}」 {release}"
-html_show_copyright = False  # 持ち主を書くなら copyright = "…" にして、この行を消します
+html_show_copyright = False  # to show an owner, set copyright = "…" and remove this line
 highlight_language = "suru"
 
 

@@ -1,50 +1,50 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」の通信ライブラリです(TCP と UDP)。
-# 使うファイルに `「通信」 を 読み込む` と書き、`通信内の待受開始する` のように「通信内の」を付けて使います。
+# The networking library of Suru (TCP and UDP).
+# Write `「通信」 を 読み込む` in your file and use the names with the `通信内の` prefix, like `通信内の待受開始する`.
 #
-# TCP の中身は全部組み込みで、どれも動作を返します。待受口と接続(と UDP の口)は番号で表します。
+# TCP is all built in, and every function gives an action. Listeners and connections (and UDP sockets) are numbers.
 #
-# - `ポート を 待受開始する`: 待受口の番号(0.0.0.0 のポートで待ち受ける)
-# - `ポート を アドレス に 待受開始する`: そのアドレスだけで待ち受ける(「127.0.0.1」なら同じ機械の中からだけ)
-# - `待受口 から 接続受付する`: 接続の番号(次の接続が来るまで待つ)
-# - `ホスト に ポート で 接続する`: 接続の番号(こちらから相手につなぐ。ホストは名前か IP アドレス)
-# - `接続 から 行受信する`: 1行の文字列(終わりの改行を含む。相手が閉じていれば「」)
-# - `接続 から バイト数 を 受信する`: そのバイト数までの文字列(UTF-8 として読む)
-# - `接続 から バイト数 を バイト列受信する`: そのバイト数までのバイト列(文字の途中で切れても壊さない)
-# - `文字列 を 接続 へ 送信する`: 送ったバイト数
-# - `バイト列 を 接続 へ バイト列送信する`: 送ったバイト数(バイト列をそのまま送る)
-# - `番号 を 切断する`: 接続か待受口を閉じる(結果は番号)
+# - `ポート を 待受開始する`: the number of a listener (listening on that port of 0.0.0.0)
+# - `ポート を アドレス に 待受開始する`: listens only on that address (「127.0.0.1」 accepts only from the same machine)
+# - `待受口 から 接続受付する`: the number of a connection (waits for the next one)
+# - `ホスト に ポート で 接続する`: the number of a connection (connecting out; the host is a name or an IP address)
+# - `接続 から 行受信する`: one line as a string (with the newline; 「」 if the other side closed)
+# - `接続 から バイト数 を 受信する`: a string of up to that many bytes (read as UTF-8)
+# - `接続 から バイト数 を バイト列受信する`: up to that many bytes (not broken in the middle of a character)
+# - `文字列 を 接続 へ 送信する`: the number of bytes sent
+# - `バイト列 を 接続 へ バイト列送信する`: the number of bytes sent (the bytes as they are)
+# - `番号 を 切断する`: closes a connection or listener (gives the number)
 #
-# 通信が失敗すると(相手が切れたときなど)「通信に失敗しました」の実行時エラーになります。
+# When communication fails (for example when the other side disconnects) it is the runtime error 「通信に失敗しました」.
 #
-# UDP は便りを1つずつ送る・受け取る通信です。つながりはなく、届かないことも順が入れ替わることもあります。
+# UDP sends and receives one message at a time. There is no connection; messages can be lost or arrive out of order.
 #
-# - `ポート を UDP開始する`: UDP の口の番号(0.0.0.0 のそのポートで受け取る。0 なら OS が選ぶ)
-# - `ポート を アドレス に UDP開始する`: そのアドレスだけで受け取る
-# - `UDPバイト列送信する`・`UDPバイト列受信する`: バイト列で送る・受け取る
+# - `ポート を UDP開始する`: the number of a UDP socket (receiving on that port of 0.0.0.0; the OS chooses for 0)
+# - `ポート を アドレス に UDP開始する`: receives only on that address
+# - `UDPバイト列送信する` and `UDPバイト列受信する`: send and receive bytes
 #
-# UDP の口も `待機時間設定する`(時間切れは実行時エラー)と `切断する` で使えます。`UDP開始する`・`UDPバイト列送信する`・`UDPバイト列受信する` は組み込みです。
+# A UDP socket also works with `待機時間設定する` (a timeout is a runtime error) and `切断する`. `UDP開始する`, `UDPバイト列送信する` and `UDPバイト列受信する` are built in.
 「標準」 を 読み込んで 使う
 
-# 受け取った便りです。送り主は IP アドレスの文字列、ポートは送り主のポートです。
+# A received message. The sender is an IP address string and the port is the sender's port.
 UDP便 とは 中身 と 送り主 と ポート の 組
 
-# `文字列 を 口 から ホスト に ポート で UDP送信する` で、文字列を送り、送ったバイト数を結果にします(バイト列は `UDPバイト列送信する`)。
+# `文字列 を 口 から ホスト に ポート で UDP送信する` sends a string and gives the number of bytes sent (for bytes, `UDPバイト列送信する`).
 文字列 を 数 から 文字列 に 数 で UDP送信する は 数 を 返す 動作
 文 を 口 から ホスト に ポート で UDP送信する とは （文 を バイト列にする） を 口 から ホスト に ポート で UDPバイト列送信する
 
-# `口 から UDP受信する` で、次の便りを1つ丸ごと受け取ります(中身は文字列。バイト列は `UDPバイト列受信する`)。
+# `口 から UDP受信する` receives the next whole message (the contents as a string; for bytes, `UDPバイト列受信する`).
 数 から UDP受信する は （文字列 と 文字列 と 数） の UDP便 を 返す 動作
 口 から UDP受信する とは 以下の入出力手順です
   便 とは 口 から UDPバイト列受信した 結果
   （便 の 中身 を 文字列にする） と （便 の 送り主） と （便 の ポート） の UDP便 を 結果にする
   以上です
 
-# `文字列 を 口 から 便 へ UDP返信する` で、便の送り主へ文字列を送ります。
+# `文字列 を 口 から 便 へ UDP返信する` sends a string to the sender of the message.
 文字列 を 数 から （甲 と 文字列 と 数） の UDP便 へ UDP返信する は 数 を 返す 動作
 文 を 口 から 便 へ UDP返信する とは 文 を 口 から （便 の 送り主） に （便 の ポート） で UDP送信する
 
-# `バイト列 を 口 から 便 へ UDPバイト列返信する` で、便の送り主へバイト列を送ります。
+# `バイト列 を 口 から 便 へ UDPバイト列返信する` sends bytes to the sender of the message.
 バイト列 を 数 から （甲 と 文字列 と 数） の UDP便 へ UDPバイト列返信する は 数 を 返す 動作
 データ を 口 から 便 へ UDPバイト列返信する とは データ を 口 から （便 の 送り主） に （便 の ポート） で UDPバイト列送信する

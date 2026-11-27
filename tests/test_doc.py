@@ -57,13 +57,14 @@ def test_library_files():
         src = path.read_text(encoding="utf-8")
         module, names = doc_comments(src, parse_program(src))
         if path.name == "通信.suru":
-            assert module.startswith("「する」の通信ライブラリです(TCP と UDP)。")
-            assert names["UDP便"].startswith("受け取った便りです。")
+            assert module.startswith("The networking library of Suru (TCP and UDP).")
+            assert names["UDP便"].startswith("A received message.")
 
 
 # --- suru --文書(段階2) ---
 
 import json  # noqa: E402
+import re  # noqa: E402
 import shutil  # noqa: E402
 import subprocess  # noqa: E402
 
@@ -106,11 +107,11 @@ API_MD = """# 「計算」
 数 を 二倍する は 数 を 返す
 ```
 
-使い方: `x を 二倍する`
+Usage: `x を 二倍する`
 
 数を2倍した値です。
 
-例:
+Examples:
 
 ```suru
 例えば （3 を 二倍する） は 6 です
@@ -133,7 +134,7 @@ API_MD = """# 「計算」
 
 ## 足す計算する
 
-使い方: `a と b を 足す計算する`
+Usage: `a と b を 足す計算する`
 """
 
 
@@ -179,10 +180,10 @@ def test_go_version_gives_the_same_documents(tmp_path):
 
 
 def test_docs_site_includes_readme_section():
-    """docs/組み込み関数.md が README_jp.md から取り込む節の見出しがある(見出しを変えたら docs も直す)"""
-    readme = (ROOT / "README_jp.md").read_text(encoding="utf-8")
+    """docs/組み込み関数.md が README.md から取り込む節の見出しがある(見出しを変えたら docs も直す)"""
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
     page = (ROOT / "docs" / "組み込み関数.md").read_text(encoding="utf-8")
-    for marker in ("### 組み込み関数", "## 決めたこと"):
+    for marker in ("### Built-in functions", "## Decisions"):
         assert f'"{marker}"' in page
         assert "\n" + marker in readme
 
@@ -207,3 +208,28 @@ def test_library_definitions_have_descriptions():
         assert d["description"], path.name
         missing += [f"{path.stem}内の{it['name']}" for it in d["items"] if not it["description"]]
     assert missing == []
+
+
+def _outside_code(text: str) -> str:
+    """`…` と 「…」(入れ子も)の外の部分"""
+    text = re.sub(r"`[^`]*`", "", text)
+    out, depth = [], 0
+    for ch in text:
+        if ch == "「":
+            depth += 1
+        elif ch == "」":
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            out.append(ch)
+    return "".join(out)
+
+
+def test_library_descriptions_are_in_english():
+    """lib/ の説明は英語で書く(名前などの日本語は `…` か 「…」 に入れる)。ひらがながあれば日本語の文が残っている"""
+    japanese = []
+    for path in sorted((ROOT / "lib").glob("*.suru")):
+        d = document_file(str(path))
+        for name, text in [("(file)", d["description"])] + [(it["name"], it["description"]) for it in d["items"]]:
+            if re.search(r"[ぁ-ゟ]", _outside_code(text)):
+                japanese.append(f"{path.stem}: {name}")
+    assert japanese == []

@@ -1,30 +1,30 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」の基本のライブラリです。失敗を値で返す「成否」と、値があるかないかの「有無」があります。
-# 読み込むと書かなくても、プログラムに 成否・有無・成功・失敗・有 や `成否にする` などを書くと、`「基本」 を 読み込んで 使う` と書いたのと同じになります(`基本内の取出する` とも書けます)。
+# The basic library of Suru: 「成否」, which returns failure as a value, and 「有無」, a value that may be missing.
+# Even without loading it, writing 成否, 有無, 成功, 失敗, 有, `成否にする` and so on in a program is the same as writing `「基本」 を 読み込んで 使う` (you can also write `基本内の取出する`).
 #
-# - `v の 成功` / `理由 の 失敗`: `（甲 と 乙） の 成否`(Rust の Result)
-# - `v の 有` / `無`: `甲 の 有無`(Option・Maybe)
-# - `r を 取出する`: 成功(有)なら中の値。失敗(無)なら実行時エラー
-# - `o を 理由 で 成否にする`: 有なら成功、無なら 理由 の 失敗
-# - `r を 有無にする`: 成功なら有、失敗なら無
-# - `文 を 中断する`: 文 の実行時エラーになる(動作ではない。`試行する` で受け止められます)
-# - `s を 数値確認する`: 数にできれば 数 の 成功、できなければ 理由 の 失敗
-# - `「質問」 を 入力確認する`: 1行読めれば 文字列 の 有、入力の終わり(Ctrl-D)なら 無 の動作
-# - `f を 試算する`: 引数を全部渡した関数 f を呼び、実行時エラーなら 失敗 にする
-# - `r を 文 で 失敗説明する`: 失敗に「文のに失敗しました」の説明を重ねる
-# - `r を 失敗詳細にする`: 失敗の説明・原因・経路の全部の文字列
+# - `v の 成功` / `理由 の 失敗`: `（甲 と 乙） の 成否` (like Rust's Result)
+# - `v の 有` / `無`: `甲 の 有無` (like Option or Maybe)
+# - `r を 取出する`: the value inside for 成功 (有); a runtime error for 失敗 (無)
+# - `o を 理由 で 成否にする`: 成功 for 有, `理由 の 失敗` for 無
+# - `r を 有無にする`: 有 for 成功, 無 for 失敗
+# - `文 を 中断する`: a runtime error with that message (not an action; you can catch it with `試行する`)
+# - `s を 数値確認する`: `数 の 成功` if it is a number, otherwise `理由 の 失敗`
+# - `「質問」 を 入力確認する`: an action giving `文字列 の 有` if a line was read and 無 at the end of input (Ctrl-D)
+# - `f を 試算する`: calls f with all its arguments given, and gives 失敗 on a runtime error
+# - `r を 文 で 失敗説明する`: adds the explanation 「文のに失敗しました」 to a failure
+# - `r を 失敗詳細にする`: the whole text of a failure (explanation, cause and path)
 #
-# 成否 と 有無 は 写像可能・連鎖可能 なので、「の 結果」「してから」「手順」も使えます。
+# 成否 and 有無 are 写像可能 and 連鎖可能, so 「の 結果」, 「してから」 and procedures work with them.
 
-# 成功した値か、失敗の理由です(Rust の Result)。
+# A successful value or the reason for a failure (like Rust's Result).
 成否 とは 値 の 成功 か 理由 の 失敗
-# 値があるか、ないかです(Option・Maybe)。
+# A value that is there or not (like Option or Maybe).
 有無 とは 値 の 有 か 無
 
 # --- 取り出す ---
 
-# `取出する` で中の値を取り出せる型です(成否・有無)。成功(有)なら中の値、失敗(無)なら実行時エラーです。
+# Types whose value can be taken out with `取出する` (成否 and 有無). The value inside for 成功 (有), a runtime error for 失敗 (無).
 取出可能 という 性質 とは
   m を 取出する
 
@@ -38,12 +38,12 @@
 
 # --- 変える ---
 
-# `o を 理由 で 成否にする` で、有なら成功、無なら 理由 の 失敗 です。
+# `o を 理由 で 成否にする` is 成功 for 有 and `理由 の 失敗` for 無.
 甲 の 有無 を 乙 で 成否にする は （甲 と 乙） の 成否
 （値 の 有） を 文 で 成否にする とは 値 の 成功
 無 を 文 で 成否にする とは 文 の 失敗
 
-# 成功なら有、失敗なら無です。
+# 有 for 成功, 無 for 失敗.
 （甲 と 乙） の 成否 を 有無にする は 甲 の 有無
 （値 の 成功） を 有無にする とは 値 の 有
 （理由 の 失敗） を 有無にする とは 無

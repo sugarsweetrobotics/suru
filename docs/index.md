@@ -1,12 +1,12 @@
-# 「する」のドキュメント
+# Suru documentation
 
-「する」は、日本語で書く関数型のプログラミング言語です。このサイトには、標準ライブラリ(`lib/`)の API と、組み込みの関数、手引きがあります。言語の全体と決めたことは [README](https://github.com/suru-lang/suru/blob/main/README_jp.md) にあります。
+Suru (「する」) is a functional programming language written in Japanese. This site has the API of the standard library (`lib/`), the built-in functions and guides. The whole language and its decisions are in the [README](https://github.com/suru-lang/suru/blob/main/README.md).
 
-API のページは、各ファイルの公開の名前を、定義のすぐ上の注釈(説明)・型の宣言・使い方・例(`例えば … は … です`)とともに並べたものです。`suru --文書` で作っています。
+Each API page lists the public names of a file with their description (the comment right above the definition), type declaration, usage and examples (`例えば … は … です`). The pages are made by `suru --文書`.
 
 ```{toctree}
 :maxdepth: 1
-:caption: 手引き
+:caption: Guides
 
 組み込み関数
 AIの手引き
@@ -15,7 +15,7 @@ AIの手引き
 
 ```{toctree}
 :maxdepth: 1
-:caption: 標準ライブラリ
+:caption: Standard library
 :glob:
 
 api/*

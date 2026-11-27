@@ -1654,7 +1654,7 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build   # 手元
 ```
 
 1. **`kumu 文書` documents the top-level files of the project.** After fetching the dependencies (like `取得`), it writes the `.suru` files at the top of the project folder (except `組.suru`) to `docs/api/名前.md`, in the same form as `suru --文書`. Files under `試験/` or `例/` are not API, so they are not read. `--出力 フォルダ` chooses where to write and `--json` writes JSON (#209).
-2. **`kumu 文書 --雛形` writes Sphinx and Read the Docs settings.** Sphinx reads MyST (Markdown), with `language = "ja"` (Japanese search) and the furo theme. `docs/_ext/suru_lexer.py` is a Pygments lexer that highlights Suru code, registered by `conf.py`. The project name is filled in when the files are written; the version is read from `組.suru` on every build. `index.md` gets the head comment of the file named after the project (or else the entry file). Existing files are left as they are, and `/docs/api/` and `/docs/_build/` are added to `.gitignore`.
+2. **`kumu 文書 --雛形` writes Sphinx and Read the Docs settings.** Sphinx reads MyST (Markdown), with `language = "en"` (English pages, see "English API documentation") and the furo theme. `docs/_ext/suru_lexer.py` is a Pygments lexer that highlights Suru code, registered by `conf.py`. The project name is filled in when the files are written; the version is read from `組.suru` on every build. `index.md` gets the head comment of the file named after the project (or else the entry file). Existing files are left as they are, and `/docs/api/` and `/docs/_build/` are added to `.gitignore`.
 3. **Read the Docs only needs the repository connected.** On every build, `.readthedocs.yaml` downloads the Linux kumu of the same version as the one that wrote the files from GitHub Releases, runs `kumu 文書 --出力 docs/api`, then builds the HTML with Sphinx. The generated pages are not committed. Import the GitHub repository on readthedocs.org and it is published on every push and tag.
 4. **The folder is named docs.** Instead of a Japanese folder name like `試験/`, it uses `docs/`, which Read the Docs and Sphinx tools expect.
 
@@ -1670,10 +1670,17 @@ python suru.py --文書 --出力 docs/api lib   # 標準ライブラリの API �
 pip install -r docs/requirements.txt && sphinx-build docs docs/_build
 ```
 
-1. **This repository is published on Read the Docs too.** It has `docs/conf.py` (Sphinx + MyST, `language = "ja"`, furo) and `.readthedocs.yaml`, which on every build runs `python suru.py --文書 --出力 docs/api lib` to make the API pages of every file in `lib/`. Unlike a kumu project there are no dependencies, so kumu is not used (#209).
-2. **What it contains.** The standard library API, the built-in functions (the table of "Built-in functions" in README_jp.md is included), `docs/AIの手引き.md` and `docs/ライブラリを公開する.md`. `docs/今後/` and `docs/リリース.md` are not for users, so they are left out. The version is read from `__version__` in `suru.py`.
+1. **This repository is published on Read the Docs too.** It has `docs/conf.py` (Sphinx + MyST, `language = "en"`, furo) and `.readthedocs.yaml`, which on every build runs `python suru.py --文書 --出力 docs/api lib` to make the API pages of every file in `lib/`. Unlike a kumu project there are no dependencies, so kumu is not used (#209).
+2. **What it contains.** The standard library API, the built-in functions (the table of "Built-in functions" in README.md is included), `docs/AIの手引き.md` and `docs/ライブラリを公開する.md`. `docs/今後/` and `docs/リリース.md` are not for users, so they are left out. The version is read from `__version__` in `suru.py`.
 3. **Same highlighting as the kumu scaffold.** It uses `cmd/kumu/docs_template/suru_lexer.py`. `suru-誤り` code (the examples in the AI guide that fail the check) is highlighted the same way.
 4. **Parameters of external functions are "…".** Functions in an `以下は外部の…です` block have no parameter names, so their usage is written like `… を 正弦にする`.
+
+### English API documentation
+
+1. **Descriptions are written in English.** The head comments and the descriptions of the definitions in `lib/` are English, so the API pages, `suru --文書` and the editor hover show English. Names such as `標準内の逆順にする`, type names and Japanese words in examples stay as they are, in `…` or 「…」 (#209).
+2. **The page labels are English.** `suru --文書` writes `Usage:` and `Examples:`, and the sites made by `docs/conf.py` and `kumu 文書 --雛形` use `language = "en"`. The title of each page is still the file name (`# 「算術」`).
+3. **A test keeps them English.** `tests/test_doc.py` fails when a description in `lib/` has hiragana outside `…` and 「…」, and when a public definition (except in 字句・構文・点検) has no description.
+4. **Merged cases show "…" too.** A function written case by case (its parameter becomes `（を）`) shows its usage as `… を 最大値にする`.
 
 ## License
 

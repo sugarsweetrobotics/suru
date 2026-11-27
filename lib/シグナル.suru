@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」のシグナルのライブラリです。C の sigprocmask・sigwait・kill などを外部の関数として呼びます。
-# 使うファイルに `「シグナル」 を 読み込む` と書き、`シグナル内のシグナル受付する` のように「シグナル内の」を付けて使います。
+# The signal library of Suru. It calls C's sigprocmask, sigwait, kill and so on as external functions.
+# Write `「シグナル」 を 読み込む` in your file and use the names with the `シグナル内の` prefix, like `シグナル内のシグナル受付する`.
 #
-# する から C へ関数を渡せないので、シグナルは「受付」で止めておき、待つか確かめて受け取ります。
-# シグナルは 「INT」「TERM」「HUP」「USR1」 のように名前(SIG を除いたもの)で書きます。どれも動作です。
+# Suru cannot pass functions to C, so signals are blocked by 「受付」 and then received by waiting or checking.
+# Signals are written by name without SIG, like 「INT」, 「TERM」, 「HUP」, 「USR1」. All of them are actions.
 外部の「c」 を 読み込む
 「標準」 を 読み込んで 使う
 「環境」 を 読み込む
@@ -51,7 +51,7 @@
 名前一覧 は 文字列 の リスト
 名前一覧 とは 「HUP」 と 「INT」 と 「QUIT」 と 「ABRT」 と 「KILL」 と 「PIPE」 と 「ALRM」 と 「TERM」 と 「WINCH」 と 「USR1」 と 「USR2」 と 「CHLD」 と 「CONT」 と 「STOP」 と 「TSTP」
 
-# シグナルの名前の、この OS での番号です。
+# The number of the named signal on this OS.
 文字列 を シグナル番号取得する は 数 の 動作
 名前 を シグナル番号取得する とは 以下の手順です
   系 とは 環境内のOS名取得した 結果
@@ -116,15 +116,15 @@ k で xs を 遮断変更する とは 以下の手順です
 
 # --- 受け取る ---
 
-# そのシグナルで終わらないよう止めておき、受け取れるようにします。
+# Blocks those signals so they do not end the program, and makes them receivable.
 文字列 の リスト を シグナル受付する は 数 の 動作
 xs を シグナル受付する とは 0 で xs を 遮断変更する
 
-# 止めるのをやめます(届いていたものはすぐ起きます)。
+# Stops blocking them (signals already delivered take effect at once).
 文字列 の リスト を シグナル受付解除する は 数 の 動作
 xs を シグナル受付解除する とは 1 で xs を 遮断変更する
 
-# 受付したシグナルが届くまで待ち、その名前を結果にします。
+# Waits until an accepted signal arrives and gives its name.
 シグナル待機する は 文字列 の 動作
 シグナル待機する とは 以下の手順です
   （0 を 番地にする） を 表示確定する
@@ -150,7 +150,7 @@ n を 名前化する とは 以下の手順です
   もし 合う = 空 ならば n を 文字列化して 結果にする そうでなければ 合う の 先頭 を 結果にする
   以上です
 
-# 届いて待っている受付したシグナルの名前のリストです(待ちません。空のこともあります)。
+# The names of accepted signals that have arrived and are pending (does not wait; may be empty).
 シグナル確認する は 文字列 の リスト の 動作
 シグナル確認する とは 以下の手順です
   遮断 とは 遮断中取得した 結果
@@ -192,7 +192,7 @@ xs を 順消化本体する とは 以下の手順です
 
 # --- 送る・無視する(自分が終わることもあるので、先にそれまでの表示を出しておく) ---
 
-# `名前 を プロセス番号 へ シグナル送信する` で、シグナルを送ります(kill)。
+# `名前 を プロセス番号 へ シグナル送信する` sends a signal (kill).
 文字列 を 数 へ シグナル送信する は 数 の 動作
 名前 を pid へ シグナル送信する とは 以下の手順です
   n とは 名前 を シグナル番号取得した 結果
@@ -200,7 +200,7 @@ xs を 順消化本体する とは 以下の手順です
   （pid を n で 低水準送信する） を （「シグナル『」 + 名前 + 「』を送るの」） で 失敗確認する
   以上です
 
-# 自分にシグナルを送ります(raise)。
+# Sends a signal to this process (raise).
 文字列 を シグナル発生する は 数 の 動作
 名前 を シグナル発生する とは 以下の手順です
   n とは 名前 を シグナル番号取得した 結果
@@ -215,11 +215,11 @@ xs を 順消化本体する とは 以下の手順です
   もし （r を 番地数値にする） = -1 ならば （「シグナル『」 + 名前 + 「』の扱いを変えるの」） を 理由失敗する そうでなければ 0 を 結果にする
   以上です
 
-# そのシグナルが届いても何もしないようにします。
+# Makes the signal do nothing when it arrives.
 文字列 を シグナル無視する は 数 の 動作
 名前 を シグナル無視する とは 名前 を 1 で 処理切替する
 
-# そのシグナルを元の動きに戻します。
+# Gives the signal back its default behavior.
 文字列 を シグナル既定化する は 数 の 動作
 名前 を シグナル既定化する とは 名前 を 0 で 処理切替する
 

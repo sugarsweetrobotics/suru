@@ -1648,7 +1648,7 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build   # 手元
 ```
 
 1. **`kumu 文書` はプロジェクトの一番上のファイルを文書にする。** 依存を取ってきてから(`取得` と同じ)、プロジェクトのフォルダの一番上にある `.suru`(`組.suru` を除く)を `suru --文書` と同じ形で `docs/api/名前.md` に書きます。`試験/` や `例/` の下のファイルは API ではないので見ません。`--出力 フォルダ` で書く場所を、`--json` で JSON を選べます(#209)。
-2. **`kumu 文書 --雛形` は Sphinx と Read the Docs の設定を書く。** Sphinx は MyST(Markdown)で読み、`language = "ja"`(日本語の検索)、テーマは furo です。`docs/_ext/suru_lexer.py` は する のコードに色を付ける Pygments の lexer で、`conf.py` が登録します。プロジェクトの名前は書いたときに入れ、版はビルドのたびに `組.suru` から読みます。`index.md` には、プロジェクトと同じ名前のファイル(なければ入口のファイル)の頭の注釈を入れます。今あるファイルは変えず、`.gitignore` に `/docs/api/` と `/docs/_build/` を足します。
+2. **`kumu 文書 --雛形` は Sphinx と Read the Docs の設定を書く。** Sphinx は MyST(Markdown)で読み、`language = "en"`(英語のページ。「英語の API ドキュメント」)、テーマは furo です。`docs/_ext/suru_lexer.py` は する のコードに色を付ける Pygments の lexer で、`conf.py` が登録します。プロジェクトの名前は書いたときに入れ、版はビルドのたびに `組.suru` から読みます。`index.md` には、プロジェクトと同じ名前のファイル(なければ入口のファイル)の頭の注釈を入れます。今あるファイルは変えず、`.gitignore` に `/docs/api/` と `/docs/_build/` を足します。
 3. **Read the Docs はリポジトリをつなぐだけ。** `.readthedocs.yaml` はビルドのたびに、雛形を書いた kumu と同じ版の Linux 用の kumu を GitHub Releases から取ってきて `kumu 文書 --出力 docs/api` を流し、それから Sphinx で HTML にします。作ったページはコミットしません。readthedocs.org で GitHub のリポジトリを取り込めば、push とタグごとに公開されます。
 4. **フォルダの名前は docs。** 日本語のフォルダの名前(`試験/` など)にそろえず、Read the Docs と Sphinx の道具がふつう使う `docs/` にしました。
 
@@ -1664,10 +1664,17 @@ python suru.py --文書 --出力 docs/api lib   # 標準ライブラリの API �
 pip install -r docs/requirements.txt && sphinx-build docs docs/_build
 ```
 
-1. **このリポジトリも Read the Docs で公開する。** `docs/conf.py`(Sphinx + MyST、`language = "ja"`、furo)と `.readthedocs.yaml` があり、ビルドのたびに `python suru.py --文書 --出力 docs/api lib` で `lib/` の全部のファイルの API のページを作ります。kumu のプロジェクトと違って依存がないので、kumu は使いません(#209)。
-2. **載せるもの。** 標準ライブラリの API、組み込み関数(README_jp.md の「組み込み関数」の表を取り込みます)、`docs/AIの手引き.md`、`docs/ライブラリを公開する.md` です。`docs/今後/` と `docs/リリース.md` は使う人向けではないので載せません。版は `suru.py` の `__version__` から読みます。
+1. **このリポジトリも Read the Docs で公開する。** `docs/conf.py`(Sphinx + MyST、`language = "en"`、furo)と `.readthedocs.yaml` があり、ビルドのたびに `python suru.py --文書 --出力 docs/api lib` で `lib/` の全部のファイルの API のページを作ります。kumu のプロジェクトと違って依存がないので、kumu は使いません(#209)。
+2. **載せるもの。** 標準ライブラリの API、組み込み関数(README.md の「Built-in functions」の表を取り込みます)、`docs/AIの手引き.md`、`docs/ライブラリを公開する.md` です。`docs/今後/` と `docs/リリース.md` は使う人向けではないので載せません。版は `suru.py` の `__version__` から読みます。
 3. **色付けは kumu の雛形と同じ。** `cmd/kumu/docs_template/suru_lexer.py` を使います。`suru-誤り` のコード(AI の手引きの、検査でエラーになる例)も同じ色付けです。
 4. **外部の関数の引数は「…」。** `以下は外部の…です` のまとまりの中の関数は引数に名前がないので、使い方は `… を 正弦にする` のように書きます。
+
+### 英語の API ドキュメント
+
+1. **説明は英語で書く。** `lib/` の頭の注釈と定義の説明は英語なので、API のページ・`suru --文書`・エディターのホバーは英語で出ます。`標準内の逆順にする` のような名前・型の名前・例の中の日本語は、`…` か 「…」 に入れてそのまま書きます(#209)。
+2. **ページの見出しも英語。** `suru --文書` は `Usage:` と `Examples:` を書き、`docs/conf.py` と `kumu 文書 --雛形` のサイトは `language = "en"` です。各ページの題はファイルの名前(`# 「算術」`)のままです。
+3. **試験で英語を保つ。** `tests/test_doc.py` は、`lib/` の説明の `…` と 「…」 の外にひらがながあるとき、公開の定義(字句・構文・点検 を除く)に説明がないときに落ちます。
+4. **場合ごとの定義も「…」。** 場合ごとに書いた関数(引数が `（を）` になるもの)の使い方は `… を 最大値にする` と書きます。
 
 ## ライセンス
 

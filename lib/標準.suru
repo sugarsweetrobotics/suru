@@ -1,123 +1,123 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
-# 「する」の標準ライブラリです。
-# 使うファイルに `「標準」 を 読み込む` と書き、`標準内の逆順にする` のように「標準内の」を付けて使います。
+# The standard library of Suru.
+# Write `「標準」 を 読み込む` in your file and use the names with the `標準内の` prefix, like `標準内の逆順にする`.
 #
-# する では書けないものは組み込みです。ここには定義がありませんが、「標準内の…」で使えます。
+# What Suru cannot express itself is built in. It has no definition here, but you can use it as `標準内の…` too.
 #
-# - 数: `x を 切捨する`、`x を 平方根にする`、`a から b を 範囲にする`
-# - 並べ替え: `xs を 整列する`(小さい順。数のリストか文字列のリスト。同じものは元の順)、`xs を f で 基準整列する`(f で求めた数か文字列の小さい順)
-# - リスト(この5つは文字列にも使えます): `xs を 逆順にする`、`xs から n を 先頭取得する`、`xs から n を 先頭削除する`、`xs から n を 番目取得する`、`xs が x を 含有である`
-# - 文字列: `s を 文字分解する`、`s を 区切り で 分割する`、`xs を 区切り で 結合する`、`s を 前 から 後 へ 置換する`、`s を 大文字にする`、`s を 小文字にする`、`s を 空白除去する`、`s が 前 で 先頭一致である`、`s が 後 で 末尾一致である`
-# - 文字の番号: `s を バイト数にする`(UTF-8 での長さ)、`n を 文字にする`(番号の文字)、`s を 文字コードにする`(1文字の番号)
-# - バイト列: `s を バイト列にする`(UTF-8)、`xs を バイト列組立する`(0〜255 の数のリストから)、`b を 数列にする`、`b を 文字列にする`(UTF-8 として読む)、`b を バイト長にする`
-# - 直列化: `x を 直列化する`(値をバイト列に。関数・動作・番地は不可)、`b を 復元する`(戻す。結果の型は宣言で決める)
-# - 固定の形: `x を 見本 で 固定直列化する`(数と真偽だけの組を、C の構造体と同じ 8 バイトずつの並びに)、`b を 見本 で 固定復元する`
-# - 外部の関数とのやりとり: `n を 番地にする`、`p を 番地数値にする`、`p から n を バイト列取得する`(動作)、`b を p へ 書込する`(動作)、`エラー番号取得する`(動作。直前の外部の関数が残した errno)、`文 を 失敗する`(動作)
-# - C のメモリを型を決めて読み書きする(どれも動作): `p から 位置 で 符号付き32読取する`、`x を p へ 位置 で 符号付き32書込する`(型は 符号付き8・16・32・64、符号なし8・16・32・64、単精度、小数、番地、真偽(1 バイト)、C文字列(NUL で終わる文字列))、`p を n で 番地加算する`(n バイト先の番地)
-# - C の構造体の形: `見本 を 欄の型の一覧 で C形作成する`、`形 を 番号 で 中の形 に 入れ子設定する`、`形 を C大きさにする`(sizeof)、`C揃えにする`、`形 を 番号 で C位置にする`(offsetof)、`x を 形 で C直列化する`、`b を 形 で C復元する`、`p から 位置 で 形 を 構造体読取する`(動作)、`x を p へ 位置 で 形 に 構造体書込する`(動作)
-# - `呼出場所取得する`(動作): 自分のプログラムからライブラリの関数を呼んでいる場所(「「計算.suru」の6行目 3文字目」。なければ空)
-# - ビット演算(整数を2の補数の並びとして): `a を b で ビット積にする`(AND)、`a を b で ビット和にする`(OR)、`a を b で 排他的論理和にする`(XOR)、`x を n で 左シフトする`、`x を n で 右シフトする`(n は 0〜63)
-# - `b を 鍵 で バイト列排他和にする`: b の各バイトと、鍵を繰り返したものとの排他的論理和
+# - Numbers: `x を 切捨する`, `x を 平方根にする`, `a から b を 範囲にする`
+# - Sorting: `xs を 整列する` (ascending; a list of numbers or of strings; equal items keep their order), `xs を f で 基準整列する` (ascending by the number or string that f gives)
+# - Lists (these five also work on strings): `xs を 逆順にする`, `xs から n を 先頭取得する`, `xs から n を 先頭削除する`, `xs から n を 番目取得する`, `xs が x を 含有である`
+# - Strings: `s を 文字分解する`, `s を 区切り で 分割する`, `xs を 区切り で 結合する`, `s を 前 から 後 へ 置換する`, `s を 大文字にする`, `s を 小文字にする`, `s を 空白除去する`, `s が 前 で 先頭一致である`, `s が 後 で 末尾一致である`
+# - Character codes: `s を バイト数にする` (length in UTF-8), `n を 文字にする` (the character with that code), `s を 文字コードにする` (the code of one character)
+# - Bytes: `s を バイト列にする` (UTF-8), `xs を バイト列組立する` (from a list of numbers 0 to 255), `b を 数列にする`, `b を 文字列にする` (read as UTF-8), `b を バイト長にする`
+# - Serialization: `x を 直列化する` (a value to bytes; not functions, actions or addresses), `b を 復元する` (back again; the type of the result comes from the declaration)
+# - Fixed layout: `x を 見本 で 固定直列化する` (a record of only numbers and booleans, laid out like a C struct with 8 bytes per field), `b を 見本 で 固定復元する`
+# - Talking to external functions: `n を 番地にする`, `p を 番地数値にする`, `p から n を バイト列取得する` (action), `b を p へ 書込する` (action), `エラー番号取得する` (action; the errno left by the last external function), `文 を 失敗する` (action)
+# - Reading and writing C memory as a given type (all actions): `p から 位置 で 符号付き32読取する`, `x を p へ 位置 で 符号付き32書込する` (the types are `符号付き8`, `符号付き16`, `符号付き32`, `符号付き64`, `符号なし8`, `符号なし16`, `符号なし32`, `符号なし64`, `単精度`, `小数`, `番地`, `真偽` (1 byte) and `C文字列` (a NUL-terminated string)), `p を n で 番地加算する` (the address n bytes ahead)
+# - C struct layouts: `見本 を 欄の型の一覧 で C形作成する`, `形 を 番号 で 中の形 に 入れ子設定する`, `形 を C大きさにする` (sizeof), `C揃えにする`, `形 を 番号 で C位置にする` (offsetof), `x を 形 で C直列化する`, `b を 形 で C復元する`, `p から 位置 で 形 を 構造体読取する` (action), `x を p へ 位置 で 形 に 構造体書込する` (action)
+# - `呼出場所取得する` (action): where your program calls the library function from (like 「「計算.suru」の6行目 3文字目」; empty if none)
+# - Bit operations (integers as two's complement): `a を b で ビット積にする` (AND), `a を b で ビット和にする` (OR), `a を b で 排他的論理和にする` (XOR), `x を n で 左シフトする`, `x を n で 右シフトする` (n is 0 to 63)
+# - `b を 鍵 で バイト列排他和にする`: each byte of b XOR the key repeated
 外部の「c」 を 読み込む
 
 # --- 数 ---
 
-# x 以上で一番小さい整数にします。
+# The smallest integer not less than x.
 数 を 切上する は 数
 x を 切上する とは 0 - （0 - x を 切捨する）
 
-# x にいちばん近い整数にします(ちょうど半分なら大きいほうへ)。
+# The integer nearest to x (halves go up).
 数 を 四捨五入する は 数
 x を 四捨五入する とは x + 0.5 を 切捨する
 
-# a を b で割って、小数点より下を切り捨てます。
+# a divided by b, rounded down.
 数 を 数 で 商にする は 数
 a を b で 商にする とは a / b を 切捨する
 
-# リストの中でいちばん大きい数です。空のリストなら止まります(中断)。
+# The largest number in the list. Stops (`中断する`) on an empty list.
 数 の リスト を 最大値にする は 数
 先頭 は x で 残り は 他 を 最大値にする とは
   他 を x から （a と b を 受け取って （もし a > b ならば a そうでなければ b） を 返すこと） で 畳み込みする
 空 を 最大値にする とは 「空のリストの最大値はありません」 を 中断する
 
-# リストの中でいちばん小さい数です。空のリストなら止まります(中断)。
+# The smallest number in the list. Stops (`中断する`) on an empty list.
 数 の リスト を 最小値にする は 数
 先頭 は x で 残り は 他 を 最小値にする とは
   他 を x から （a と b を 受け取って （もし a < b ならば a そうでなければ b） を 返すこと） で 畳み込みする
 空 を 最小値にする とは 「空のリストの最小値はありません」 を 中断する
 
-# リストの数の平均です。
+# The average of the numbers in the list.
 数 の リスト を 平均する は 数
 xs を 平均する とは （xs を 加算する） / xs の 長さ
 
-# n が 2 で割り切れるとき 真 です。
+# 真 when n is divisible by 2.
 数 が 偶数である は 真偽
 n が 偶数である とは n % 2 が 0
 
-# n を 2 で割った余りが 1 のとき 真 です。
+# 真 when n divided by 2 leaves 1.
 数 が 奇数である は 真偽
 n が 奇数である とは n % 2 が 1
 
-# n が 0 より大きいとき 真 です。
+# 真 when n is greater than 0.
 数 が 正である は 真偽
 n が 正である とは n > 0
 
-# n が 0 より小さいとき 真 です。
+# 真 when n is less than 0.
 数 が 負である は 真偽
 n が 負である とは n < 0
 
 # --- リスト ---
 
-# xs から x と同じものをすべて除いたリストです。
+# xs without any item equal to x.
 甲 の リスト から 甲 を 除去する は 甲 の リスト
 xs から x を 除去する とは xs から （y を 受け取って y != x を 返すこと） で 選別する
 
-# 同じものが2つ以上あれば、最初の1つだけを残します(順は元のまま)。
+# Keeps only the first of equal items (the order stays).
 甲 の リスト を 一意にする は 甲 の リスト
 空 を 一意にする とは 空
 先頭 は x で 残り は 他 を 一意にする とは x を （他 から x を 除去して 一意にする） に 挿入する
 
-# リストのリストを、順につないで1つのリストにします。
+# Joins a list of lists into one list, in order.
 甲 の リスト の リスト を 連結する は 甲 の リスト
 空 を 連結する とは 空
 先頭 は x で 残り は 他 を 連結する とは x + （他 を 連結する）
 
-# f が 真 になるものの数です。
+# How many items f gives 真 for.
 甲 の リスト から （甲 を 受け取って 真偽 を 返すこと） で 計数する は 数
 xs から f で 計数する とは （xs から f で 選別する） の 長さ
 
-# すべてのものについて f が 真 のとき 真 です(空のリストなら 真)。
+# 真 when f gives 真 for every item (真 for an empty list).
 甲 の リスト が （甲 を 受け取って 真偽 を 返すこと） で 全部真である は 真偽
 xs が f で 全部真である とは （xs から f で 計数する） が xs の 長さ
 
-# f が 真 になるものが1つでもあれば 真 です。
+# 真 when f gives 真 for at least one item.
 甲 の リスト が （甲 を 受け取って 真偽 を 返すこと） で 一部真である は 真偽
 xs が f で 一部真である とは （xs から f で 計数する） > 0
 
-# x を n 個並べたリストです。
+# A list of n copies of x.
 甲 を 数 で 複製する は 甲 の リスト
 x を n で 複製する とは （1 から n を 範囲にする） を （i を 受け取って x を 返すこと） で 写像する
 
 # --- 数と文字列の書式 ---
 
-# 文字列 s を n 回つないだ文字列です。
+# The string s repeated n times.
 文字列 を 数 で 反復する は 文字列
 s を n で 反復する とは （s を n で 複製する） を 「」 で 結合する
 例えば （「ab」 を 3 で 反復する） は 「ababab」 です
 
-# 幅(文字の数)に足りなければ、左に空白を足します。
+# Pads with spaces on the left up to the width (number of characters).
 文字列 を 数 で 右詰する は 文字列
 s を 幅 で 右詰する とは （「 」 を （幅 - s の 長さ） で 反復する） + s
 例えば （「ab」 を 5 で 右詰する） は 「   ab」 です
 例えば （「abcdef」 を 3 で 右詰する） は 「abcdef」 です
 
-# 幅に足りなければ、右に空白を足します。
+# Pads with spaces on the right up to the width.
 文字列 を 数 で 左詰する は 文字列
 s を 幅 で 左詰する とは s + （「 」 を （幅 - s の 長さ） で 反復する）
 例えば （「ab」 を 5 で 左詰する） は 「ab   」 です
 
-# 幅に足りなければ、左に 0 を足します(負の数は「-」の後に足します)。
+# Pads with 0 on the left up to the width (after the `-` for a negative number).
 数 を 数 で 零詰する は 文字列
 n を 幅 で 零詰する とは
   もし n < 0 ならば 「-」 + （（0 - n） を （幅 - 1） で 零詰する）
@@ -127,7 +127,7 @@ n を 幅 で 零詰する とは
 例えば （42 を 5 で 零詰する） は 「00042」 です
 例えば （-42 を 5 で 零詰する） は 「-0042」 です
 
-# 小数点の後を 桁 の数だけ書きます(四捨五入。0 なら整数)。
+# Writes the given number of digits after the decimal point (rounded; an integer for 0).
 数 を 数 で 小数書式にする は 文字列
 x を 桁 で 小数書式にする とは
   もし 桁 <= 0 ならば 符号 + （丸め を 文字列化する）
@@ -142,7 +142,7 @@ x を 桁 で 小数書式にする とは
 例えば （2.5 を 0 で 小数書式にする） は 「3」 です
 例えば （0.05 を 1 で 小数書式にする） は 「0.1」 です
 
-# 整数の部分を3桁ごとに「,」で区切ります。
+# Separates the integer part with `,` every three digits.
 数 を 桁区切りする は 文字列
 n を 桁区切りする とは
   もし n < 0 ならば 「-」 + （（0 - n） を 桁区切りする）
@@ -159,7 +159,7 @@ s を 三桁区切りする とは
   もし s の 長さ <= 3 ならば s
   そうでなければ （（s から （s の 長さ - 3） を 先頭取得する） を 三桁区切りする） + 「,」 + （s から （s の 長さ - 3） を 先頭削除する）
 
-# 雛形の「{}」に、値群の文字列を前から順に入れます(足りなければ「{}」のまま、余れば使いません)。
+# Puts the strings of the list into the `{}` of the template, in order (a `{}` without a value stays; extra values are unused).
 文字列 を 文字列 の リスト で 差込する は 文字列
 雛形 を 値群 で 差込する とは （雛形 を 「{}」 で 分割する） を 値群 で 差込結合する
 例えば （「{}さん、{}歳です。{}」 を （「花子」 と 「12」） で 差込する） は 「花子さん、12歳です。{}」 です
@@ -177,31 +177,31 @@ ps を vs で 差込結合する とは
 
 # --- 改行 ---
 
-# 改行の文字です。「」の中には改行を書けないので、名前で使います。
+# The newline character. You cannot write a newline inside 「」, so use this name.
 改行 は 文字列
 改行 とは 10 を 文字にする
 
-# 復帰と改行の2文字です(HTTP などの通信で使います)。
+# Carriage return and newline (used by protocols such as HTTP).
 復帰改行 は 文字列
 復帰改行 とは （13 を 文字にする） + 改行
 
 # --- 外部の関数の失敗 ---
 
-# エラー番号(errno)を、理由の文(「No such file or directory」など)にします。
+# The message for an error number (errno), like 「No such file or directory」.
 e を エラー文にする とは 外部の「strerror」 で 整数 を 受け取って 文字列 を 返します
 
 
-# 直前の外部の関数が残したエラー番号から「名前に失敗しました(理由)」の実行時エラーにする動作です。
+# An action that fails with 「名前に失敗しました(reason)」, using the error number left by the last external function.
 文字列 を 理由失敗する は 甲 の 動作
 名前 を 理由失敗する とは
   （エラー番号取得する） を （e を 受け取って （（名前 + 「に失敗しました(」 + （e を エラー文にする） + 「)」） を 失敗する） を 返すこと） で 連鎖する
 
-# 負の数を返したら失敗という C の関数の動作を、失敗なら「名前に失敗しました(理由)」の実行時エラーにします。
+# For an action of a C function that returns a negative number on failure: on failure, fail with 「名前に失敗しました(reason)」.
 数 の 動作 を 文字列 で 失敗確認する は 数 の 動作
 m を 名前 で 失敗確認する とは
   m を （r を 受け取って （もし r < 0 ならば 名前 を 理由失敗する そうでなければ r を 結果にする） を 返すこと） で 連鎖する
 
-# 外部の関数が NULL を返したら、「名前に失敗しました(理由)」の実行時エラーにします。
+# If the external function returns NULL, fail with 「名前に失敗しました(reason)」.
 番地 の 動作 を 文字列 で 番地確認する は 番地 の 動作
 m を 名前 で 番地確認する とは
   m を （p を 受け取って （もし （p を 番地数値にする） = 0 ならば 名前 を 理由失敗する そうでなければ p を 結果にする） を 返すこと） で 連鎖する
@@ -210,7 +210,7 @@ m を 名前 で 番地確認する とは
 
 Base64字表 とは 「ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/」
 
-# バイト列を Base64 の文字列にします(= で長さをそろえます)。
+# Encodes bytes as a Base64 string (padded with =).
 バイト列 を Base64符号化する は 文字列
 b を Base64符号化する とは （（0 から 字数 - 1 を 範囲にする） の それぞれ を xs から Base64字にする） を 「」 で 結合する
 ただし xs とは b を 数列にする
@@ -230,8 +230,8 @@ xs から k を Base64字にする とは
 数 の リスト から 数 を 位置値取得する は 数
 xs から k を 位置値取得する とは もし k < xs の 長さ ならば xs から k + 1 を 番目取得する そうでなければ 0
 
-# Base64 の文字列をバイト列に戻します。終わりの = はあってもなくてもよく、URL 用の - と _ も + と / と同じに読みます。前後の空白は除きます。
-# 読めない文字があるときや長さが合わないときは、理由 の 失敗 です。
+# Decodes a Base64 string to bytes. The trailing = may be left out, the URL-safe - and _ are read as + and /, and surrounding spaces are ignored.
+# On an invalid character or a wrong length, the result is `理由 の 失敗`.
 文字列 を Base64復号する は （バイト列 と 文字列） の 成否
 s を Base64復号する とは
   もし 値一覧 が -1 を 含有である ならば 「Base64 で使えない文字があります」 の 失敗
