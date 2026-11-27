@@ -8890,6 +8890,38 @@ def type_check(source: str, base_dir: str = ".", path: str = "", as_json: bool =
     return True
 
 
+def bundled_suruc() -> str | None:
+    """pip の OS ごとの wheel で suru と一緒に入った Go 版の suruc の道(#229)。なければ None。
+    suru と同じフォルダ(venv の bin/ など)にあるものだけを使い、PATH のほかの版は使わない。
+    `python3 suru.py` で動かしたとき(リポジトリのまま)は使わない。
+    SURU_SURUC で道を決められ(空なら使わない)、SURU_INTERPRETER=1 なら使わない"""
+    if os.environ.get("SURU_INTERPRETER") == "1":
+        return None
+    given = os.environ.get("SURU_SURUC")
+    if given is not None:
+        return given or None
+    launcher = sys.argv[0] if sys.argv else ""
+    name = os.path.basename(launcher).lower()
+    if name not in ("suru", "suru.exe", "suru-script.py"):
+        return None
+    exe = os.path.join(os.path.dirname(os.path.abspath(launcher)), "suruc.exe" if os.name == "nt" else "suruc")
+    return exe if os.path.isfile(exe) else None
+
+
+def subprocess_call(cmd: list[str]) -> int:
+    import subprocess
+
+    return subprocess.call(cmd)
+
+
+def suruc_check(suruc: str, path: str, as_json: bool) -> bool:
+    """同梱の suruc で型を調べる(エラーの文と JSON は Python 版と同じ。tests/test_go_compiler.py が確かめる)"""
+    import subprocess
+
+    cmd = [suruc, "--検査"] + (["--json"] if as_json else []) + [path]
+    return subprocess.run(cmd, stdout=subprocess.DEVNULL).returncode == 0
+
+
 def _take_json_flag(argv: list[str]) -> tuple[list[str], bool]:
     """プログラムのファイルの前にある --json を取り除く(後ろの引数はプログラムに渡すので、そのまま)"""
     out, found, k = argv[:1], False, 1
@@ -8914,6 +8946,9 @@ def main(argv: list[str]) -> int:
         print(f"する {__version__}")
         return 0
     if len(argv) >= 2 and argv[1] in COMPILE_FLAGS:
+        suruc = bundled_suruc()
+        if suruc:  # 同じ IR を出す Go 版のほうが速い
+            return subprocess_call([suruc] + argv[2:])
         import suru_compile
 
         return suru_compile.main(argv[:1] + argv[2:])
@@ -8946,6 +8981,9 @@ def main(argv: list[str]) -> int:
         if len(rest) != 1:
             print("使い方: suru --検査 [--json] ファイル.suru", file=sys.stderr)
             return 2
+        suruc = bundled_suruc()
+        if suruc:
+            return subprocess_call([suruc, "--検査"] + (["--json"] if as_json else []) + rest)
         with open(rest[0], encoding="utf-8") as f:
             source = f.read()
         try:
@@ -8977,7 +9015,12 @@ def main(argv: list[str]) -> int:
         print(error_json(e, kind, argv[1]) if as_json else format_error(e, source), file=sys.stderr)
         return 1
 
-    # 実行の前に必ず型を調べる(間違いがあれば実行しない)
+    # 実行の前に必ず型を調べる(間違いがあれば実行しない)。同梱の suruc があれば、そちらで速く調べる
+    suruc = bundled_suruc() if checking else None
+    if suruc:
+        if not suruc_check(suruc, argv[1], as_json):
+            return 1
+        checking = False
     try:
         if checking and not type_check(source, base_dir, argv[1], as_json):
             return 1
