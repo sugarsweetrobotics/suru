@@ -1563,7 +1563,7 @@ suruc --試験 計算.suru 二倍       # Go 版のコンパイラで同じこ�
 
 ### 他の言語から呼ぶ(共有ライブラリ)
 
-する で書いた関数を、Python・C・C++・Go・Rust など C の呼び出し規約で呼べる言語から使えるようにしました。`suruc --共有ライブラリ` で共有ライブラリ(.so・.dylib)を作ります。計画は #208 で、これはその段階1〜3です。
+する で書いた関数を、Python・C・C++・Go・Rust など C の呼び出し規約で呼べる言語から使えるようにしました。`suruc --共有ライブラリ` で共有ライブラリ(.so・.dylib)を作ります。計画は #208 で、これはその段階1〜4です。
 
 ```suru
 数 を 二倍する は 数 を 返す
@@ -1602,7 +1602,8 @@ print(lib.nibai(21))   # 42
 10. **ほかの言語の例。** `examples/他の言語から/` に、`examples/export.suru` の関数を Python(`ctypes`)・C・C++・Go(cgo)・Rust から呼ぶ例があります。リストの渡し方・手札の使い方・文字列の解放・`keisan_last_error()` の読み方も入っています。どの例も同じものを表示し、試験で全部を動かします(コンパイラがなければその例は飛ばします)。
 11. **リストとバイト列は番地と長さ。** `バイト列`・`数 の リスト`・`小数 の リスト`・`文字列 の リスト` の引数は、番地と長さの2つの C の引数になります(`const uint8_t *`・`const int64_t *`・`const double *`・`const char *const *` の後に `int64_t a1_len`)。中身は写し取ります。値がこれらの型の関数は、最後に `int64_t *out_len`(NULL でもよい)を受け取り、`malloc` した新しい塊(`uint8_t *`・`int64_t *`・`double *`・`char **`)を返して、長さを `*out_len` に書きます。文字列のリストは、番地の並び(最後に NULL)と文字を1つの塊に入れるので、`keisan_free` 1回で解放できます。空のリストは長さ 0 の NULL でない塊で、NULL はエラーです。
 12. **ほかの値は手札。** 組・関数・ほかのリスト(`整数 の リスト`・`点 の リスト` など)など、ほかの型の値は `keisan_value *`(中を見ない手札)で渡します。呼んだ側に返した手札は、`keisan_release` まで値を生かします(GC の根になります)。引数で渡した手札は借りるだけです。手札は補助の関数で読み書きします: `keisan_type`(する の型の名前)、`keisan_show`(表示する と同じ文字)、`keisan_len`・`keisan_get`(リストの長さと 0 から数えた i 番目)、`keisan_field`(名前で組の項目)、`keisan_to_int`・`keisan_to_double`・`keisan_to_bool`・`keisan_to_string`、`keisan_from_int`・`keisan_from_double`・`keisan_from_bool`・`keisan_from_string`・`keisan_list`(新しい手札)、`keisan_call`(関数の値を手札で呼ぶ。値が動作なら行う)。エラーは出す関数と同じく `keisan_last_error` で読めます。
-13. **まだできないこと。** kumu(段階4)と Windows の .dll(段階5)は #208 の後の段階です。例は `examples/export.suru` です。
+13. **kumu でも共有ライブラリを作れる。** 組.suru に `種類 とは 「共有ライブラリ」` と書くと、`kumu 作る` が `出力/lib名前.so`(macOS は `.dylib`)と `出力/名前.h` を作ります。プロジェクトの依存・Cソース・リンク引数も使い、何も変わっていなければ作り直しません。名前はプロジェクトの名前で、英字・数字・`_` だけでなければ `ライブラリ名 とは 「keisan」` と書きます。`kumu 新規 名前 --共有ライブラリ`(`--shared`)でこの形のプロジェクトを作ります。入口のファイル `名前.suru` が2つの関数を出し、`試験/例.suru` が する からそれを試します(`kumu 試験`)。`kumu 実行` は、ライブラリは実行できないと案内します。
+14. **まだできないこと。** Windows の .dll(段階5)は #208 の後の段階です。例は `examples/export.suru` です。
 
 ### 定義の説明
 

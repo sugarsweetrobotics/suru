@@ -1453,6 +1453,9 @@ def compile_source(source: str, base_dir: str = ".", path: str = "<main>", check
         ir = Compiler(ctx, source).compile(program, path)
         # 共有ライブラリでは、スレッドごとの変数をライブラリの中だけで使う形で読む
         # (localexec は実行ファイルでしか使えない。再帰の安全点が rt_sp_tick を使う、#208、Go 版と同じ)
+        # 使わないなら宣言も消す(-O0 では、使わない hidden の宣言が TLS でない名前になり、リンクで食い違う)
+        if lib and ir.count("@rt_sp_tick") == 1:
+            return ir.replace(SP_TICK_EXE + "\n", "", 1)
         return ir.replace(SP_TICK_EXE, SP_TICK_LIB, 1) if lib else ir
     except CompileError as e:
         err = S.SuruError(str(e))

@@ -59,6 +59,10 @@ const usage = `使い方: kumu <命令> [オプション]
 
 ウェブアプリ:
   kumu 新規 名前 --対象 web  屋台(suru-lang/web)のウェブアプリの雛形を作る
+
+他の言語から呼ぶ共有ライブラリ(組.suru に「種類 とは 「共有ライブラリ」」と書く):
+  kumu 新規 名前 --共有ライブラリ  雛形を作る(--shared)
+  kumu 作る  出力/ に lib名前.so(macOS は .dylib)と 名前.h を作る
 `
 
 // commands は命令の名前(日本語と英語の別名)→ 正の名前
@@ -107,8 +111,9 @@ func (k *kumu) run(args []string) int {
 		return 0
 	case "新規":
 		rest, target, ok := targetOption(rest)
+		rest, target, ok = sharedOption(rest, target, ok)
 		if !ok || len(rest) != 1 {
-			fmt.Fprintln(k.stderr, "使い方: kumu 新規 名前 [--対象 基板か web]")
+			fmt.Fprintln(k.stderr, "使い方: kumu 新規 名前 [--対象 基板か web | --共有ライブラリ]")
 			return 2
 		}
 		name := rest[0]
@@ -118,6 +123,8 @@ func (k *kumu) run(args []string) int {
 		next := "kumu 実行"
 		if target == WebTarget {
 			next = "kumu 実行。http://localhost:8080/ を開きます"
+		} else if target == SharedTarget {
+			next = "kumu 作る。出力/ にライブラリとヘッダができます"
 		} else if target != "" {
 			next = "kumu 書き込む"
 		}
@@ -125,8 +132,9 @@ func (k *kumu) run(args []string) int {
 		return 0
 	case "初期化":
 		rest, target, ok := targetOption(rest)
+		rest, target, ok = sharedOption(rest, target, ok)
 		if !ok || len(rest) != 0 {
-			fmt.Fprintln(k.stderr, "使い方: kumu 初期化 [--対象 基板か web]")
+			fmt.Fprintln(k.stderr, "使い方: kumu 初期化 [--対象 基板か web | --共有ライブラリ]")
 			return 2
 		}
 		abs, err := filepath.Abs(k.dir)
@@ -188,6 +196,9 @@ func (k *kumu) run(args []string) int {
 	if err := CheckSysDeps(p, deps, k.stderr); err != nil {
 		return k.fail(err)
 	}
+	if p.SharedLib() && target != "" {
+		return k.fail(fmt.Errorf("種類が「%s」のプロジェクトは、--対象 で作れません", KindShared))
+	}
 	if target == "" {
 		target = p.Target
 	}
@@ -203,6 +214,15 @@ func (k *kumu) run(args []string) int {
 	}
 	if cmd == "試験" {
 		return k.test(p, progArgs, opt, check, cb)
+	}
+	if p.SharedLib() {
+		if cmd == "実行" {
+			return k.fail(fmt.Errorf("種類が「%s」のプロジェクトは実行できません。kumu 作る で 出力/ にライブラリとヘッダを作り、ほかの言語から呼びます(試験は kumu 試験)", KindShared))
+		}
+		if _, err := k.buildShared(p, opt, check, cb); err != nil {
+			return k.fail(err)
+		}
+		return 0
 	}
 	exe, err := k.build(p, opt, check, cb)
 	if err != nil {
@@ -251,6 +271,69 @@ func (k *kumu) build(p *Project, opt string, check bool, cb *CBuild) (string, er
 	return exe, nil
 }
 
+// buildShared は入口のファイルを共有ライブラリにして 出力/lib名前.so(.dylib)と 出力/名前.h を作る(#208)。
+// IR・最適化・実行時ライブラリ・Cソースが前と同じなら clang を呼ばない
+func (k *kumu) buildShared(p *Project, opt string, check bool, cb *CBuild) (string, error) {
+	base, err := p.LibBase()
+	if err != nil {
+		return "", err
+	}
+	path := p.EntryPath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("入口のファイル「%s」が読めません", p.Entry+compiler.SourceSuffix)
+	}
+	source := compiler.NormalizeNewlines(string(data))
+	ir, serr := compiler.CompileLibrary(source, filepath.Dir(path), path, check)
+	if serr != nil {
+		return "", errors.New(compiler.FormatError(serr, source, true))
+	}
+	lib := native.LibPath(filepath.Join(p.Root, OutDir, "lib"+base))
+	header := native.HeaderPath(lib, base)
+	if err := os.MkdirAll(filepath.Dir(lib), 0o755); err != nil {
+		return "", err
+	}
+	digest := buildDigest(opt, ir, cb, "shared")
+	stamp := filepath.Join(filepath.Dir(lib), "."+filepath.Base(lib)+".stamp")
+	if old, err := os.ReadFile(stamp); err == nil && string(old) == digest {
+		if _, err := os.Stat(lib); err == nil {
+			if _, err := os.Stat(header); err == nil {
+				return lib, nil
+			}
+		}
+	}
+	llPath := lib + ".ll"
+	if err := os.WriteFile(llPath, []byte(ir), 0o644); err != nil {
+		return "", err
+	}
+	defer os.Remove(llPath)
+	if _, err := native.BuildSharedWith(llPath, lib, opt, cb.Args()); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(stamp, []byte(digest), 0o644); err != nil {
+		return "", err
+	}
+	fmt.Fprintf(k.stderr, "「%s」%s を共有ライブラリに組みました(%s・%s)\n", p.Name, p.Version, k.rel(lib), k.rel(header))
+	return lib, nil
+}
+
+// buildDigest は作り直しの判定に使う値(kumu の版・最適化・IR・実行時ライブラリ・リンク・Cソース・印)
+func buildDigest(opt, ir string, cb *CBuild, mark string) string {
+	h := sha256.New()
+	cdigest := ""
+	if cb != nil {
+		cdigest = cb.Digest
+	}
+	parts := []string{version, opt, ir, string(suru.Runtime), strings.Join(compiler.LinkFlags(ir), " "), cdigest}
+	if mark != "" {
+		parts = append(parts, mark)
+	}
+	for _, part := range parts {
+		fmt.Fprintf(h, "%d:%s", len(part), part)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // rel は今のフォルダからの道(上に出るなら絶対パス)
 func (k *kumu) rel(path string) string {
 	rel, err := filepath.Rel(k.dir, path)
@@ -271,15 +354,7 @@ func compileTo(source, path, exe, opt string, check bool, cb *CBuild) (built boo
 	if err := os.MkdirAll(filepath.Dir(exe), 0o755); err != nil {
 		return false, err
 	}
-	h := sha256.New()
-	cdigest := ""
-	if cb != nil {
-		cdigest = cb.Digest
-	}
-	for _, part := range []string{version, opt, ir, string(suru.Runtime), strings.Join(compiler.LinkFlags(ir), " "), cdigest} {
-		fmt.Fprintf(h, "%d:%s", len(part), part)
-	}
-	digest := hex.EncodeToString(h.Sum(nil))
+	digest := buildDigest(opt, ir, cb, "")
 	stamp := filepath.Join(filepath.Dir(exe), "."+filepath.Base(exe)+".stamp")
 	if old, err := os.ReadFile(stamp); err == nil && string(old) == digest {
 		if _, err := os.Stat(exe); err == nil {

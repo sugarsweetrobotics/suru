@@ -1569,7 +1569,7 @@ suruc --試験 計算.suru 二倍       # the same with the Go compiler, only te
 
 ### Calling from other languages (shared libraries)
 
-Functions written in Suru can now be used from Python, C, C++, Go, Rust and any other language that can call the C calling convention. `suruc --共有ライブラリ` builds a shared library (.so, .dylib). The plan is #208, and this covers its stages 1 to 3.
+Functions written in Suru can now be used from Python, C, C++, Go, Rust and any other language that can call the C calling convention. `suruc --共有ライブラリ` builds a shared library (.so, .dylib). The plan is #208, and this covers its stages 1 to 4.
 
 ```suru
 数 を 二倍する は 数 を 返す
@@ -1608,7 +1608,8 @@ print(lib.nibai(21))   # 42
 10. **Examples for other languages.** `examples/他の言語から/` calls the functions of `examples/export.suru` from Python (`ctypes`), C, C++, Go (cgo) and Rust, including passing a list, using a handle, freeing strings and reading `keisan_last_error()`. Each example prints the same output, and the tests run all of them (each is skipped when its compiler is missing).
 11. **Lists and byte sequences are a pointer and a length.** An argument of type `バイト列`, `数 の リスト`, `小数 の リスト` or `文字列 の リスト` becomes two C arguments, a pointer and a length: `const uint8_t *`, `const int64_t *`, `const double *` or `const char *const *`, followed by `int64_t a1_len`. The contents are copied. A function whose value has one of these types takes one more argument, `int64_t *out_len` (NULL is allowed), returns a new `malloc`ed block (`uint8_t *`, `int64_t *`, `double *` or `char **`) and writes its length to `*out_len`. A list of strings is one block holding the array of pointers (ending with NULL) and the characters, so one `keisan_free` frees it. An empty list is a non-NULL block of length 0, and NULL means an error.
 12. **Other values are handles.** Records, functions, other lists (`整数 の リスト`, `点 の リスト` and so on) and any other type are passed as `keisan_value *`, a handle whose contents the caller doesn't see. A handle returned to the caller keeps the value alive (it is a GC root) until `keisan_release`. A handle passed as an argument is only borrowed. Helper functions read and build handles: `keisan_type` (the Suru type name), `keisan_show` (the text 表示する shows), `keisan_len` and `keisan_get` (a list's length and its i-th item, from 0), `keisan_field` (a record field by name), `keisan_to_int`, `keisan_to_double`, `keisan_to_bool` and `keisan_to_string`, `keisan_from_int`, `keisan_from_double`, `keisan_from_bool`, `keisan_from_string` and `keisan_list` (new handles), and `keisan_call` (call a function value with handles; an action result is carried out). They report errors through `keisan_last_error` like exported functions.
-13. **Not yet.** kumu (stage 4) and Windows .dll (stage 5) are later stages of #208. The example is `examples/export.suru`.
+13. **kumu builds shared libraries too.** With `種類 とは 「共有ライブラリ」` in 組.suru, `kumu 作る` writes `出力/libNAME.so` (`.dylib` on macOS) and `出力/NAME.h`, using the project's dependencies, Cソース and リンク引数, and skips the build when nothing changed. NAME is the project name, or `ライブラリ名 とは 「keisan」` when the name isn't letters, digits and `_`. `kumu 新規 NAME --共有ライブラリ` (`--shared`) creates such a project: the entry file `NAME.suru` exports two functions, and `試験/例.suru` tests them from Suru with `kumu 試験`. `kumu 実行` explains that a library can't be run.
+14. **Not yet.** Windows .dll (stage 5) is a later stage of #208. The example is `examples/export.suru`.
 
 ### Descriptions of definitions
 
