@@ -193,6 +193,7 @@ jobs:
     name: wheel を入れる(${{ matrix.os }})
     needs: [check, python, wheels]
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -218,7 +219,8 @@ jobs:
           kumu --version
           suru-ls --version
           # 純 Python ではなく、この OS の wheel が選ばれたこと
-          python -m pip show -f suru-lang | grep -q 'suruc'
+          python -m pip show -f suru-lang > files.txt
+          grep suruc files.txt
 
   release:
     name: GitHub Releases
