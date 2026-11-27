@@ -11,7 +11,7 @@ python3 suru.py --検査なし examples/basic.suru  # 型を調べずに実行(-
 python3 suru.py                       # 対話モード(1行ずつ入力して、値と型をすぐ表示)
 python3 suru.py --対話 examples/数学.suru  # ファイルを読んでから対話モード(-i も可)
 python3 suru.py --翻訳 examples/basic.suru  # バイナリ examples/basic を作る(--compile も可。clang が必要)
-python3 -m pytest tests               # テスト
+python3 -m pytest tests               # テスト(pytest-xdist があれば -n auto を付けて並べて流せる)
 ```
 
 ### 入れ方

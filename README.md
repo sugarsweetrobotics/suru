@@ -13,7 +13,7 @@ python3 suru.py --検査なし examples/basic.suru  # run without checking types
 python3 suru.py                       # interactive mode (type one line at a time and see its value and type right away)
 python3 suru.py --対話 examples/数学.suru  # load a file, then enter interactive mode (-i also works)
 python3 suru.py --翻訳 examples/basic.suru  # build the binary examples/basic (--compile also works; needs clang)
-python3 -m pytest tests               # tests
+python3 -m pytest tests               # tests (with pytest-xdist, add -n auto to run them in parallel)
 ```
 
 ### Installing
