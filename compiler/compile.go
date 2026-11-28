@@ -1059,7 +1059,13 @@ func (c *Compiler) genFunction(name string, params []Param, body fnBody, sc *sco
 }
 
 // externBody は外部の関数の本体: 引数を C の値にして呼び、値を戻す。値が動作なら、行ったときに呼ぶ動作を返す
+// CStructNotYet は、値で渡す C構造体をまだコンパイルできないときのエラー(#241 段階3 まで)
+const CStructNotYet = "C構造体を値で渡す・返す外部の関数は、まだコンパイルできません(インタプリタでは動きます: suru --インタプリタ)"
+
 func (c *Compiler) externBody(name string, params []Param, ext *Extern) genBody {
+	if len(ext.Structs) > 0 {
+		raise(ext.Line, "「"+name+"」: "+CStructNotYet)
+	}
 	for _, lib := range ext.Libs {
 		found := false
 		for _, l := range c.linkLibs {

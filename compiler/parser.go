@@ -3374,7 +3374,23 @@ func externLibTarget(node *LNode, ctx *ParseContext) *ExternLib {
 	return &ExternLib{name, path, tokens[0].Line, mainThread}
 }
 
-func ffiType(te Node, sig *TypeSig, what string) string {
+// CStructFFI は外部の関数の引数・値の、値で渡す C構造体(「struct:時間」、#241)
+const CStructFFI = "struct:"
+
+// collectCStruct は C構造体 name と、その中の入れ子の C構造体の並びを out に入れる
+func collectCStruct(name string, out map[string][]CStructField) {
+	if _, ok := out[name]; ok {
+		return
+	}
+	out[name] = curCtx.CStructs[name]
+	for _, f := range out[name] {
+		if _, ok := curCtx.CStructs[f.CType]; ok {
+			collectCStruct(f.CType, out)
+		}
+	}
+}
+
+func ffiType(te Node, sig *TypeSig, what string, ext *Extern) string {
 	skip := "void"
 	if what == "値" {
 		skip = "bytes"
@@ -3389,8 +3405,15 @@ func ffiType(te Node, sig *TypeSig, what string) string {
 		if t, ok := ffiTypes[tn.Name]; ok && t != skip {
 			return t
 		}
+		if _, ok := curCtx.CStructs[tn.Name]; ok && ext != nil {
+			if ext.Structs == nil {
+				ext.Structs = map[string][]CStructField{}
+			}
+			collectCStruct(tn.Name, ext.Structs)
+			return CStructFFI + tn.Name
+		}
 	}
-	raise(sig.Line, "外部の関数「"+sig.Name+"」の"+what+"には "+strings.Join(names, "・")+" のどれかの型を書いてください")
+	raise(sig.Line, "外部の関数「"+sig.Name+"」の"+what+"には "+strings.Join(names, "・")+" のどれかの型か、C構造体の型を書いてください")
 	return ""
 }
 
@@ -3443,7 +3466,7 @@ func attachExterns(statements []Node) {
 		}
 		ext.Params = nil
 		for _, p := range d.Params {
-			ext.Params = append(ext.Params, ffiType(types[p.Part], sig, "「"+p.Part+"」"))
+			ext.Params = append(ext.Params, ffiType(types[p.Part], sig, "「"+p.Part+"」", ext))
 		}
 		if ext.CArgs != nil {
 			used := map[int]bool{}
@@ -3474,7 +3497,7 @@ func attachExterns(statements []Node) {
 			ext.Action = true
 			result = tn.Args[0]
 		}
-		ext.Result = ffiType(result, sig, "値")
+		ext.Result = ffiType(result, sig, "値", ext)
 		ext.Libs = libs
 		ext.MainThread = mainThread
 		if ext.Pointer != "" {

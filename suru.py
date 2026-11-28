@@ -1424,6 +1424,8 @@ class Extern:
     # 「外部の「f」（a と 0 と b）」なら、C に渡す引数の並び: ("引数", 定義の引数の番号) か ("定数", 整数)。
     # 読んだときは ("名前", 名前) で、_attach_externs が番号にする。空なら定義の引数の順
     cargs: list = field(default_factory=list)
+    # 値で渡す・返す C構造体(引数か値の型が「struct:時間」)の並び: 型 → [(フィールド名, C の型)]。入れ子も入れる(#241)
+    structs: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -4481,12 +4483,28 @@ def extern_lib_target(node: Node, ctx: ParseContext) -> ExternLib | None:
     return ExternLib(name, path, tokens[0].line, main_thread)
 
 
-def _ffi_type(te: Any, sig: TypeSig, what: str) -> str:
+C_STRUCT_FFI = "struct:"  # 外部の関数の引数・値の、値で渡す C構造体(「struct:時間」、#241)
+
+
+def _ffi_type(te: Any, sig: TypeSig, what: str, ext: "Extern | None" = None) -> str:
     result = what == "値"
     names = [n for n, t in FFI_TYPES.items() if t != ("bytes" if result else "void")]
     if isinstance(te, TypeName) and not te.args and te.name in names:
         return FFI_TYPES[te.name]
-    raise SuruError(f"外部の関数「{sig.name}」の{what}には {'・'.join(names)} のどれかの型を書いてください", sig.line)
+    if isinstance(te, TypeName) and not te.args and te.name in _CTX.c_structs and ext is not None:
+        _collect_c_struct(te.name, ext.structs)
+        return C_STRUCT_FFI + te.name
+    raise SuruError(f"外部の関数「{sig.name}」の{what}には {'・'.join(names)} のどれかの型か、C構造体の型を書いてください", sig.line)
+
+
+def _collect_c_struct(name: str, out: dict) -> None:
+    """C構造体 name と、その中の入れ子の C構造体の並びを out に入れる"""
+    if name in out:
+        return
+    out[name] = list(_CTX.c_structs[name])
+    for _, t in out[name]:
+        if t in _CTX.c_structs:
+            _collect_c_struct(t, out)
 
 
 def _parse_extern_args(inner: list, lp: Token) -> list:
@@ -4529,7 +4547,7 @@ def _attach_externs(statements: list) -> None:
         for p, pat in d.params:
             if not isinstance(pat, str):
                 raise SuruError(f"外部の関数「{d.name}」の引数は名前だけで書いてください", d.line)
-        ext.params = [_ffi_type(types[p], sig, f"「{p}」") for p, _ in d.params]
+        ext.params = [_ffi_type(types[p], sig, f"「{p}」", ext) for p, _ in d.params]
         if ext.cargs:
             names = [x for _, x in d.params]
             cargs = []
@@ -4554,7 +4572,7 @@ def _attach_externs(statements: list) -> None:
         if isinstance(result, TypeName) and result.name == "動作":
             ext.action = True
             result = result.args[0]
-        ext.result = _ffi_type(result, sig, "値")
+        ext.result = _ffi_type(result, sig, "値", ext)
         ext.libs = libs
         ext.main_thread = main_thread
         if ext.pointer:
@@ -7159,17 +7177,92 @@ def _ffi_symbol(ext: Extern, line: int) -> Any:
     raise SuruError(f"外部の関数「{ext.symbol}」が{where}に見つかりません", line)
 
 
-def _ffi_ctype(t: str) -> Any:
+_C_STRUCT_CTYPES: dict = {}  # (型, 並び) → ctypes.Structure の型
+
+
+def _c_struct_ctype(name: str, structs: dict) -> Any:
+    """C構造体の並びから ctypes.Structure の型を作る(フィールドは f0, f1, … の名前)"""
     import ctypes
 
+    def layout(n: str) -> tuple:
+        return tuple((f, layout(t) if t in structs else t) for f, t in structs[n])
+
+    key = (name, layout(name))
+    if key not in _C_STRUCT_CTYPES:
+        scalar = {"符号付き8": ctypes.c_int8, "符号付き16": ctypes.c_int16, "符号付き32": ctypes.c_int32, "符号付き64": ctypes.c_int64,
+                  "符号なし8": ctypes.c_uint8, "符号なし16": ctypes.c_uint16, "符号なし32": ctypes.c_uint32,
+                  "符号なし64": ctypes.c_uint64, "単精度": ctypes.c_float, "小数": ctypes.c_double,
+                  "番地": ctypes.c_void_p, "真偽": ctypes.c_uint8}
+        fields = [(f"f{i}", _c_struct_ctype(t, structs) if t in structs else scalar[t]) for i, (_, t) in enumerate(structs[name])]
+        _C_STRUCT_CTYPES[key] = type("C構造体_" + name, (ctypes.Structure,), {"_fields_": fields})
+    return _C_STRUCT_CTYPES[key]
+
+
+def _c_struct_arg(name: str, structs: dict, v: Any, what: str, line: int) -> Any:
+    """組の値を C構造体の ctypes の値にする。範囲を外れた値はフィールドの名前を出してエラー"""
+    if not isinstance(v, Record) or v.type_name != name:
+        raise SuruError(f"{what}には{name}が必要です(「{format_value(v)}」が渡されました)", line)
+    out = _c_struct_ctype(name, structs)()
+    for i, (f, t) in enumerate(structs[name]):
+        x = v.get(f)
+        w = f"{what}の「{f}」"
+        if t in structs:
+            setattr(out, f"f{i}", _c_struct_arg(t, structs, x, w, line))
+            continue
+        try:
+            _c_encode(t, x, w, line)  # 型と範囲を確かめる
+        except SuruError as e:
+            if w not in e.message:
+                e.message = f"{w}: {e.message}"
+            raise
+        kind = C_SCALARS[t][2]
+        if kind == "p":
+            x = x.value or None
+        elif kind == "b":
+            x = 1 if x else 0
+        elif kind == "i" and isinstance(x, float):
+            x = int(x)
+        setattr(out, f"f{i}", x)
+    return out
+
+
+def _c_struct_value(name: str, structs: dict, c: Any, line: int) -> Record:
+    """C構造体の ctypes の値を組の値にする"""
+    fields, values = [], []
+    for i, (f, t) in enumerate(structs[name]):
+        x = getattr(c, f"f{i}")
+        if t in structs:
+            x = _c_struct_value(t, structs, x, line)
+        else:
+            kind = C_SCALARS[t][2]
+            if kind == "p":
+                x = Address(x or 0)
+            elif kind == "b":
+                x = x != 0
+            elif kind == "f":
+                x = float(x)
+            elif not MIN_COMPILED_INT <= x <= MAX_COMPILED_INT:
+                raise SuruError(f"C構造体「{name}」の「{f}」の値 {x} が大きすぎます(整数は ±{MAX_COMPILED_INT} までです)", line)
+        fields.append(f)
+        values.append(x)
+    return Record(name, name, tuple(fields), tuple(values))
+
+
+def _ffi_ctype(t: str, structs: dict | None = None) -> Any:
+    import ctypes
+
+    if t.startswith(C_STRUCT_FFI):
+        return _c_struct_ctype(t[len(C_STRUCT_FFI):], structs or {})
     return {"i64": ctypes.c_int64, "f64": ctypes.c_double, "f32": ctypes.c_float, "i32": ctypes.c_int32, "bool": ctypes.c_int32,
             "str": ctypes.c_char_p, "ptr": ctypes.c_void_p, "bytes": ctypes.c_char_p, "void": None}[t]
 
 
-def _ffi_arg(t: str, v: Any, name: str, part: str, line: int) -> Any:
+def _ffi_arg(t: str, v: Any, name: str, part: str, line: int, structs: dict | None = None) -> Any:
     def bad(want: str) -> SuruError:
         return SuruError(f"外部の関数「{name}」の「{part}」には{want}が必要です(「{format_value(v)}」が渡されました)", line)
 
+    if t.startswith(C_STRUCT_FFI):
+        return _c_struct_arg(t[len(C_STRUCT_FFI):], structs or {}, v, f"外部の関数「{name}」の「{part}」", line)
     if t in ("i64", "i32"):
         if isinstance(v, float) and v.is_integer():
             v = int(v)
@@ -7203,7 +7296,9 @@ def _ffi_arg(t: str, v: Any, name: str, part: str, line: int) -> Any:
     return v.value or None
 
 
-def _ffi_result(t: str, r: Any, name: str, line: int) -> Any:
+def _ffi_result(t: str, r: Any, name: str, line: int, structs: dict | None = None) -> Any:
+    if t.startswith(C_STRUCT_FFI):
+        return _c_struct_value(t[len(C_STRUCT_FFI):], structs or {}, r, line)
     if t == "void":
         return 0
     if t == "i64":
@@ -7228,6 +7323,7 @@ def extern_builtin(d: Define) -> Builtin:
     cfn: list = []
 
     names = [x for _, x in d.params]
+    st = ext.structs
 
     def call(a: dict, line: int) -> Any:
         import ctypes
@@ -7243,24 +7339,24 @@ def extern_builtin(d: Define) -> Builtin:
             if not isinstance(fp, Address) or fp.value == 0:
                 raise SuruError(f"外部の関数「{d.name}」の「{parts[k]}」には関数の番地が必要です(「{format_value(fp)}」が渡されました)", line)
             ts = [t for i, t in enumerate(ext.params) if i != k]
-            f = ctypes.CFUNCTYPE(_ffi_ctype(ext.result), *[_ffi_ctype(t) for t in ts], use_errno=True)(fp.value)
-            args = [_ffi_arg(t, a[p], d.name, p, line) for i, (t, p) in enumerate(zip(ext.params, parts)) if i != k]
+            f = ctypes.CFUNCTYPE(_ffi_ctype(ext.result, st), *[_ffi_ctype(t, st) for t in ts], use_errno=True)(fp.value)
+            args = [_ffi_arg(t, a[p], d.name, p, line, st) for i, (t, p) in enumerate(zip(ext.params, parts)) if i != k]
             ctypes.set_errno(0)
-            return _ffi_result(ext.result, _ffi_invoke(f, args), d.name, line)
+            return _ffi_result(ext.result, _ffi_invoke(f, args), d.name, line, st)
         if not cfn:
             f = _ffi_symbol(ext, line)
             if ext.cargs:
-                f.argtypes = [ctypes.c_int64 if k == "定数" else _ffi_ctype(ext.params[v]) for k, v in ext.cargs]
+                f.argtypes = [ctypes.c_int64 if k == "定数" else _ffi_ctype(ext.params[v], st) for k, v in ext.cargs]
             else:
-                f.argtypes = [_ffi_ctype(t) for t in ext.params]
-            f.restype = _ffi_ctype(ext.result)
+                f.argtypes = [_ffi_ctype(t, st) for t in ext.params]
+            f.restype = _ffi_ctype(ext.result, st)
             cfn.append(f)
 
-        args = [_ffi_arg(t, a[p], d.name, p, line) for t, p in zip(ext.params, parts)]
+        args = [_ffi_arg(t, a[p], d.name, p, line, st) for t, p in zip(ext.params, parts)]
         if ext.cargs:
             args = [v if k == "定数" else args[v] for k, v in ext.cargs]
         ctypes.set_errno(0)
-        return _ffi_result(ext.result, _ffi_invoke(cfn[0], args), d.name, line)
+        return _ffi_result(ext.result, _ffi_invoke(cfn[0], args), d.name, line, st)
 
     def act(a: dict, line: int) -> Any:
         # 動作の C の関数は、子のプロセスや C の stdio と表示の順が入れ替わらないよう、それまでの表示を出してから呼ぶ

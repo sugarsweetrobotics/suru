@@ -733,6 +733,9 @@ class Compiler:
 
     def extern_body(self, name: str, params: list, ext: S.Extern) -> Any:
         """外部の関数の本体: 引数を C の値にして呼び、値を戻す。値が動作なら、行ったときに呼ぶ動作を返す"""
+        if ext.structs:
+            raise S.SuruError(f"「{name}」: C構造体を値で渡す・返す外部の関数は、まだコンパイルできません"
+                            "(インタプリタでは動きます: suru --インタプリタ)", ext.line)
         for lib in ext.libs:
             if lib not in self.link_libs:
                 self.link_libs.append(lib)
