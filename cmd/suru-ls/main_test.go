@@ -347,3 +347,16 @@ func TestTestSymbols(t *testing.T) {
 		t.Fatalf("例を見せるホバー: %s", h)
 	}
 }
+
+// かっこで型を後ろに書いた組(#242): かっこの中の型も型として色を付け、空白なしの「の組」も型の定義
+func TestSemanticTokensParenFieldTypes(t *testing.T) {
+	msgs := talk(t, open(uri, "品 とは 番号 （数） と 場所 （点 の リスト） の組\n点 とは 横 と 縦 の 組\n（1 と 空 の 品） の 番号\n"),
+		map[string]any{"id": 1, "method": "textDocument/semanticTokens/full", "params": map[string]any{"textDocument": map[string]any{"uri": uri}}})
+	if d := diagnostics(t, msgs); len(d) != 0 {
+		t.Fatalf("間違いが出ています: %v", d)
+	}
+	// 品(形) 番号(フィールド) 数(型) 場所(フィールド) 点(形) リスト(型) / 点 横 縦 / 品 番号
+	if r := result(t, msgs, 1); r != `{"data":[0,0,1,1,0,0,5,2,3,0,0,4,1,0,0,0,5,2,3,0,0,4,1,1,0,0,4,3,0,0,1,0,1,1,0,0,5,1,3,0,0,4,1,3,0,1,9,1,1,0,0,5,2,3,0]}` {
+		t.Fatalf("%s", r)
+	}
+}
