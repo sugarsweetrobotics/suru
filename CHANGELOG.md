@@ -16,6 +16,8 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 
 1. **Record field types accept `X を 返す 動作`.** `書込 は （数 を 受け取って 数 を 返す 入出力動作 を 返すこと） の 組` and `読込 は 数 を 返す 動作` are read as `数 の 動作`, the same as in a type declaration, in the interpreter, `suruc`, `lib/構文.suru` and suru-ls (#206).
 
+The VS Code extension 0.13.0 bundles suru-ls 0.13.0, which knows field types in parentheses and `C構造体`, and highlights `C構造体`.
+
 ## 0.12.0
 
 ### New
