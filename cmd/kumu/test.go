@@ -244,3 +244,44 @@ func (k *kumu) lint(args []string) int {
 	fmt.Fprintf(k.stderr, "%d 個のファイルを点検しました。知らせることはありません\n", len(paths))
 	return 0
 }
+
+// format は「kumu 整える [--確認]」: プロジェクトの .suru の空白を整える(点検と同じバイナリの lib/整形.suru。#250)
+func (k *kumu) format(args []string) int {
+	check := len(args) == 1 && (args[0] == "--確認" || args[0] == "--check")
+	if len(args) != 0 && !check {
+		fmt.Fprintln(k.stderr, "使い方: kumu 整える [--確認]")
+		return 2
+	}
+	p, err := FindProject(k.dir)
+	if err != nil {
+		return k.fail(err)
+	}
+	files, err := suruFiles(p.Root)
+	if err != nil {
+		return k.fail(err)
+	}
+	paths := []string{"--整える"}
+	if check {
+		paths = append(paths, "--確認")
+	}
+	for _, f := range files {
+		if f != filepath.Join(p.Root, ConfigName) {
+			paths = append(paths, k.rel(f))
+		}
+	}
+	exe, err := lintbin.Binary("kumu-" + version)
+	if err != nil {
+		return k.fail(err)
+	}
+	c := exec.Command(exe, paths...)
+	c.Dir = k.dir
+	c.Stdout, c.Stderr = k.stdout, k.stderr
+	if err := c.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode()
+		}
+		return k.fail(err)
+	}
+	return 0
+}

@@ -69,6 +69,7 @@ kumu 削除 計算      # remove a dependency (remove)
 kumu 取得           # fetch dependencies and write 組.lock (fetch; 作る and 実行 do this too)
 kumu 試験           # run the tests of the source files, then each 「…試験する」 in 試験/ (test; kumu 試験 二倍 picks by part of the name)
 kumu 点検           # lint every file in the project (check)
+kumu 整える         # tidy the white space of every file in the project (format; --確認 only lists them)
 kumu 公開           # check, then put the Git tag vVERSION (publish; push it yourself)
 kumu 文書           # write API documentation of the public names to docs/api (doc; --雛形 writes Sphinx and Read the Docs settings)
 kumu 導入           # build, then put the command in ~/.local/bin (install; see "Installing commands (kumu 導入)")
@@ -1801,6 +1802,19 @@ kumu 導入 --先 /usr/local/bin               # put it somewhere else
 1. **`以下の【JSON物】です` … `以上です` writes a JSON object as a table.** Each line is `「名前」 は 値` (or `名前 は 値` when the name has no spaces). It is a quasi-quote of the JSON library (`JSON物展開する`), so the syntax of the language doesn't change. It replaces deeply nested `（（「a」 と … の JSON項目） と …） の JSON物` (#250).
 2. **Values become JSON by themselves.** 数, 文字列, 真偽, JSON and lists of them go through the property `JSON化可能` (`x を JSON値にする`), so `「version」 は 1` gives `1` and `「tags」 は 「品」 と 「店」` gives an array. Other types are converted first (for a type with 【JSON】 derived, with `会員JSON化する` and so on).
 3. **An inner object is a line with nothing after `は`.** The deeper lines under it are its members. Deeper lines under a value continue the value, as everywhere else in Suru. Errors say which line of the block is wrong (`【JSON物】の3行目: …`).
+
+### Tidying white space (suru --整える)
+
+```
+suru --整える a.suru b.suru      # rewrite, printing 「a.suru: 整えました」
+suru --整える --確認 a.suru      # don't rewrite; list the files that aren't tidy (exit code 1 if any)
+suru --整える --出力 a.suru      # print the tidied contents
+kumu 整える                      # every file in the project
+```
+
+1. **`suru --整える` only changes white space.** Spaces between words become one half-width space (outside strings; the spaces before a comment are kept, so aligned comments stay aligned), spaces at the end of lines are removed, indentation with full-width spaces or tabs becomes half-width spaces of the same width (a full-width space is 2, a tab 4, as the lexer counts them), three or more blank lines in a row become two, and blank lines at the start and end of the file are removed (#250).
+2. **The program means the same.** The contents of quasi-quotes (`以下は【道】です` … `以上です`) are left as they are. Before writing, it lexes the file again and compares the tokens and the indentation of every line; if anything would change, it leaves the file as it is and says so.
+3. **The same binary as the linter.** It is written in Suru in `lib/整形.suru` and runs in the linter's binary (`suruc --整える`, `kumu 整える`). In VS Code, "Format Document" uses it through the language server.
 
 ## License
 

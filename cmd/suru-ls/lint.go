@@ -111,3 +111,26 @@ func silenceEdit(lines []string, line int, rule string) (r rng, text string, ok 
 	}
 	return rng{end, end}, "  # 点検しない: " + rule, true
 }
+
+// runFormat は text の空白を整えたもの(点検と同じバイナリの lib/整形.suru。#250)
+func runFormat(exe, text string) (string, error) {
+	f, err := os.CreateTemp("", "suru-ls-*.suru")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(text); err != nil {
+		f.Close()
+		return "", err
+	}
+	f.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe, "--整える", "--出力", f.Name())
+	cmd.Env = os.Environ()
+	if compiler.LibDir != "" {
+		cmd.Env = append(cmd.Env, "SURU_LIB="+compiler.LibDir)
+	}
+	out, err := cmd.Output()
+	return string(out), err
+}

@@ -14,6 +14,8 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 
 3. **【JSON物】: JSON objects one member per line.** `x とは 以下の【JSON物】です` with lines `「名前」 は 値` and an inner object under a line with nothing after `は`. Values of 数, 文字列, 真偽, JSON and lists become JSON by themselves through the new property `JSON化可能` (README "JSON objects one member per line (【JSON物】)", #250).
 
+4. **`suru --整える` tidies white space.** One space between words, no spaces at line ends, half-width indentation of the same width, at most two blank lines in a row. It checks that the tokens stay the same and leaves quasi-quotes alone. Also `suruc --整える`, `kumu 整える` and "Format Document" in VS Code (README "Tidying white space (suru --整える)", #250).
+
 ### Changed
 
 1. **The first lint is faster.** The linter's binary is now built at `-O0`, which is about 5 seconds quicker and lints at about the same speed. `suru --点検` uses the bundled `suruc` (`suruc --点検`, new) to build it, so the first run in a cloud container went from about 18 seconds to about 3 seconds. Later runs use the cached binary as before (#250).

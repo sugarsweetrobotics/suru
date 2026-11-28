@@ -412,13 +412,14 @@ func (s *server) handle(m message) {
 	case "initialize":
 		s.reply(m.ID, map[string]any{
 			"capabilities": map[string]any{
-				"textDocumentSync":       map[string]any{"openClose": true, "change": 1},
-				"hoverProvider":          true,
-				"definitionProvider":     true,
-				"documentSymbolProvider": true,
-				"completionProvider":     map[string]any{"triggerCharacters": []string{"の"}},
-				"renameProvider":         map[string]any{"prepareProvider": true},
-				"codeActionProvider":     map[string]any{"codeActionKinds": []string{"quickfix"}},
+				"textDocumentSync":           map[string]any{"openClose": true, "change": 1},
+				"hoverProvider":              true,
+				"definitionProvider":         true,
+				"documentSymbolProvider":     true,
+				"completionProvider":         map[string]any{"triggerCharacters": []string{"の"}},
+				"renameProvider":             map[string]any{"prepareProvider": true},
+				"codeActionProvider":         map[string]any{"codeActionKinds": []string{"quickfix"}},
+				"documentFormattingProvider": true,
 				"semanticTokensProvider": map[string]any{
 					"legend": map[string]any{"tokenTypes": semanticTypes, "tokenModifiers": []string{}},
 					"full":   true,
@@ -550,6 +551,21 @@ func (s *server) handle(m message) {
 			}
 		}
 		s.reply(m.ID, actions)
+	case "textDocument/formatting":
+		var p struct {
+			TextDocument struct {
+				URI string `json:"uri"`
+			} `json:"textDocument"`
+		}
+		_ = json.Unmarshal(m.Params, &p)
+		edits := []any{}
+		if d := s.docs[p.TextDocument.URI]; d != nil && s.lintExe != "" {
+			if text, err := runFormat(s.lintExe, d.text); err == nil && text != d.text {
+				end := position{Line: len(d.lines), Character: 0}
+				edits = append(edits, map[string]any{"range": rng{position{0, 0}, end}, "newText": text})
+			}
+		}
+		s.reply(m.ID, edits)
 	case "textDocument/documentSymbol":
 		var p struct {
 			TextDocument struct {

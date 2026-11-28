@@ -1,0 +1,165 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 sugarsweetrobotics(lib/LICENSE)
+# The formatter of Suru (written in Suru), used by `suru --整える ファイル…` (#250).
+# It only changes white space, so the program means the same after formatting:
+#
+# - Spaces between words become one half-width space (outside strings; spaces before a comment are kept for alignment).
+# - Spaces at the end of a line are removed.
+# - Indentation with full-width spaces or tabs becomes half-width spaces of the same width (a full-width space is 2, a tab is 4).
+# - Three or more blank lines in a row become two; blank lines at the start and the end of the file are removed.
+#
+# The contents of a quasi-quote (「以下は【道】です … 以上です」) are left as they are. If the tokens would change, the file is left as it is.
+#
+# - `行群 を 整形する`: the formatted lines
+# - `整形実行する`: an action for `suru --整える [--確認] [--出力] ファイル…`
+
+「標準」 を 読み込んで 使う
+「字句」 を 読み込んで 使う
+「ファイル」 を 読み込む
+「環境」 を 読み込む
+
+# --- 1行を整える ---
+
+# 整状 is the characters written so far (last first), how deep inside 「」 we are, whether a comment has started and the spaces not written yet.
+整状 とは 整出 は 文字列 の リスト で 整鉤 は 数 で 整注 は 真偽 で 整空 は 文字列 の 組
+
+# Whether c starts a comment.
+文字列 が 注頭字である は 真偽
+c が 注頭字である とは c = 「#」 または c = 「＃」 または c = 「※」
+
+整状 に 文字列 を 字整形する は 整状
+s に c を 字整形する とは
+  鉤 とは s の 整鉤
+  空字群 とは （（s の 整空） を 文字分解する） を 逆順にする
+  もし s の 整注 または 鉤 > 0 ならば s に c を 字書込する
+  そうでなければ もし c = 「 」 または c = 「　」 ならば 整空 は （（s の 整空） + c） の s
+  そうでなければ もし s の 整空 = 「」 ならば s に c を 字書込する
+  そうでなければ もし c が 注頭字である ならば （整出 は （空字群 + （s の 整出）） で 整空 は 「」 の s） に c を 字書込する
+  そうでなければ （整出 は （「 」 を （s の 整出） に 挿入する） で 整空 は 「」 の s） に c を 字書込する
+
+# Writes c and follows 「」 and comments.
+整状 に 文字列 を 字書込する は 整状
+s に c を 字書込する とは
+  出 とは c を （s の 整出） に 挿入する
+  鉤 とは s の 整鉤
+  もし s の 整注 ならば 整出 は 出 の s
+  そうでなければ もし c = 左鉤 ならば 整出 は 出 で 整鉤 は （鉤 + 1） の s
+  そうでなければ もし c = 右鉤 かつ 鉤 > 0 ならば 整出 は 出 で 整鉤 は （鉤 - 1） の s
+  そうでなければ もし 鉤 = 0 かつ c が 注頭字である ならば 整出 は 出 で 整注 は 真 の s
+  そうでなければ 整出 は 出 の s
+
+# The indentation (as half-width spaces) and the rest of a line.
+文字列 の リスト を 字下げ分けする は 文字列 の リスト
+空 を 字下げ分けする とは 「」 と 「」
+cs を 字下げ分けする とは
+  頭 とは cs の 先頭
+  後 とは cs の 残り を 字下げ分けする
+  もし 頭 = 「 」 または 頭 = 「　」 または 頭 = （9 を 文字にする） ならば （（頭 を 字下げ空白にする） + （後 の 先頭）） と （後 の 最後）
+  そうでなければ 「」 と （cs を 連字にする）
+
+# A half-width space is 1, a full-width space 2 and a tab 4 (the same widths as the lexer).
+文字列 を 字下げ空白にする は 文字列
+c を 字下げ空白にする とは もし c = 「 」 ならば 「 」 そうでなければ もし c = 「　」 ならば 「  」 そうでなければ 「    」
+
+文字列 の リスト を 連字にする は 文字列
+xs を 連字にする とは xs を 「」 で 結合する
+
+# One line: one space between words and none at the end. A line of only spaces becomes empty.
+文字列 を 行整形する は 文字列
+行 を 行整形する とは
+  分 とは （行 を 文字分解する） を 字下げ分けする
+  s とは （分 の 最後 を 文字分解する） を （整出 は 空 で 整鉤 は 0 で 整注 は 偽 で 整空 は 「」 の 整状） から 字整形すること で 畳み込みする
+  中 とは （（s の 整出） を 逆順にする） を 連字にする
+  もし 中 = 「」 ならば 「」 そうでなければ （分 の 先頭） + （中 を 末尾空白削除する）
+
+文字列 を 末尾空白削除する は 文字列
+s を 末尾空白削除する とは
+  もし s が 「 」 で 末尾一致である または s が 「　」 で 末尾一致である ならば （s から （s の 長さ - 1） を 先頭取得する） を 末尾空白削除する
+  そうでなければ s
+
+# --- ファイルを整える ---
+
+# Whether a line (formatted) starts a quasi-quote, whose contents are left as they are.
+文字列 が 準頭行である は 真偽
+l が 準頭行である とは
+  t とは l を 空白除去する
+  （t が 「】です」 で 末尾一致である または t が 「】です。」 で 末尾一致である または t が 「】」 で 末尾一致である） かつ t が 「以下」 を 含有である
+
+# 整群 is the lines written so far (last first), the indentation of the open quasi-quote (-1 if none) and the blank lines not written yet.
+整群 とは 群出 は 文字列 の リスト で 準段 は 数 で 空行数 は 数 の 組
+
+整群 に 文字列 を 行追加する は 整群
+g に 生 を 行追加する とは
+  l とは 生 を 行整形する
+  段 とは （生 を 文字分解する） を 段数にする
+  閉 とは （l を 空白除去する） が 「以上」 で 先頭一致である かつ 段 = g の 準段
+  もし g の 準段 >= 0 ならば
+    群出 は （生 を （g の 群出） に 挿入する） で 準段 は （もし 閉 ならば -1 そうでなければ g の 準段） の g
+  そうでなければ もし l = 「」 ならば 空行数 は （（g の 空行数） + 1） の g
+  そうでなければ g に l を 段 で 非空行追加する
+
+整群 に 文字列 を 数 で 非空行追加する は 整群
+g に l を 段 で 非空行追加する とは
+  空行群 とは もし g の 群出 = 空 ならば 空 そうでなければ 「」 を （もし g の 空行数 > 2 ならば 2 そうでなければ g の 空行数） で 複製する
+  出 とは l を （空行群 + （g の 群出）） に 挿入する
+  群出 は 出 で 準段 は （もし l が 準頭行である ならば 段 そうでなければ -1） で 空行数 は 0 の g
+
+# The indentation width of a line (as the lexer counts it).
+文字列 の リスト を 段数にする は 数
+空 を 段数にする とは 0
+cs を 段数にする とは
+  頭 とは cs の 先頭
+  もし 頭 = 「 」 ならば 1 + （cs の 残り を 段数にする）
+  そうでなければ もし 頭 = 「　」 ならば 2 + （cs の 残り を 段数にする）
+  そうでなければ もし 頭 = （9 を 文字にする） ならば 4 + （cs の 残り を 段数にする）
+  そうでなければ 0
+
+# The formatted lines of a file.
+文字列 の リスト を 整形する は 文字列 の リスト
+行群 を 整形する とは
+  g とは 行群 を （群出 は 空 で 準段 は -1 で 空行数 は 0 の 整群） から 行追加すること で 畳み込みする
+  （g の 群出） を 逆順にする
+
+# Whether formatting kept the tokens (kind, value and form) and the indentation of every logical line.
+文字列 の リスト と 文字列 の リスト が 同字句である は 真偽
+前 と 後 が 同字句である とは （（前 を 字句解析する） を 字句要約すること で 写像する） = （（後 を 字句解析する） を 字句要約すること で 写像する）
+
+論理行 を 字句要約する は 文字列
+l を 字句要約する とは
+  字群 とは l の 字句列 を （t を 受け取って t の 種類 + 「:」 + t の 値 + 「:」 + t の 形 を 返すこと） で 写像する
+  （l の 段 を 文字列化する） + 「|」 + （字群 を 改行 で 結合する）
+
+# --- 実行する ---
+
+# Formats one file. 0 if it was already formatted or was written, 1 if it would change (with --確認) or can't be formatted.
+文字列 を 文字列 で 一件整形する は 数 の 動作
+道 を 方式 で 一件整形する とは 以下の手順です
+  行群 とは 道 を ファイル内の行分割読込した 結果
+  後 とは 行群 を 整形する
+  内容 とは （後 を 改行 で 結合する） + （もし 後 = 空 ならば 「」 そうでなければ 改行）
+  元 とは 道 を ファイル内の読込した 結果
+  同 とは 元 = 内容
+  保 とは 同 または （行群 と 後 が 同字句である）
+  書く とは 方式 = 「書込」 かつ 同 = 偽 かつ 保
+  文 とは もし 同 または 方式 = 「出力」 ならば 「」 そうでなければ もし 保 = 偽 ならば 道 + 「: 整えると字句が変わるので、そのままにしました」
+    そうでなければ もし 方式 = 「確認」 ならば 道 + 「: 整えていません」 そうでなければ 道 + 「: 整えました」
+  もし 方式 = 「出力」 ならば 内容 を 続表示する そうでなければ 「」 を 結果にする
+  もし 書く ならば 内容 を 道 へ ファイル内の書出する そうでなければ 0 を 結果にする
+  もし 文 ≠ 「」 ならば 文 を 表示する そうでなければ 「」 を 結果にする
+  （もし 保 = 偽 または （方式 = 「確認」 かつ 同 = 偽） ならば 1 そうでなければ 0） を 結果にする
+  以上です
+
+# `suru --整える [--確認] [--出力] ファイル…`: formats the files in place (--確認: only lists the files that are not formatted, --出力: prints the result).
+文字列 の リスト を 整形実行する は 甲 の 動作
+全引数 を 整形実行する とは 以下の手順です
+  方式 とは もし 全引数 が 「--確認」 を 含有である ならば 「確認」 そうでなければ もし 全引数 が 「--出力」 を 含有である ならば 「出力」 そうでなければ 「書込」
+  道群 とは 全引数 から （a を 受け取って a が 「--」 で 先頭一致でない を 返すこと） で 選別する
+  もし 道群 = 空 ならば 「使い方: suru --整える [--確認] [--出力] ファイル.suru …」 を 環境内のエラー出力する そうでなければ 0 を 結果にする
+  もし 道群 = 空 ならば 2 を 環境内の終了する そうでなければ 0 を 結果にする
+  数群 とは 道群 を （道 を 受け取って 道 を 方式 で 一件整形する を 返すこと） で 写像して 実行した 結果
+  もし （数群 を 加算する） > 0 ならば 1 を 環境内の終了する
+  そうでなければ 0 を 環境内の終了する
+  以上です
+
+注頭字である と 字整形する と 字書込する と 字下げ分けする と 字下げ空白にする と 連字にする と 行整形する と 末尾空白削除する と 準頭行である と
+  行追加する と 非空行追加する と 段数にする と 同字句である と 字句要約する と 一件整形する は 非公開とする

@@ -106,6 +106,13 @@ func run(args []string) int {
 	if len(args) >= 1 && (args[0] == "--点検" || args[0] == "--lint") {
 		return runLint(args[1:])
 	}
+	if len(args) >= 1 && (args[0] == "--整える" || args[0] == "--format") {
+		if len(args) == 1 {
+			fmt.Fprintln(os.Stderr, "使い方: suruc --整える [--確認] [--出力] ファイル.suru …")
+			return 2
+		}
+		return runLint(append([]string{"--整える"}, args[1:]...)) // 点検と同じバイナリで空白を整える(#250)
+	}
 	if len(args) >= 1 && (args[0] == "--文書" || args[0] == "--doc") {
 		return compiler.DocCommand(args[1:], os.Stdout, os.Stderr) // API ドキュメント(#209)
 	}

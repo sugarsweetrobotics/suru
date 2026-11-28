@@ -65,6 +65,14 @@ func TestLintDiagnostics(t *testing.T) {
 	if !strings.Contains(r, `"newText":"  # 点検しない: 未使用の定義"`) || !strings.Contains(r, `"character":8,"line":0`) {
 		t.Fatalf("クイックフィックスが違います: %s", r)
 	}
+	// 「ドキュメントのフォーマット」は空白を整えた全体に置きかえる(#250)
+	messy := "x  とは   1   \nx を 表示する\n"
+	format := map[string]any{"id": 3, "method": "textDocument/formatting", "params": map[string]any{
+		"textDocument": map[string]any{"uri": u}, "options": map[string]any{"tabSize": 2, "insertSpaces": true}}}
+	r = result(t, talkWith(t, exe, open(u, messy), format), 3)
+	if !strings.Contains(r, `"newText":"x とは 1\nx を 表示する\n"`) || !strings.Contains(r, `"end":{"character":0,"line":2}`) {
+		t.Fatalf("整えた結果が違います: %s", r)
+	}
 	// 書き換えている途中は前の知らせを使い、保存したら調べ直す
 	fixed := "x とは 1\nx を 表示する\n"
 	change := map[string]any{"method": "textDocument/didChange", "params": map[string]any{

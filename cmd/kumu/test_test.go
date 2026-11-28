@@ -109,6 +109,22 @@ func TestTestAndLint(t *testing.T) {
 		!strings.Contains(out.String(), `"kind":"点検"`) {
 		t.Errorf("点検 --json: rc=%d %s %s", rc, out, errb)
 	}
+	// 整える --確認 は整っていないファイルを示すだけ、整える は書きかえる(#250)
+	messy := filepath.Join(root, "試験", "乱れ.suru")
+	os.WriteFile(messy, []byte("x  とは   1   \n"), 0o644)
+	out.Reset()
+	errb.Reset()
+	if rc := k.run([]string{"整える", "--確認"}); rc != 1 || !strings.Contains(out.String(), "乱れ.suru: 整えていません") {
+		t.Errorf("整える --確認: rc=%d %s %s", rc, out, errb)
+	}
+	out.Reset()
+	if rc := k.run([]string{"format"}); rc != 0 || !strings.Contains(out.String(), "乱れ.suru: 整えました") {
+		t.Errorf("整える: rc=%d %s %s", rc, out, errb)
+	}
+	if b, _ := os.ReadFile(messy); string(b) != "x とは 1\n" {
+		t.Errorf("整えた中身: %q", b)
+	}
+	os.Remove(messy)
 }
 
 // ソースのファイルの試験のまとまりと例も動かす(#193)。非公開の名前も試せて、一番外の行うことはしない

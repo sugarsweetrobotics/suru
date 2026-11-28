@@ -8917,6 +8917,7 @@ COMPILE_FLAGS = ("--翻訳", "--compile")  # バイナリにコンパイルす�
 INTERPRETER_FLAGS = ("--インタプリタ", "--interpreter")  # コンパイルせずにインタプリタで動かす(#229)
 REPL_FLAGS = ("--対話", "-i")  # ファイルを読んでから対話モードを始める
 LINT_FLAGS = ("--点検", "--lint")  # lib/点検.suru(する で書いた点検)でファイルを調べる
+FORMAT_FLAGS = ("--整える", "--format")  # lib/整形.suru で空白を整える(点検と同じバイナリ。#250)
 TEST_FLAGS = ("--試験", "--test")  # 試験のまとまり・例・「…試験する」を動かす(#193)
 JSON_FLAGS = ("--json", "--JSON")  # エラーと点検の知らせを1行に1つの JSON で出す
 LINT_SOURCE = "「点検」 を 読み込む\n点検内の点検実行する\n"
@@ -9259,6 +9260,11 @@ def main(argv: list[str]) -> int:
             print("使い方: suru --点検 [--json] ファイル.suru …", file=sys.stderr)
             return 2
         return lint(paths)
+    if len(argv) >= 2 and argv[1] in FORMAT_FLAGS:
+        if not [a for a in argv[2:] if not a.startswith("--")]:
+            print("使い方: suru --整える [--確認] [--出力] ファイル.suru …", file=sys.stderr)
+            return 2
+        return lint(["--整える", *argv[2:]])
     if len(argv) >= 2 and argv[1] in TEST_FLAGS:
         return run_tests(argv[2:])
     if len(argv) >= 2 and argv[1] in DOC_FLAGS:
