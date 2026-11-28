@@ -2563,17 +2563,19 @@ func tryParseTypedef(node *LNode) *TypeDef {
 					raise(part[0].Line, "フィールド名「"+f+"」が2回書かれています")
 				}
 				fields = append(fields, f)
+				// 「数 を 返す 動作」は型の宣言と同じく「数 の 動作」と読む(#206)
+				ftoks := actionReturning(part[2:])
 				found := false
 				for _, ft := range fieldTypes {
 					if ft.Name == f {
 						found = true
-						if !sameTokenValues(ft.Toks, part[2:]) {
+						if !sameTokenValues(ft.Toks, ftoks) {
 							raise(part[0].Line, "フィールド「"+f+"」の型が形ごとに違います(同じ名前のフィールドは同じ型にしてください)")
 						}
 					}
 				}
 				if !found {
-					fieldTypes = append(fieldTypes, FieldTypeToks{f, part[2:]})
+					fieldTypes = append(fieldTypes, FieldTypeToks{f, ftoks})
 				}
 			}
 			ctors = append(ctors, Ctor{cname, fields})
