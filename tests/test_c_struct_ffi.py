@@ -14,6 +14,8 @@ import suru  # noqa: E402
 from suru import SuruError  # noqa: E402
 from test_ffi import compiled, interpreted  # noqa: E402
 
+# 試験の中で作る C のライブラリ(Windows は DLL)
+LIB = "libst.dll" if sys.platform == "win32" else "libst.so"
 needs_cc = pytest.mark.skipif(shutil.which("cc") is None and shutil.which("clang") is None, reason="C コンパイラがありません")
 
 # 大きさの違う構造体(1・2・4・8・12・16・24 バイト、単精度と小数だけのもの、入れ子)。どれも値で受け取って値で返す
@@ -48,7 +50,7 @@ void *pick_total(void) { return (void *)total; }
 """
 
 PROGRAM = """「標準」 を 読み込んで 使う
-外部の「./libst.so」 を 読み込む
+外部の「./""" + LIB + """」 を 読み込む
 甲1 とは a は 符号なし8 の C構造体
 甲2 とは a は 符号付き8 で b は 符号なし8 の C構造体
 甲4 とは a は 符号付き16 で b は 符号なし16 の C構造体
@@ -119,7 +121,8 @@ def libdir(tmp_path_factory):
     d = tmp_path_factory.mktemp("cstruct")
     cc = shutil.which("cc") or shutil.which("clang")
     (d / "st.c").write_text(C_SOURCE, encoding="utf-8")
-    subprocess.run([cc, "-shared", "-fPIC", "-o", str(d / "libst.so"), str(d / "st.c")], check=True)
+    pic = [] if sys.platform == "win32" else ["-fPIC"]
+    subprocess.run([cc, "-shared", *pic, "-o", str(d / LIB), str(d / "st.c")], check=True)
     return d
 
 
@@ -192,7 +195,7 @@ def test_Python版のコンパイラでも同じ(libdir):
 def test_Go版のコンパイラでも同じ(libdir, suruc):
     prog = libdir / "例.suru"
     prog.write_text(PROGRAM, encoding="utf-8")
-    exe = libdir / "例"
+    exe = libdir / ("例.exe" if sys.platform == "win32" else "例")
     b = subprocess.run([str(suruc), str(prog), "-o", str(exe)], capture_output=True, text=True)
     assert b.returncode == 0, b.stderr
     r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
@@ -213,7 +216,7 @@ def test_コンパイルしたものも入らない値は同じエラー(libdir,
     src = PROGRAM.split("（254 の 甲1）")[0] + call + "\n"
     prog = libdir / "誤.suru"
     prog.write_text(src, encoding="utf-8")
-    exe = libdir / "誤"
+    exe = libdir / ("誤.exe" if sys.platform == "win32" else "誤")
     b = subprocess.run([str(suruc), str(prog), "-o", str(exe)], capture_output=True, text=True)
     assert b.returncode == 0, b.stderr
     r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
