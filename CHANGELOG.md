@@ -4,6 +4,12 @@
 
 Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
 
+## 0.13.0
+
+### New
+
+1. **Field types can be written in parentheses.** `品 とは 番号 （数） と 名前 （文字列） の 組` is the same type as `番号 は 数 で 名前 は 文字列 の 組`. Mixing the two forms in one type is an error. The final `の組` of a type definition may be written without a space ("Field types in parentheses" in README.md, #242).
+
 ## 0.12.0
 
 ### New
