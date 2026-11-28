@@ -12,6 +12,8 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 
 2. **`X だけ` for a one-element list.** `404 だけ` is the list with only 404, the same as `404 を 空 に 挿入する`. It can be used wherever a 「と」 list can and as a field value (README "Lists of one with だけ", #250).
 
+3. **【JSON物】: JSON objects one member per line.** `x とは 以下の【JSON物】です` with lines `「名前」 は 値` and an inner object under a line with nothing after `は`. Values of 数, 文字列, 真偽, JSON and lists become JSON by themselves through the new property `JSON化可能` (README "JSON objects one member per line (【JSON物】)", #250).
+
 ### Changed
 
 1. **The first lint is faster.** The linter's binary is now built at `-O0`, which is about 5 seconds quicker and lints at about the same speed. `suru --点検` uses the bundled `suruc` (`suruc --点検`, new) to build it, so the first run in a cloud container went from about 18 seconds to about 3 seconds. Later runs use the cached binary as before (#250).

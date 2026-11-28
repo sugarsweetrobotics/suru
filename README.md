@@ -1781,6 +1781,27 @@ kumu 導入 --先 /usr/local/bin               # put it somewhere else
 1. **`X だけ` is a list with the one element X.** It is the same as `X を 空 に 挿入する`, and pairs with `1 と 2` for two or more. It can be written where a list made with 「と」 can, and also as a field value of `名前 は 値 で …` (#250).
 2. **Only after one value.** `1 と 2 だけ` is an error; for two or more, the 「と」 list is enough. A one-element list still prints as `（404）`.
 
+### JSON objects one member per line (【JSON物】)
+
+```suru
+「JSON」 を 読み込んで 使う
+
+題 とは 「品屋」
+仕様 とは 以下の【JSON物】です
+  「openapi」 は 「3.1.0」
+  「info」 は
+    「title」 は 題
+    「version」 は 1
+  「tags」 は 「品」 と 「店」
+以上です
+
+（仕様 を JSON文字列にする） を 表示します
+```
+
+1. **`以下の【JSON物】です` … `以上です` writes a JSON object as a table.** Each line is `「名前」 は 値` (or `名前 は 値` when the name has no spaces). It is a quasi-quote of the JSON library (`JSON物展開する`), so the syntax of the language doesn't change. It replaces deeply nested `（（「a」 と … の JSON項目） と …） の JSON物` (#250).
+2. **Values become JSON by themselves.** 数, 文字列, 真偽, JSON and lists of them go through the property `JSON化可能` (`x を JSON値にする`), so `「version」 は 1` gives `1` and `「tags」 は 「品」 と 「店」` gives an array. Other types are converted first (for a type with 【JSON】 derived, with `会員JSON化する` and so on).
+3. **An inner object is a line with nothing after `は`.** The deeper lines under it are its members. Deeper lines under a value continue the value, as everywhere else in Suru. Errors say which line of the block is wrong (`【JSON物】の3行目: …`).
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)
