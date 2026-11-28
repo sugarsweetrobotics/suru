@@ -2510,7 +2510,7 @@ func tryParseTypedef(node *LNode) *TypeDef {
 	if towa != 1 || tokens[0].Kind != "WORD" {
 		return nil
 	}
-	body := tokens[2:]
+	body := splitTrailingKumi(tokens[2:])
 	hasKa := findTopLevel(body, KwKa) >= 0
 	if len(body) == 0 || !(hasKa || isKw(body[len(body)-1], KwKumi)) {
 		return nil
@@ -2521,6 +2521,30 @@ func tryParseTypedef(node *LNode) *TypeDef {
 	typed := 0 // フィールドの型を書いたか(0: まだフィールドがない、1: 書いた、-1: 書いていない)
 	var fieldTypes []FieldTypeToks
 	mixed := "フィールドの型は、型のすべてのフィールドに書くか、どれにも書かないかにしてください"
+	style := "" // 型の書き方(「は」か「かっこ」)。1つの型の中ではそろえる
+	typedField := func(nameTok *Token, typeToks []*Token, fields []string, kind string) []string {
+		if style != "" && style != kind {
+			raise(nameTok.Line, typedStyleMixed)
+		}
+		style = kind
+		f := checkName(nameTok)
+		if contains(fields, f) {
+			raise(nameTok.Line, "フィールド名「"+f+"」が2回書かれています")
+		}
+		fields = append(fields, f)
+		// 「数 を 返す 動作」は型の宣言と同じく「数 の 動作」と読む(#206)
+		typeToks = actionReturning(typeToks)
+		for _, ft := range fieldTypes {
+			if ft.Name == f {
+				if !sameTokenValues(ft.Toks, typeToks) {
+					raise(nameTok.Line, "フィールド「"+f+"」の型が形ごとに違います(同じ名前のフィールドは同じ型にしてください)")
+				}
+				return fields
+			}
+		}
+		fieldTypes = append(fieldTypes, FieldTypeToks{f, typeToks})
+		return fields
+	}
 	for _, alt := range splitTopLevel(body, KwKa) {
 		if len(alt) == 0 {
 			raise(line, "「か」の前後に形を書いてください")
@@ -2551,6 +2575,9 @@ func tryParseTypedef(node *LNode) *TypeDef {
 			typed = 1
 			for _, part := range splitTypedFields(alt[:len(alt)-2], last.Line) {
 				if len(part) < 3 || !isKw(part[1], KwWa) {
+					if hasKind(part, "LP") {
+						raise(part[0].Line, typedStyleMixed)
+					}
 					l := last.Line
 					if len(part) > 0 {
 						l = part[0].Line
@@ -2558,25 +2585,19 @@ func tryParseTypedef(node *LNode) *TypeDef {
 					raise(l, "型を書くフィールドは「番号 は 数 で 名前 は 文字列 の 組」のように"+
 						"「フィールド名 は 型」を「で」で区切って書いてください")
 				}
-				f := checkName(part[0])
-				if contains(fields, f) {
-					raise(part[0].Line, "フィールド名「"+f+"」が2回書かれています")
-				}
-				fields = append(fields, f)
-				// 「数 を 返す 動作」は型の宣言と同じく「数 の 動作」と読む(#206)
-				ftoks := actionReturning(part[2:])
-				found := false
-				for _, ft := range fieldTypes {
-					if ft.Name == f {
-						found = true
-						if !sameTokenValues(ft.Toks, ftoks) {
-							raise(part[0].Line, "フィールド「"+f+"」の型が形ごとに違います(同じ名前のフィールドは同じ型にしてください)")
-						}
-					}
-				}
-				if !found {
-					fieldTypes = append(fieldTypes, FieldTypeToks{f, ftoks})
-				}
+				fields = typedField(part[0], part[2:], fields, "は")
+			}
+			ctors = append(ctors, Ctor{cname, fields})
+			continue
+		}
+		if hasKind(alt[:len(alt)-2], "LP") {
+			// 「番号 （数） と 名前 （文字列） の 品」: フィールド名の後ろのかっこに型を書く
+			if typed < 0 {
+				raise(last.Line, mixed)
+			}
+			typed = 1
+			for _, pf := range splitParenFields(alt[:len(alt)-2], last.Line) {
+				fields = typedField(pf.name, pf.toks, fields, "かっこ")
 			}
 			ctors = append(ctors, Ctor{cname, fields})
 			continue
@@ -2610,6 +2631,84 @@ func tryParseTypedef(node *LNode) *TypeDef {
 		td.FieldTypes = fieldTypes
 	}
 	return td
+}
+
+const typedStyleMixed = "フィールドの型は、1つの型の中では「番号 は 数 で 名前 は 文字列 の 組」か" +
+	"「番号 （数） と 名前 （文字列） の 組」のどちらかの書き方にそろえてください"
+
+func hasKind(tokens []*Token, kind string) bool {
+	for _, t := range tokens {
+		if t.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// splitTrailingKumi は空白の書き方で詰めて書いた最後の「の組」を「の 組」に分ける(「番号 と 名前 の組」)
+func splitTrailingKumi(body []*Token) []*Token {
+	n := len(body)
+	if n >= 2 && body[n-1].Kind == "WORD" && body[n-1].S == KwNo+KwKumi && !body[n-1].Quoted &&
+		!body[n-1].Qualified && (body[n-2].Kind == "WORD" || body[n-2].Kind == "RP") {
+		last := body[n-1]
+		out := append([]*Token{}, body[:n-1]...)
+		return append(out, &Token{Kind: "KW", S: KwNo, Line: last.Line}, &Token{Kind: "KW", S: KwKumi, Line: last.Line})
+	}
+	return body
+}
+
+type parenField struct {
+	name *Token
+	toks []*Token
+}
+
+// splitParenFields は「番号 （数） と 名前 （文字列）」を、フィールド名とかっこの中の型の字句に分ける
+func splitParenFields(tokens []*Token, line Pos) []parenField {
+	var out []parenField
+	i := 0
+	for {
+		if i >= len(tokens) {
+			raise(line, "「と」の後にフィールド名が必要です")
+		}
+		nameTok := tokens[i]
+		if nameTok.Kind == "LP" {
+			raise(nameTok.Line, "かっこの前にフィールド名を書いてください(「番号 （数）」)")
+		}
+		if isKw(nameTok, KwWa) {
+			raise(nameTok.Line, typedStyleMixed)
+		}
+		if i+1 >= len(tokens) || tokens[i+1].Kind != "LP" {
+			if i+1 < len(tokens) && isKw(tokens[i+1], KwWa) {
+				raise(tokens[i+1].Line, typedStyleMixed)
+			}
+			if i+1 < len(tokens) && !isKw(tokens[i+1], KwTo) {
+				raise(tokens[i+1].Line, "フィールド名は「と」で区切ってください")
+			}
+			raise(nameTok.Line, "フィールドの型は、型のすべてのフィールドに書くか、どれにも書かないかにしてください")
+		}
+		j := matching(tokens, i+1)
+		inner := tokens[i+2 : j]
+		if len(inner) == 0 {
+			raise(tokens[i+1].Line, "「"+nameTok.Value()+"」のかっこの中に型を書いてください")
+		}
+		// 関数の型はかっこごと(「は」の書き方の「処理 は （数 を 受け取って 数 を 返すこと）」と同じ字句)
+		if findTopLevel(inner, KwReturn) >= 0 {
+			out = append(out, parenField{nameTok, tokens[i+1 : j+1]})
+		} else {
+			out = append(out, parenField{nameTok, inner})
+		}
+		i = j + 1
+		if i == len(tokens) {
+			return out
+		}
+		if isKw(tokens[i], KwWa) || isPart(tokens[i], "で") {
+			raise(tokens[i].Line, typedStyleMixed)
+		}
+		if !isKw(tokens[i], KwTo) {
+			raise(tokens[i].Line, "フィールドは「と」で区切ってください(「番号 （数） と 名前 （文字列）」)")
+		}
+		i++
+	}
 }
 
 // splitTypedFields は「番号 は 数 で 名前 は 文字列」を「で」(括弧の外)で分ける

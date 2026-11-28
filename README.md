@@ -1736,6 +1736,22 @@ kumu 導入 --先 /usr/local/bin               # put it somewhere else
 2. **It can install from a folder or a Git repository.** A location starting with `.` or `/` is a project folder. Otherwise it is a Git location like the ones in `依存`: without `@版` it picks the newest version tag (like `追加`), fetches that tag into a temporary folder, builds there and removes the folder afterwards. The project's dependencies are fetched into `~/.kumu/依存/` as in `作る`, and checked against its `組.lock`.
 3. **It says when the folder is not in PATH.** After installing, if the folder is not in PATH, it prints how to add it (`export PATH="$HOME/.local/bin:$PATH"` in the shell's settings; on Windows, the user's Path in the environment variables). Shared library projects and microcontroller projects can't be installed (they are not commands).
 
+### Field types in parentheses
+
+```suru
+品 とは 番号 （数） と 名前 （文字列） と 値段 （数） の 組
+鎖 とは 値 （甲） と 次 （甲 の 鎖） の 節 か 末
+道 とは 名前 （文字列） と 処理 （数 を 受け取って 数 を 返すこと） の 組
+
+（1 と 「茶」 と 120 の 品） の 名前 を 表示します
+```
+
+1. **A field's type can be written in parentheses after its name.** `品 とは 番号 （数） と 名前 （文字列） の 組` is the same type as `品 とは 番号 は 数 で 名前 は 文字列 の 組` ("Field types in records"). As in a record without types, fields are separated by `と`. The type in the parentheses is written as in type declarations, and a function type needs no second pair of parentheses. Derivations (【JSON】, 【表】, …) work unchanged (#242).
+2. **Half-width, full-width and punctuation style.** `番号(数)`, `番号 (数)` and `番号 （数）` are the same. In punctuation style it is `品とは、番号（数）と名前（文字列）の組。`.
+3. **One form per type.** Mixing the forms (`番号 （数） と 名前 は 文字列`) or using a different form in another shape of the same type is an error. As before, write a type for every field or for none.
+4. **Only in type definitions.** Records are still built with `（1 と 「茶」 の 品）` or `番号 は 1 で 名前 は 「茶」 の 品`, and parentheses right after a name in an expression are an error.
+5. **The final `の組` may be written without a space.** At the end of a type definition, right after a field name or `）`, `の組` is read as `の 組` (with or without types). A value named `の組` can still be used everywhere else.
+
 ## License
 
 - The core (`suru.py`, `suru_check.py`, `suru_compile.py`, and the Go `compiler/` and `cmd/`): [GPL-3.0-or-later](LICENSE)

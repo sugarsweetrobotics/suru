@@ -8,7 +8,8 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 
 ### New
 
-1. **Choose the files for `kumu 文書`.** `文書 とは 「rclsuru.suru」 と 「型/」` in 組.suru lists the files and folders to document (folders with their subfolders, written to `docs/api/型/…md`), and `文書から除く` leaves files out. The scaffold's `index.md` uses `api/**`, and `.readthedocs.yaml` notes that its kumu version is bumped together with CI (README "Choosing the files for kumu 文書", #235).
+1. **Field types can be written in parentheses.** `品 とは 番号 （数） と 名前 （文字列） の 組` is the same type as `番号 は 数 で 名前 は 文字列 の 組`. Mixing the two forms in one type is an error. The final `の組` of a type definition may be written without a space ("Field types in parentheses" in README.md, #242).
+2. **Choose the files for `kumu 文書`.** `文書 とは 「rclsuru.suru」 と 「型/」` in 組.suru lists the files and folders to document (folders with their subfolders, written to `docs/api/型/…md`), and `文書から除く` leaves files out. The scaffold's `index.md` uses `api/**`, and `.readthedocs.yaml` notes that its kumu version is bumped together with CI (README "Choosing the files for kumu 文書", #235).
 
 ### Fixed
 
