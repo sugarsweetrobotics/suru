@@ -134,6 +134,13 @@ func TestCStructDecl(t *testing.T) {
 	if _, err := CompileSource("「標準」 を 読み込んで 使う\n"+ok, ".", "x.suru", true); err != nil {
 		t.Errorf("C構造体を組として使えません: %v", err)
 	}
+	// かっこでフィールドの型を書く形(#242)も同じ
+	paren := "「標準」 を 読み込んで 使う\n時間 とは 秒 （符号付き64） と ナノ秒 （符号なし32） の C構造体\n" +
+		"品質 とは 期限 （時間） と 率 （単精度） と 先 （番地） の C構造体\n" +
+		"（（1 と 2 の 時間） と 0.5 と （0 を 番地にする） の 品質） の 率 + 1\n"
+	if _, err := CompileSource(paren, ".", "x.suru", true); err != nil {
+		t.Errorf("かっこで型を書いた C構造体を使えません: %v", err)
+	}
 	ctx := NewParseContext(".")
 	if err := try(func() {
 		ParseProgram("時間とは、秒は符号付き64でナノ秒は符号なし32のC構造体。\n", ctx)
