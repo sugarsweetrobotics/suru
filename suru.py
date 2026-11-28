@@ -3309,7 +3309,7 @@ def try_parse_typedef(node: Node) -> TypeDef | None:
     towa = find_top_level(tokens, KW_TOWA)
     if towa != 1 or tokens[0].kind != "WORD":
         return None
-    body = tokens[2:]
+    body = _split_trailing_kumi(tokens[2:])
     has_ka = find_top_level(body, KW_KA) is not None
     if not body or not (has_ka or is_kw(body[-1], KW_KUMI)):
         return None
@@ -3317,7 +3317,24 @@ def try_parse_typedef(node: Node) -> TypeDef | None:
     line = tokens[0].line
     ctors = []
     typed: bool | None = None  # フィールドの型を書いたか(まだフィールドがなければ None)
+    style: str | None = None  # 型の書き方(「は」か「かっこ」)。1つの型の中ではそろえる
     field_types: dict = {}
+
+    def typed_field(name_tok: Token, type_toks: list[Token], fields: list[str], kind: str) -> None:
+        nonlocal style
+        if style is not None and style != kind:
+            raise SuruError(TYPED_STYLE_MIXED, name_tok.line)
+        style = kind
+        f = _check_name(name_tok)
+        if f in fields:
+            raise SuruError(f"フィールド名「{f}」が2回書かれています", name_tok.line)
+        fields.append(f)
+        prev = field_types.get(f)
+        if prev is not None and [t.value for t in prev] != [t.value for t in type_toks]:
+            raise SuruError(f"フィールド「{f}」の型が形ごとに違います(同じ名前のフィールドは同じ型にしてください)",
+                            name_tok.line)
+        field_types[f] = type_toks
+
     for alt in split_top_level(body, KW_KA):
         if not alt:
             raise SuruError("「か」の前後に形を書いてください", line)
@@ -3343,17 +3360,20 @@ def try_parse_typedef(node: Node) -> TypeDef | None:
                 raise SuruError("フィールドの型は、型のすべてのフィールドに書くか、どれにも書かないかにしてください", last.line)
             for part in _split_typed_fields(alt[:-2], last.line):
                 if len(part) < 3 or not is_kw(part[1], KW_WA):
+                    if any(t.kind == "LP" for t in part):
+                        raise SuruError(TYPED_STYLE_MIXED, part[0].line)
                     raise SuruError("型を書くフィールドは「番号 は 数 で 名前 は 文字列 の 組」のように"
                                     "「フィールド名 は 型」を「で」で区切って書いてください", part[0].line if part else last.line)
-                f = _check_name(part[0])
-                if f in fields:
-                    raise SuruError(f"フィールド名「{f}」が2回書かれています", part[0].line)
-                fields.append(f)
-                prev = field_types.get(f)
-                if prev is not None and [t.value for t in prev] != [t.value for t in part[2:]]:
-                    raise SuruError(f"フィールド「{f}」の型が形ごとに違います(同じ名前のフィールドは同じ型にしてください)",
-                                    part[0].line)
-                field_types[f] = part[2:]
+                typed_field(part[0], part[2:], fields, "は")
+            ctors.append((cname, fields))
+            continue
+        if any(t.kind == "LP" for t in alt[:-2]):
+            # 「番号 （数） と 名前 （文字列） の 品」: フィールド名の後ろのかっこに型を書く
+            typed = True if typed is None else typed
+            if not typed:
+                raise SuruError("フィールドの型は、型のすべてのフィールドに書くか、どれにも書かないかにしてください", last.line)
+            for name_tok, type_toks in _split_paren_fields(alt[:-2], last.line):
+                typed_field(name_tok, type_toks, fields, "かっこ")
             ctors.append((cname, fields))
             continue
         if alt[:-2]:
@@ -3373,6 +3393,54 @@ def try_parse_typedef(node: Node) -> TypeDef | None:
             raise SuruError("「と」の後にフィールド名が必要です", last.line)
         ctors.append((cname, fields))
     return TypeDef(name, ctors, line, field_types if typed else None)
+
+
+TYPED_STYLE_MIXED = ("フィールドの型は、1つの型の中では「番号 は 数 で 名前 は 文字列 の 組」か"
+                     "「番号 （数） と 名前 （文字列） の 組」のどちらかの書き方にそろえてください")
+
+
+def _split_trailing_kumi(body: list[Token]) -> list[Token]:
+    """空白の書き方で詰めて書いた最後の「の組」を「の 組」に分ける(「番号 と 名前 の組」)"""
+    if len(body) >= 2 and body[-1].kind == "WORD" and body[-1].value == KW_NO + KW_KUMI and not body[-1].quoted \
+            and not body[-1].qualified and body[-2].kind in ("WORD", "RP"):
+        last = body[-1]
+        return body[:-1] + [Token("KW", KW_NO, last.line), Token("KW", KW_KUMI, last.line)]
+    return body
+
+
+def _split_paren_fields(tokens: list[Token], line: int) -> list[tuple[Token, list[Token]]]:
+    """「番号 （数） と 名前 （文字列）」を、フィールド名とかっこの中の型の字句に分ける"""
+    out: list[tuple[Token, list[Token]]] = []
+    i = 0
+    while True:
+        if i >= len(tokens):
+            raise SuruError("「と」の後にフィールド名が必要です", line)
+        name_tok = tokens[i]
+        if name_tok.kind == "LP":
+            raise SuruError("かっこの前にフィールド名を書いてください(「番号 （数）」)", name_tok.line)
+        if is_kw(name_tok, KW_WA):
+            raise SuruError(TYPED_STYLE_MIXED, name_tok.line)
+        if i + 1 >= len(tokens) or tokens[i + 1].kind != "LP":
+            if i + 1 < len(tokens) and is_kw(tokens[i + 1], KW_WA):
+                raise SuruError(TYPED_STYLE_MIXED, tokens[i + 1].line)
+            if i + 1 < len(tokens) and not is_kw(tokens[i + 1], KW_TO):
+                raise SuruError("フィールド名は「と」で区切ってください", tokens[i + 1].line)
+            raise SuruError("フィールドの型は、型のすべてのフィールドに書くか、どれにも書かないかにしてください",
+                            name_tok.line)
+        j = _matching(tokens, i + 1)
+        inner = tokens[i + 2 : j]
+        if not inner:
+            raise SuruError(f"「{name_tok.value}」のかっこの中に型を書いてください", tokens[i + 1].line)
+        # 関数の型はかっこごと(「は」の書き方の「処理 は （数 を 受け取って 数 を 返すこと）」と同じ字句)
+        out.append((name_tok, tokens[i + 1 : j + 1] if find_top_level(inner, KW_RETURN) is not None else inner))
+        i = j + 1
+        if i == len(tokens):
+            return out
+        if is_kw(tokens[i], KW_WA) or is_part(tokens[i], "で"):
+            raise SuruError(TYPED_STYLE_MIXED, tokens[i].line)
+        if not is_kw(tokens[i], KW_TO):
+            raise SuruError("フィールドは「と」で区切ってください(「番号 （数） と 名前 （文字列）」)", tokens[i].line)
+        i += 1
 
 
 def _split_typed_fields(tokens: list[Token], line: int) -> list[list[Token]]:

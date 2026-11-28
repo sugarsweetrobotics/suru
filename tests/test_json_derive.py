@@ -94,3 +94,36 @@ def test_Go版も同じIR(tmp_path):
     exe = tmp_path / "suruc"
     subprocess.run(["go", "build", "-o", str(exe), "./cmd/suruc"], cwd=ROOT, check=True)
     compare(_write(tmp_path, PROGRAM), exe, tmp_path)
+
+
+# かっこで型を後ろに書いた組からも同じものを導出する(#242)
+PAREN_PROGRAM = PROGRAM.replace(
+    "会員 とは 番号 は 数 で 名前 は 文字列 で 好物 は 文字列 の リスト で 会費済 は 真偽 の 組",
+    "会員 とは 番号 （数） と 名前 （文字列） と 好物 （文字列 の リスト） と 会費済 （真偽） の 組",
+).replace(
+    "図形 とは 半径 は 数 の 円 か 幅 は 数 で 高 は 数 の 長方形 か 点",
+    "図形 とは 半径 （数） の 円 か 幅 （数） と 高 （数） の 長方形 か 点",
+).replace(
+    "名簿 とは 題 は 文字列 で 人 は 会員 の リスト で 形 は 図形 で 余り は JSON の 組",
+    "名簿 とは 題 (文字列) と 人 (会員 の リスト) と 形 (図形) と 余り (JSON) の組",
+)
+
+
+def test_かっこで型を書いた組からも導出する(tmp_path):
+    assert PAREN_PROGRAM.count("（数）") == 4
+    r = _suru(str(_write(tmp_path, PAREN_PROGRAM)))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == OUT
+    path = _write(tmp_path, PAREN_PROGRAM)
+    subprocess.run([sys.executable, str(ROOT / "suru_compile.py"), str(path), "-o", str(tmp_path / "py")], check=True)
+    out = subprocess.run([str(tmp_path / "py")], capture_output=True, text=True)
+    assert out.stdout.splitlines() == OUT
+
+
+@pytest.mark.skipif(shutil.which("go") is None or shutil.which("clang") is None, reason="go か clang がありません")
+def test_かっこで型を書いた組もGo版で同じIR(tmp_path):
+    from test_go_compiler import compare
+
+    exe = tmp_path / "suruc"
+    subprocess.run(["go", "build", "-o", str(exe), "./cmd/suruc"], cwd=ROOT, check=True)
+    compare(_write(tmp_path, PAREN_PROGRAM), exe, tmp_path)
