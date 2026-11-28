@@ -4,6 +4,16 @@
 
 Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
 
+## 0.13.0
+
+### New
+
+1. **Choose the files for `kumu 文書`.** `文書 とは 「rclsuru.suru」 と 「型/」` in 組.suru lists the files and folders to document (folders with their subfolders, written to `docs/api/型/…md`), and `文書から除く` leaves files out. The scaffold's `index.md` uses `api/**`, and `.readthedocs.yaml` notes that its kumu version is bumped together with CI (README "Choosing the files for kumu 文書", #235).
+
+### Fixed
+
+1. **Record field types accept `X を 返す 動作`.** `書込 は （数 を 受け取って 数 を 返す 入出力動作 を 返すこと） の 組` and `読込 は 数 を 返す 動作` are read as `数 の 動作`, the same as in a type declaration, in the interpreter, `suruc`, `lib/構文.suru` and suru-ls (#206).
+
 ## 0.12.0
 
 ### New

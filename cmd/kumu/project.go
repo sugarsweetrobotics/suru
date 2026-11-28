@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -36,6 +37,8 @@ type Project struct {
 	LinkFlags []string // リンク引数: リンクするときの引数(依存のものも全部使う)
 	Kind      string   // 種類: 「実行ファイル」(既定)か「共有ライブラリ」(他の言語から呼ぶ、#208)
 	LibName   string   // ライブラリ名: 共有ライブラリの名前(lib名前.so と 名前.h。なければ名前)
+	Docs      []string // 文書: kumu 文書 で文書にするファイルとフォルダ(「型/」)。空なら一番上の .suru(#235)
+	DocsSkip  []string // 文書から除く: kumu 文書 で文書にしないファイルとフォルダ
 }
 
 // 組.suru の「種類」
@@ -91,7 +94,7 @@ func (p *Project) EntryPath() string {
 }
 
 // configKeys は 組.suru に書ける項目(書く順)
-var configKeys = []string{"名前", "版", "入口", "依存", "外部依存", "導入案内", "対象", "Cソース", "C引数", "リンク引数", "種類", "ライブラリ名"}
+var configKeys = []string{"名前", "版", "入口", "依存", "外部依存", "導入案内", "対象", "Cソース", "C引数", "リンク引数", "種類", "ライブラリ名", "文書", "文書から除く"}
 
 // ParseConfig は 組.suru の中身を読む。する の定義「名前 とは 「…」」だけを書ける
 func ParseConfig(source, root string) (*Project, error) {
@@ -121,6 +124,18 @@ func ParseConfig(source, root string) (*Project, error) {
 				return nil, configError(&compiler.SuruError{Message: err.Error(), Line: pos}, source)
 			}
 			p.Deps, p.depLine = deps, pos.Line
+			continue
+		}
+		if d.Name == "文書" || d.Name == "文書から除く" {
+			items, err := docPaths(d)
+			if err != nil {
+				return nil, configError(&compiler.SuruError{Message: err.Error(), Line: pos}, source)
+			}
+			if d.Name == "文書" {
+				p.Docs = items
+			} else {
+				p.DocsSkip = items
+			}
 			continue
 		}
 		if d.Name == "外部依存" || d.Name == "導入案内" || d.Name == "Cソース" || d.Name == "C引数" || d.Name == "リンク引数" {
@@ -466,6 +481,25 @@ func stringList(d *compiler.Define) ([]string, error) {
 		out = append(out, s.Value)
 	}
 	return out, nil
+}
+
+// docPaths は「文書」「文書から除く」の項目を読む。ファイル(「rclsuru.suru」)かフォルダ(「型/」)で、
+// プロジェクトのフォルダの中の道を / で書く
+func docPaths(d *compiler.Define) ([]string, error) {
+	items, err := stringList(d)
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range items {
+		c := path.Clean(it)
+		if it == "" || strings.Contains(it, "\\") || path.IsAbs(it) || filepath.IsAbs(it) || c == ".." || strings.HasPrefix(c, "../") {
+			return nil, fmt.Errorf("%s「%s」には、プロジェクトのフォルダの中のファイルかフォルダを / で書きます(「型/」のように)", d.Name, it)
+		}
+		if !strings.HasSuffix(it, "/") && !strings.HasSuffix(it, compiler.SourceSuffix) {
+			return nil, fmt.Errorf("%s「%s」には、.suru のファイル(「%s.suru」)か、/ で終わるフォルダ(「%s/」)を書きます", d.Name, it, it, it)
+		}
+	}
+	return items, nil
 }
 
 // ParseSysDep は外部依存の「名前」か「名前@最低の版」を読む

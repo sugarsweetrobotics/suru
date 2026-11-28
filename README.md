@@ -1660,6 +1660,19 @@ pip install -r docs/requirements.txt && sphinx-build docs docs/_build   # 手元
 3. **Read the Docs only needs the repository connected.** On every build, `.readthedocs.yaml` downloads the Linux kumu of the same version as the one that wrote the files from GitHub Releases, runs `kumu 文書 --出力 docs/api`, then builds the HTML with Sphinx. The generated pages are not committed. Import the GitHub repository on readthedocs.org and it is published on every push and tag.
 4. **The folder is named docs.** Instead of a Japanese folder name like `試験/`, it uses `docs/`, which Read the Docs and Sphinx tools expect.
 
+### Choosing the files for kumu 文書
+
+```suru
+名前 とは 「rclsuru」
+文書 とは 「rclsuru.suru」 と 「CDR.suru」 と 「型/」
+文書から除く とは 「型/下書き.suru」
+```
+
+1. **`文書` in 組.suru lists what `kumu 文書` documents.** Write `.suru` files and folders ending in `/`, as paths inside the project joined with `と`. A folder is read with its subfolders, and each folder becomes a folder of pages: `型/geometry_msgs.suru` is written to `docs/api/型/geometry_msgs.md`. Without `文書`, the top-level files are documented as before (#235).
+2. **`文書から除く` leaves files out.** It takes the same kind of list and removes those files, and every file under a folder ending in `/`, from what would be documented. It also works without `文書`, for example to hide a tool script at the top of the project (`文書から除く とは 「生成器.suru」`).
+3. **A missing file is an error.** A path that doesn't exist, a folder written without `/`, a file written with `/`, or a path outside the project stops `kumu 文書` with an error.
+4. **The scaffold's index lists subfolders.** `index.md` written by `kumu 文書 --雛形` uses `api/**`, so pages in `docs/api/型/` are in the table of contents. An `index.md` written by an older kumu has `api/*`; change it to `api/**` when you document folders. `.readthedocs.yaml` now has a note that the kumu version in its URL is bumped together with CI.
+
 ### Web app skeleton (kumu 新規 --対象 web)
 
 1. **`kumu 新規 店 --対象 web` creates a web app for 屋台 ([suru-lang/web](https://github.com/suru-lang/web)).** `組.suru` depends on `github.com/suru-lang/web@0.1.0`. `店.suru` has the routes (【道】) and handlers, and `本体.suru` reads it and opens the server on port 8080. The pages are in `画面/` (a layout and a top page), static files are in `公開/`, and `試験/道.suru` tests the routes without starting a server. `kumu 実行` runs it, `kumu 試験` runs the tests, and `kumu 作る` makes the binary `出力/店`. The binary reads `画面/` and `公開/` from the folder it runs in, so ship those folders with it. `kumu 初期化 --対象 web` writes the same files into the current folder and keeps files that already exist.
