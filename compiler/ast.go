@@ -184,6 +184,8 @@ type TypeDef struct {
 	Line  Pos
 	// FieldTypes は「番号 は 数 で 名前 は 文字列 の 組」と型を書いたときのフィールドの型の字句(書いた順)。書かなければ nil
 	FieldTypes []FieldTypeToks
+	// CStruct は「… の C構造体」(フィールドの型が C の型、#241)
+	CStruct bool
 }
 
 // FieldTypeToks はフィールドの名前と、その型の字句
@@ -336,6 +338,8 @@ type Extern struct {
 	Pointer    string // 「外部の（f）」なら、関数の番地を持つ引数の名前(C には渡さない)
 	// 「外部の「f」（a と 0 と b）」なら、C に渡す引数の並び(なければ定義の引数の順)
 	CArgs []ExternArg
+	// Structs は値で渡す・返す C構造体(引数か値の型が「struct:時間」)の並び。入れ子も入れる(#241)
+	Structs map[string][]CStructField
 }
 
 // ExternArg は C に渡す引数の1つ: 定義の引数(Name、attachExterns が Param に番号を入れる)か、整数の定数(int64_t)

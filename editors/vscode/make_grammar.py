@@ -166,7 +166,7 @@ def build() -> dict:
                 {"name": "keyword.control.suru", "match": f"{not_before}以下[ 　]*は[ 　]*外部[ 　]*に[ 　]*出す[ 　]*関数"},
                 {"name": "keyword.control.suru", "match": f"{not_before}以下[ 　]*の[ 　]*(?:入出力)?手順"},
                 {"name": "keyword.control.suru", "match": word([suru.TEJUN, suru.TEJUN_IO, suru.KW_IJOU])},
-                {"name": "storage.type.suru", "match": word(sorted(suru.KANJI_KEYWORDS - {suru.KW_IJOU}))},
+                {"name": "storage.type.suru", "match": word(sorted(suru.KANJI_KEYWORDS - {suru.KW_IJOU}) + [suru.C_STRUCT])},
                 {"name": "constant.language.suru", "match": word(["真", "偽", suru.KW_EMPTY])},
                 {"name": "variable.language.suru", "match": word(kanji_props + [suru.RESULT])},
             ]

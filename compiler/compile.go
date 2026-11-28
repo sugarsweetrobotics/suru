@@ -487,6 +487,7 @@ type Compiler struct {
 	ffiDecls    map[string]string // 外部の関数の名前 → declare の行
 	ffiWhere    map[string]Pos    // 外部の関数の名前 → 初めに宣言した位置
 	linkLibs    []string          // リンクするライブラリ(ExternLib.Path)
+	cshim       cShim             // C構造体を値で渡す外部の関数の C の中継(#241)
 	exports     []string          // 外部に出す関数の「C の名前 型の字 する の名前」(#208)
 }
 
@@ -1060,6 +1061,9 @@ func (c *Compiler) genFunction(name string, params []Param, body fnBody, sc *sco
 
 // externBody は外部の関数の本体: 引数を C の値にして呼び、値を戻す。値が動作なら、行ったときに呼ぶ動作を返す
 func (c *Compiler) externBody(name string, params []Param, ext *Extern) genBody {
+	if len(ext.Structs) > 0 {
+		return c.cStructExtern(name, params, ext)
+	}
 	for _, lib := range ext.Libs {
 		found := false
 		for _, l := range c.linkLibs {
@@ -1773,6 +1777,7 @@ func (c *Compiler) compile(program []Node, path string) string {
 	for _, sym := range c.exports {
 		b.WriteString(ExportMark + sym + "\n")
 	}
+	b.WriteString(c.cshim.marks())
 	b.WriteString(decls)
 	syms := make([]string, 0, len(c.ffiDecls))
 	for k := range c.ffiDecls {

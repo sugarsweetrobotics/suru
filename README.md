@@ -1284,6 +1284,19 @@ x とは p から 0 で 品質形 を 構造体読取した 結果     # inside 
 6. **The type is `時間 の C形`.** It can be written in type declarations too, as in `時間 の C形 を 大きさ取得する は 数`. Passing a record of another shape to `C直列化する` is caught by the type checker. C形 values print as `<C形 時間>` and can't be serialized ("Value serialization and セマフォ内実行する").
 7. **The interpreter and both the Python and Go compilers behave the same.** The tests check that results match the sizeof and offsetof decided by the C compiler.
 
+### C structs as types (C構造体)
+
+```suru
+時間 とは 秒 は 符号付き64 で ナノ秒 は 符号なし32 の C構造体
+品質 とは 深さ は 符号なし64 で 期限 は 時間 で 率 は 単精度 で 印 は 真偽 の C構造体
+（（1 と 2 の 時間） の 秒）
+```
+
+1. **`… の C構造体` declares a record whose field types are C types.** Write it like a record with field types, closed with `C構造体` instead of `組`. A field type is `符号付き8` to `符号付き64`, `符号なし8` to `符号なし64`, `単精度`, `小数`, `番地`, `真偽`, or another C構造体 type (a nested struct). The parentheses form (`時間 とは 秒 （符号付き64） と ナノ秒 （符号なし32） の C構造体`) works too. Every field needs a type, and a C構造体 has one form (no `か`). A struct that contains itself, directly or through other structs, is an error (point to it with a `番地`) (#241).
+2. **Inside Suru a value is an ordinary record.** Integer fields are `数`, `単精度` and `小数` are `小数`, and `番地` and `真偽` are themselves. Values are built and taken apart like any record (`（1 と 2 の 時間）`, `t の 秒`, `秒 は 1 で ナノ秒 は 2 の 時間`), and the type checker checks the field types.
+3. **External functions take and return them by value.** A C構造体 type can be a parameter or the value of an external function (also `外部の（f）`), as in `時間 を 時間 に 時間加算する は 「add_time」 で 時間 を 返します` for C's `T add_time(T a, T b)`. The layout follows the same C rules as "Shapes of C structs (C形)", and the calling convention of the OS and CPU is applied. A value that doesn't fit its C type is an error naming the field (「外部の関数「一処理する」の「を」の「a」: 「256」は符号なし8に入りません…」). The interpreter uses `ctypes`. The compilers (Python and Go) don't lay out the calling convention in the IR: for each such function they write a small C shim (`suru_cs_f1` and so on, carried in the IR's `; suru-cshim: ` lines) that clang compiles together with the program, so clang applies the right convention for the target (#241).
+4. **Where it works.** The interpreter and the compilers for Linux, macOS and Windows (macOS and Windows are checked in CI too). Small Suru for microcontrollers and external functions called on the main thread (`主スレッドで`) don't support it yet, and report an error at compile time (#241).
+
 ### Callbacks from C
 
 C functions that take function addresses (the comparison function of `qsort`, event watchers, ROS 2 rcl's "call this when a new message arrives" functions and so on) can now be used. There are two forms, called in different ways.

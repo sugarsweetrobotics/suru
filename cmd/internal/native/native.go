@@ -89,6 +89,25 @@ func runtimeObject(cc, prefix string, flags []string) (string, error) {
 	return obj, os.Rename(tmp, obj)
 }
 
+// cShimFile は IR に C構造体を値で渡す外部の関数の C の中継があれば(#241)、一時フォルダに書き、clang に渡す道と、
+// ビルドの後で消す関数を返す
+func cShimFile(ir []byte) ([]string, func(), error) {
+	src := compiler.CShimSource(string(ir))
+	if src == "" {
+		return nil, func() {}, nil
+	}
+	dir, err := os.MkdirTemp("", "suru-cshim-")
+	if err != nil {
+		return nil, nil, err
+	}
+	path := filepath.Join(dir, "cshim.c")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		os.RemoveAll(dir)
+		return nil, nil, err
+	}
+	return []string{path}, func() { os.RemoveAll(dir) }, nil
+}
+
 // Build は llPath の LLVM IR を、実行時ライブラリとつないで out のバイナリにする
 func Build(llPath, out, opt string) error { return BuildWith(llPath, out, opt, nil) }
 
@@ -113,7 +132,12 @@ func BuildWith(llPath, out, opt string, extra []string) error {
 		linkOut, done = asciiTemp(exe)
 	}
 	args := append(TargetArgs(), opt, "-w", llPath, rt, "-o", linkOut)
-	args = append(append(args, extra...), compiler.LinkFlags(string(ir))...)
+	cs, clean, err := cShimFile(ir)
+	if err != nil {
+		return err
+	}
+	defer clean()
+	args = append(append(append(args, cs...), extra...), compiler.LinkFlags(string(ir))...)
 	if compiler.TargetWindows() {
 		if windowsLLD() {
 			// lld は日本語の道も読み書きできる(GNU ld は Windows の ANSI の道しか扱えない)
@@ -218,6 +242,11 @@ func BuildSharedWith(llPath, out, opt string, extra []string) (string, error) {
 		return "", err
 	}
 	args := append(TargetArgs(), opt, "-w", "-fPIC", llPath, rt, shim, "-o", lib)
+	cs, clean, err := cShimFile(ir)
+	if err != nil {
+		return "", err
+	}
+	defer clean()
 	linked := func() error { return nil }
 	if compiler.TargetWindows() {
 		// Windows(段階5): 出す名前は .def に並べる。呼ぶ側のリンク用に import ライブラリ(lib名前.dll.a)も作る。
@@ -260,7 +289,7 @@ func BuildSharedWith(llPath, out, opt string, extra []string) (string, error) {
 		}
 		args = append(args, "-shared", "-Wl,--version-script="+script)
 	}
-	args = append(append(args, extra...), compiler.LinkFlags(string(ir))...)
+	args = append(append(append(args, cs...), extra...), compiler.LinkFlags(string(ir))...)
 	if compiler.TargetWindows() {
 		// pthread(winpthreads)は中に入れて、libwinpthread-1.dll なしで動くようにする(実行ファイルと同じ)
 		args = append(args, "-lm", "-Wl,-Bstatic", "-lpthread", "-Wl,-Bdynamic", "-lws2_32")

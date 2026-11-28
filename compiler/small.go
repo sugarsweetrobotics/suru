@@ -911,6 +911,9 @@ func (c *small) callExtern(f *sfn, vals []sval, line Pos, g *sgen) sval {
 	if ext.Pointer != "" {
 		unsupported(line, "関数の番地を使う外部の関数")
 	}
+	if len(ext.Structs) > 0 {
+		unsupported(line, "C構造体を値で渡す・返す外部の関数(#241)")
+	}
 	var types, args []string
 	add := func(k sk, v string) {
 		types = append(types, k.ir())

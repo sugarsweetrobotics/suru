@@ -151,6 +151,70 @@ type ParseContext struct {
 	Path string
 	// FieldTypes はフィールドの型を書いた型 → フィールドの型(「番号 は 数 で … の 組」)
 	FieldTypes map[string][]FieldTypeDecl
+	// CStructs は C構造体の型 → フィールドと C の型(スカラーの名前か、別の C構造体の型の名前、#241)
+	CStructs map[string][]CStructField
+}
+
+// CStructField は C構造体のフィールドの名前と C の型
+type CStructField struct {
+	Name  string
+	CType string
+}
+
+// CStruct は「時間 とは 秒 は 符号付き64 で ナノ秒 は 符号付き64 の C構造体」の「C構造体」(#241)
+const CStruct = "C構造体"
+
+// CStructValueTypes は C構造体のフィールドに書ける C の型 → する の中の値の型
+var CStructValueTypes = map[string]string{
+	"符号付き8": "数", "符号付き16": "数", "符号付き32": "数", "符号付き64": "数",
+	"符号なし8": "数", "符号なし16": "数", "符号なし32": "数", "符号なし64": "数",
+	"単精度": "小数", "小数": "小数", "番地": "番地", "真偽": "真偽",
+}
+
+const cStructTypesText = "符号付き8・16・32・64、符号なし8・16・32・64、単精度・小数・番地・真偽か、別の C構造体の型"
+
+func isCStructWord(t *Token) bool { return t.Kind == "WORD" && t.S == CStruct && !t.Quoted }
+
+// cFieldType は C構造体のフィールドの型の字句を、C の型の名前(スカラーか C構造体の型)にする
+func (c *ParseContext) cFieldType(td *TypeDef, field string, toks []*Token, tds []*TypeDef) string {
+	if len(toks) == 1 && toks[0].Kind == "WORD" {
+		name := toks[0].S
+		if _, ok := CStructValueTypes[name]; ok {
+			return name
+		}
+		if _, ok := c.CStructs[name]; ok {
+			return name
+		}
+		for _, t := range tds {
+			if t.CStruct && t.Name == name {
+				return name
+			}
+		}
+	}
+	line := td.Line
+	if len(toks) > 0 {
+		line = toks[0].Line
+	}
+	what := ""
+	if len(toks) == 1 && toks[0].Kind == "WORD" {
+		what = "「" + toks[0].S + "」"
+	}
+	raise(line, "C構造体「"+td.Name+"」のフィールド「"+field+"」の型"+what+"は C の型ではありません(書けるのは "+cStructTypesText+")")
+	return ""
+}
+
+// checkCStructCycle は C構造体が自分自身を(入れ子を通して)値で持つとエラーにする(大きさが決まらない)
+func checkCStructCycle(name string, cs map[string][]CStructField, path []string, line Pos) {
+	for _, p := range path {
+		if p == name {
+			raise(line, "C構造体「"+path[0]+"」が自分自身をフィールドに持っています(番地 で指してください)")
+		}
+	}
+	for _, f := range cs[name] {
+		if _, ok := cs[f.CType]; ok {
+			checkCStructCycle(f.CType, cs, append(append([]string{}, path...), name), line)
+		}
+	}
 }
 
 // resolveFieldTypes はフィールドの型を書いた型の、型の字句を読む(型の定義をすべて集めてから。後ろで定義する型も書ける)
@@ -162,12 +226,47 @@ func (c *ParseContext) resolveFieldTypes(tds []*TypeDef) {
 		if c.FieldTypes == nil {
 			c.FieldTypes = map[string][]FieldTypeDecl{}
 		}
+		if td.CStruct {
+			if c.CStructs == nil {
+				c.CStructs = map[string][]CStructField{}
+			}
+			var fs []CStructField
+			for _, ft := range td.FieldTypes {
+				fs = append(fs, CStructField{ft.Name, c.cFieldType(td, ft.Name, ft.Toks, tds)})
+			}
+			c.CStructs[td.Name] = fs
+			continue
+		}
 		var out []FieldTypeDecl
 		for _, ft := range td.FieldTypes {
 			out = append(out, FieldTypeDecl{ft.Name, parseTypeAll(ft.Toks, td.Line)})
 		}
 		c.FieldTypes[td.Name] = out
 	}
+	for _, td := range tds {
+		if !td.CStruct {
+			continue
+		}
+		checkCStructCycle(td.Name, c.CStructs, nil, td.Line)
+		// する の中ではふつうの組: 整数は 数、単精度・小数 は 小数(#241)
+		var out []FieldTypeDecl
+		for _, f := range c.CStructs[td.Name] {
+			t := f.CType
+			if v, ok := CStructValueTypes[t]; ok {
+				t = v
+			}
+			out = append(out, FieldTypeDecl{f.Name, &TypeName{t, nil}})
+		}
+		c.FieldTypes[td.Name] = out
+	}
+}
+
+func copyCStructs(m map[string][]CStructField) map[string][]CStructField {
+	out := map[string][]CStructField{}
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }
 
 func copyFieldTypes(m map[string][]FieldTypeDecl) map[string][]FieldTypeDecl {
@@ -2512,11 +2611,15 @@ func tryParseTypedef(node *LNode) *TypeDef {
 	}
 	body := splitTrailingKumi(tokens[2:])
 	hasKa := findTopLevel(body, KwKa) >= 0
-	if len(body) == 0 || !(hasKa || isKw(body[len(body)-1], KwKumi)) {
+	isC := len(body) > 0 && isCStructWord(body[len(body)-1])
+	if len(body) == 0 || !(hasKa || isKw(body[len(body)-1], KwKumi) || isC) {
 		return nil
 	}
 	name := checkName(tokens[0])
 	line := tokens[0].Line
+	if isC && hasKa {
+		raise(body[len(body)-1].Line, "「C構造体」は形が1つのときだけ使えます(「か」で並べられません)")
+	}
 	var ctors []Ctor
 	typed := 0 // フィールドの型を書いたか(0: まだフィールドがない、1: 書いた、-1: 書いていない)
 	var fieldTypes []FieldTypeToks
@@ -2558,7 +2661,7 @@ func tryParseTypedef(node *LNode) *TypeDef {
 		}
 		last := alt[len(alt)-1]
 		var cname string
-		if isKw(last, KwKumi) {
+		if isKw(last, KwKumi) || (isC && isCStructWord(last)) {
 			if hasKa {
 				raise(last.Line, "「組」は形が1つのときだけ使えます(「か」で並べるときは形に名前を付けてください)")
 			}
@@ -2626,7 +2729,10 @@ func tryParseTypedef(node *LNode) *TypeDef {
 		}
 		ctors = append(ctors, Ctor{cname, fields})
 	}
-	td := &TypeDef{Name: name, Ctors: ctors, Line: line}
+	if isC && typed <= 0 {
+		raise(line, "C構造体のフィールドには C の型を書いてください(「時間 とは 秒 は 符号付き64 で ナノ秒 は 符号付き64 の C構造体」)")
+	}
+	td := &TypeDef{Name: name, Ctors: ctors, Line: line, CStruct: isC}
 	if typed > 0 {
 		td.FieldTypes = fieldTypes
 	}
@@ -3268,7 +3374,23 @@ func externLibTarget(node *LNode, ctx *ParseContext) *ExternLib {
 	return &ExternLib{name, path, tokens[0].Line, mainThread}
 }
 
-func ffiType(te Node, sig *TypeSig, what string) string {
+// CStructFFI は外部の関数の引数・値の、値で渡す C構造体(「struct:時間」、#241)
+const CStructFFI = "struct:"
+
+// collectCStruct は C構造体 name と、その中の入れ子の C構造体の並びを out に入れる
+func collectCStruct(name string, out map[string][]CStructField) {
+	if _, ok := out[name]; ok {
+		return
+	}
+	out[name] = curCtx.CStructs[name]
+	for _, f := range out[name] {
+		if _, ok := curCtx.CStructs[f.CType]; ok {
+			collectCStruct(f.CType, out)
+		}
+	}
+}
+
+func ffiType(te Node, sig *TypeSig, what string, ext *Extern) string {
 	skip := "void"
 	if what == "値" {
 		skip = "bytes"
@@ -3283,8 +3405,15 @@ func ffiType(te Node, sig *TypeSig, what string) string {
 		if t, ok := ffiTypes[tn.Name]; ok && t != skip {
 			return t
 		}
+		if _, ok := curCtx.CStructs[tn.Name]; ok && ext != nil {
+			if ext.Structs == nil {
+				ext.Structs = map[string][]CStructField{}
+			}
+			collectCStruct(tn.Name, ext.Structs)
+			return CStructFFI + tn.Name
+		}
 	}
-	raise(sig.Line, "外部の関数「"+sig.Name+"」の"+what+"には "+strings.Join(names, "・")+" のどれかの型を書いてください")
+	raise(sig.Line, "外部の関数「"+sig.Name+"」の"+what+"には "+strings.Join(names, "・")+" のどれかの型か、C構造体の型を書いてください")
 	return ""
 }
 
@@ -3337,7 +3466,7 @@ func attachExterns(statements []Node) {
 		}
 		ext.Params = nil
 		for _, p := range d.Params {
-			ext.Params = append(ext.Params, ffiType(types[p.Part], sig, "「"+p.Part+"」"))
+			ext.Params = append(ext.Params, ffiType(types[p.Part], sig, "「"+p.Part+"」", ext))
 		}
 		if ext.CArgs != nil {
 			used := map[int]bool{}
@@ -3368,7 +3497,7 @@ func attachExterns(statements []Node) {
 			ext.Action = true
 			result = tn.Args[0]
 		}
-		ext.Result = ffiType(result, sig, "値")
+		ext.Result = ffiType(result, sig, "値", ext)
 		ext.Libs = libs
 		ext.MainThread = mainThread
 		if ext.Pointer != "" {
@@ -4197,7 +4326,7 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 	if ctx.Order != nil {
 		*ctx.Order = append(*ctx.Order, path)
 	}
-	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Path: path, Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude, Order: ctx.Order, FieldTypes: copyFieldTypes(ctx.FieldTypes)}
+	sub := &ParseContext{Ctors: ctx.Ctors.Copy(), Types: ctx.Types.Copy(), BaseDir: pathDir(path), Path: path, Modules: ctx.Modules, Loading: ctx.Loading, Packages: ctx.Packages, InPrelude: prelude, Order: ctx.Order, FieldTypes: copyFieldTypes(ctx.FieldTypes), CStructs: copyCStructs(ctx.CStructs)}
 	if !isLibPath(path) {
 		sub.Qualify = stem + ModuleSep
 	}
@@ -4224,6 +4353,14 @@ func loadPath(path, file string, ctx *ParseContext, line Pos, prelude bool) *Mod
 		}
 		for k, v := range sub.FieldTypes {
 			ctx.FieldTypes[k] = v
+		}
+	}
+	if len(sub.CStructs) > 0 {
+		if ctx.CStructs == nil {
+			ctx.CStructs = map[string][]CStructField{}
+		}
+		for k, v := range sub.CStructs {
+			ctx.CStructs[k] = v
 		}
 	}
 	m := &Module{stem, path, program, privateNames(program), source, sub.Packages}
