@@ -1,5 +1,7 @@
 # Read the Docs の設定(kumu 文書 --雛形 が書いたもの)
 # ビルドのたびに kumu を取ってきて、docs/api に API のページを作ってから Sphinx を動かします。
+# 下の URL の kumu の版({{kumu の版}})は、ライブラリを新しい する に上げるとき、CI の版と一緒に上げます。
+# The kumu version in the URL below ({{kumu の版}}) is bumped together with CI when the library moves to a new Suru.
 version: 2
 
 build:

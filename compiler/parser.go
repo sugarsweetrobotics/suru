@@ -2532,6 +2532,8 @@ func tryParseTypedef(node *LNode) *TypeDef {
 			raise(nameTok.Line, "フィールド名「"+f+"」が2回書かれています")
 		}
 		fields = append(fields, f)
+		// 「数 を 返す 動作」は型の宣言と同じく「数 の 動作」と読む(#206)
+		typeToks = actionReturning(typeToks)
 		for _, ft := range fieldTypes {
 			if ft.Name == f {
 				if !sameTokenValues(ft.Toks, typeToks) {

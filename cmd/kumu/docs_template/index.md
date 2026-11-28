@@ -7,5 +7,5 @@
 :caption: API
 :glob:
 
-api/*
+api/**
 ```

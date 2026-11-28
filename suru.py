@@ -3329,6 +3329,8 @@ def try_parse_typedef(node: Node) -> TypeDef | None:
         if f in fields:
             raise SuruError(f"フィールド名「{f}」が2回書かれています", name_tok.line)
         fields.append(f)
+        # 「数 を 返す 動作」は型の宣言と同じく「数 の 動作」と読む(#206)
+        type_toks = action_returning(type_toks)
         prev = field_types.get(f)
         if prev is not None and [t.value for t in prev] != [t.value for t in type_toks]:
             raise SuruError(f"フィールド「{f}」の型が形ごとに違います(同じ名前のフィールドは同じ型にしてください)",

@@ -12,7 +12,7 @@ import (
 	"github.com/suru-lang/suru/compiler"
 )
 
-// 「kumu 文書」(#209): プロジェクトの一番上の .suru(組.suru を除く)の公開の名前の API ドキュメントを、
+// 「kumu 文書」(#209): プロジェクトの一番上の .suru(組.suru を除く。組.suru の「文書」「文書から除く」で選べる、#235)の公開の名前の API ドキュメントを、
 // 依存を取ってきてから作る。--雛形 は Sphinx(MyST)と Read the Docs の設定を、なければ書く
 
 //go:embed docs_template
@@ -58,7 +58,7 @@ func (k *kumu) doc(args []string) int {
 	if _, err := Resolve(p, k.stderr); err != nil {
 		return k.fail(err)
 	}
-	files, err := docFiles(p.Root)
+	files, err := docFiles(p)
 	if err != nil {
 		return k.fail(err)
 	}
@@ -71,30 +71,105 @@ func (k *kumu) doc(args []string) int {
 	} else if !filepath.IsAbs(out) {
 		out = filepath.Join(k.dir, out)
 	}
-	cmd := []string{"--出力", out}
-	if asJSON {
-		cmd = append(cmd, "--json")
+	// フォルダごとに書く(「型/geometry_msgs.suru」は 出力/型/geometry_msgs.md に)
+	var dirs []string
+	byDir := map[string][]string{}
+	for _, f := range files {
+		rel, _ := filepath.Rel(p.Root, f)
+		d := filepath.Dir(rel)
+		if _, ok := byDir[d]; !ok {
+			dirs = append(dirs, d)
+		}
+		byDir[d] = append(byDir[d], f)
 	}
-	st := compiler.DocCommand(append(cmd, files...), k.stdout, k.stderr)
+	st := 0
+	for _, d := range dirs {
+		cmd := []string{"--出力", filepath.Join(out, d)}
+		if asJSON {
+			cmd = append(cmd, "--json")
+		}
+		if s := compiler.DocCommand(append(cmd, byDir[d]...), k.stdout, k.stderr); s != 0 {
+			st = s
+		}
+	}
 	if st == 0 {
 		fmt.Fprintf(k.stderr, "%d 個のファイルの API ドキュメントを %s に書きました\n", len(files), k.rel(out))
 	}
 	return st
 }
 
-// docFiles はプロジェクトの一番上の .suru(組.suru を除く)。試験/ や 例/ の下は API ではないので見ない
-func docFiles(root string) ([]string, error) {
-	es, err := os.ReadDir(root)
-	if err != nil {
-		return nil, err
-	}
+// docFiles は文書にするファイル。組.suru に「文書」がなければプロジェクトの一番上の .suru(組.suru を除く)で、
+// 試験/ や 例/ の下は API ではないので見ない。「文書」のフォルダ(「型/」)は下のフォルダも見る。
+// 「文書から除く」に書いたファイルとフォルダの下は除く(#235)
+func docFiles(p *Project) ([]string, error) {
+	root := p.Root
 	var files []string
-	for _, e := range es {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), compiler.SourceSuffix) && e.Name() != ConfigName {
-			files = append(files, filepath.Join(root, e.Name()))
+	seen := map[string]bool{}
+	add := func(f string) {
+		if !seen[f] {
+			seen[f] = true
+			files = append(files, f)
 		}
 	}
-	return files, nil
+	if len(p.Docs) == 0 {
+		es, err := os.ReadDir(root)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range es {
+			if !e.IsDir() && strings.HasSuffix(e.Name(), compiler.SourceSuffix) && e.Name() != ConfigName {
+				add(filepath.Join(root, e.Name()))
+			}
+		}
+	}
+	for _, it := range p.Docs {
+		full := filepath.Join(root, filepath.FromSlash(it))
+		st, err := os.Stat(full)
+		if err != nil {
+			return nil, fmt.Errorf("「%s」の文書の「%s」がありません", ConfigName, it)
+		}
+		if strings.HasSuffix(it, "/") != st.IsDir() {
+			if st.IsDir() {
+				return nil, fmt.Errorf("「%s」の文書の「%s」はフォルダです(「%s/」と書きます)", ConfigName, it, it)
+			}
+			return nil, fmt.Errorf("「%s」の文書の「%s」はファイルです(終わりの / を取ります)", ConfigName, it)
+		}
+		if !st.IsDir() {
+			add(full)
+			continue
+		}
+		var found []string
+		err = filepath.WalkDir(full, func(f string, e os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if !e.IsDir() && strings.HasSuffix(e.Name(), compiler.SourceSuffix) && f != filepath.Join(root, ConfigName) {
+				found = append(found, f)
+			}
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, f := range found {
+			add(f)
+		}
+	}
+	var out []string
+	for _, f := range files {
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+		skip := false
+		for _, s := range p.DocsSkip {
+			if rel == s || (strings.HasSuffix(s, "/") && strings.HasPrefix(rel, s)) {
+				skip = true
+			}
+		}
+		if !skip {
+			out = append(out, f)
+		}
+	}
+	return out, nil
 }
 
 // docScaffold は docs/ の Sphinx の設定と .readthedocs.yaml を、まだなければ書く(あるファイルは変えない)
