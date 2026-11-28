@@ -331,6 +331,20 @@ def test_読みやすさの規則(kind, tmp_path):
 
 
 @pytest.mark.parametrize("kind", KINDS)
+def test_続けた行のかっこも数える(kind, tmp_path):
+    # #250: 字下げして次の行に続けても、かっこの深さは続けて数える。かっこの外で行が変われば無名関数は終わり
+    (tmp_path / "続き.suru").write_text(
+        "数 を 甲する は 数\nx を 甲する とは （（（（x\n  + （1））））） # 点検しない: 不要な括弧\n\n"
+        "数 の リスト を 乙する は 数 の リスト\nxs を 乙する とは 以下の手順です\n"
+        "  ys とは xs を （a を 受け取って a + 1 を 返すこと） で 写像する\n"
+        "  ys を （b を 受け取って b * 2 を 返すこと） で 写像して 結果にする\n  以上です\n\n"
+        "（1 を 甲する） を 表示する\n（（1 と 2） を 乙する） を 表示する\n", encoding="utf-8")
+    r = run_lint(kind, tmp_path, "続き.suru")
+    assert r.stdout == ("続き.suru:3:5: かっこが深い: かっこが5重になっています。"
+                        "途中の値に「ただし」(手順の中なら「x とは …」)で名前を付けると読みやすくなります\n"), r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("kind", KINDS)
 def test_字下げして続けた公開の一覧(kind, tmp_path):
     # #250: 「… は 非公開とする」の一覧は、深く字下げした次の行に続けてもよい
     (tmp_path / "名前.suru").write_text(

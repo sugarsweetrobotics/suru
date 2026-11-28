@@ -624,11 +624,19 @@ w を 長行説明にする とは
   「この行は、文字列の中身と注釈を除いても幅が 」 + （w を 文字列化する） + 「 あります(全角は2、目安は 」 + （長行上限 を 文字列化する）
     + 「 まで)。深く字下げした次の行に続けるか、途中の値に名前を付けると読みやすくなります」
 
-# 括状 is the paren depth, the depths of the open anonymous functions (innermost first), the findings, and the last lines reported for each rule.
-括状 とは 括深 と 関深群 と 括知群 と 括報行 と 関報行 の 組
+# 括状 is the paren depth, the depths of the open anonymous functions (innermost first), the findings, the last lines reported for each rule, and the line of the last token.
+括状 とは 括深 と 関深群 と 括知群 と 括報行 と 関報行 と 前行 の 組
 
 括状 に 字句 を 括弧追跡する は 括状
-s に t を 括弧追跡する とは
+s に t を 括弧追跡する とは （（s を t で 新行整理する） を t で 括弧一字追跡する）
+
+# On a new line outside parentheses, the anonymous functions of the line before are over.
+括状 を 字句 で 新行整理する は 括状
+s を t で 新行整理する とは
+  もし t の 行 != s の 前行 かつ s の 括深 = 0 ならば （関深群 は 空 で 前行 は t の 行 の s） そうでなければ （前行 は t の 行 の s）
+
+括状 を 字句 で 括弧一字追跡する は 括状
+s を t で 括弧一字追跡する とは
   もし t の 種類 = 「開き」 ならば s を t で 括弧開始する
   そうでなければ もし t の 種類 = 「閉じ」 ならば s を 括弧終了する
   そうでなければ もし t が 「受け取って」 で 予約語一致である ならば s を t で 無名関数開始する
@@ -662,10 +670,10 @@ t を 入子知らせ化する とは
   t の 行 で t の 桁 に 「無名関数の入れ子」
     より 「無名関数の中に無名関数があります。内側を「ただし」の局所の関数にして名前を付けると読みやすくなります(外の関数の引数も使えます)」 を 知らせ化する
 
-# Deep parentheses and nested anonymous functions, per logical line (tokens, so strings and comments are not counted).
-論理行 を 括弧点検する は 知らせ の リスト
-l を 括弧点検する とは
-  s とは （l の 字句列） を （括深 は 0 で 関深群 は 空 で 括知群 は 空 で 括報行 は 0 で 関報行 は 0 の 括状） から 括弧追跡すること で 畳み込みする
+# Deep parentheses and nested anonymous functions, per section (a line and the deeper lines that continue it), using tokens, so strings and comments are not counted.
+論理行 の リスト を 括弧点検する は 知らせ の リスト
+ns を 括弧点検する とは
+  s とは （ns を 節字句にする） を （括深 は 0 で 関深群 は 空 で 括知群 は 空 で 括報行 は 0 で 関報行 は 0 で 前行 は 0 の 括状） から 括弧追跡すること で 畳み込みする
   s の 括知群
 
 # --- 書き方の混在 ---
@@ -909,7 +917,7 @@ a から b へ 済 で 併合続行する とは
     + （行群 を 字下げ点検する） + （字群 を 行群 で 全角半角点検する） + （群 を 丁寧語点検する）
     + （字群 を 二重かぎ点検する） + （字群 を 字句誤り点検する） + （節群 を 外群 で （群 から （節群 を 定義名群にする） で 非公開名群にする） に 定義点検する）
     + （群 を 書き方点検する） + （群 を 外群 で 構文点検する） + （群 を 行群 で 空行点検する）
-    + （（行群 の それぞれ を 番号群 の それぞれ で 長行点検する） を 連結する） + （（群 の それぞれ を 括弧点検する） を 連結する）
+    + （（行群 の それぞれ を 番号群 の それぞれ で 長行点検する） を 連結する） + （（（群 を 節分割する） の それぞれ を 括弧点検する） を 連結する）
   （全 から （知 を 受け取って 行群 が 知 を 黙対象でない を 返すこと） で 選別する） を 知らせ整列する
 
 知らせ を 文字列 で 知らせ文にする は 文字列
