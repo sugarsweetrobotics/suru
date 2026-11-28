@@ -345,6 +345,16 @@ def test_続けた行のかっこも数える(kind, tmp_path):
 
 
 @pytest.mark.parametrize("kind", KINDS)
+def test_続けた行の終わりは文の終わりでない(kind, tmp_path):
+    # #250: 深く字下げした次の行に続けた行の終わりは、丁寧語の混在で数えない
+    (tmp_path / "丁寧.suru").write_text(
+        "数 を 甲する は 数 を 返す 入出力動作\nx を 甲する とは もし x > 0 ならば x を 結果にする\n"
+        "  そうでなければ 0 を 結果にします\n\n1 を 甲して 表示します\n", encoding="utf-8")
+    r = run_lint(kind, tmp_path, "丁寧.suru")
+    assert (r.returncode, r.stdout) == (0, ""), r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("kind", KINDS)
 def test_字下げして続けた公開の一覧(kind, tmp_path):
     # #250: 「… は 非公開とする」の一覧は、深く字下げした次の行に続けてもよい
     (tmp_path / "名前.suru").write_text(

@@ -8,7 +8,7 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 
 ### New
 
-1. **Lint rules for hard-to-read code.** `長い行` (a line wider than 200 without string contents and comments; full-width characters count 2), `かっこが深い` (5 nested parentheses) and `無名関数の入れ子` (an anonymous function inside another). The bundled `lib/` was rewritten to pass them. A `… は 非公開とする` list continued on a deeper-indented line is now read as one list by the linter (README "Linter (「点検」, written in Suru)", #250).
+1. **Lint rules for hard-to-read code.** `長い行` (a line wider than 200 without string contents and comments; full-width characters count 2), `かっこが深い` (5 nested parentheses) and `無名関数の入れ子` (an anonymous function inside another). The bundled `lib/` was rewritten to pass them. A `… は 非公開とする` list continued on a deeper-indented line is now read as one list by the linter, and a line continued on the next one doesn't count as a sentence end for `丁寧語の混在` (README "Linter (「点検」, written in Suru)", #250).
 
 ### Changed
 
