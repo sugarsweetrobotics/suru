@@ -610,6 +610,9 @@ x を y で 累乗する とは 外部の「pow」
 | 書き方の混在 (mixed styles) | One file has both punctuation-style and spaced-style sentences. Reported once, at the first sentence of the less common style |
 | 値の再定義 (value redefined) | The same value name is defined twice at the outermost level (the later definition is used). Functions are not checked, since they can be defined case by case |
 | 定義の間の空行 (blank line between definitions) | A function definition at the outermost level (its type declaration and all its definitions) is followed on the very next line by another function's definition. Reported only when one of the two is two or more lines ("Blank lines between definitions (lint)") |
+| 長い行 (long line) | A line wider than 200 (full-width characters count 2), not counting the contents of strings and comments. Continue it on a deeper-indented line (a `… は 非公開とする` list and a record's fields can be continued too) or name parts of it (#250) |
+| かっこが深い (deep parentheses) | Parentheses nested 5 deep. Name intermediate values with `ただし` (or `x とは …` in a procedure) (#250) |
+| 無名関数の入れ子 (nested anonymous function) | An anonymous function (`… を 受け取って … を 返すこと`) inside another one. Make the inner one a local function under `ただし`, which can use the outer function's arguments (#250) |
 
 2. **Silencing reports.** Writing `# 点検しない` ("don't lint") at the end of a line, or on a comment-only line just before it, silences all reports for that line; `# 点検しない: RULE RULE` silences only those rules.
 3. **It shows up in the editor too.** The language server `suru-ls` (VS Code extension) lints when a file is opened and saved, and shows the reports as warnings. A quick fix adds `# 点検しない: RULE` (clang is required). For an unsaved file, pass its contents as `suru --点検 --代わり CONTENTS_FILE REAL_PATH` to check them as the file at the real path.

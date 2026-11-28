@@ -6,6 +6,10 @@ Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/
 
 ## Unreleased
 
+### New
+
+1. **Lint rules for hard-to-read code.** `長い行` (a line wider than 200 without string contents and comments; full-width characters count 2), `かっこが深い` (5 nested parentheses) and `無名関数の入れ子` (an anonymous function inside another). The bundled `lib/` was rewritten to pass them. A `… は 非公開とする` list continued on a deeper-indented line is now read as one list by the linter (README "Linter (「点検」, written in Suru)", #250).
+
 ### Changed
 
 1. **The first lint is faster.** The linter's binary is now built at `-O0`, which is about 5 seconds quicker and lints at about the same speed. `suru --点検` uses the bundled `suruc` (`suruc --点検`, new) to build it, so the first run in a cloud container went from about 18 seconds to about 3 seconds. Later runs use the cached binary as before (#250).

@@ -292,6 +292,54 @@ def test_値の再定義(kind, tmp_path):
                         "どこからが新しい定義か読みやすくなります\n"), r.stderr
 
 
+READABLE = """
+数 の リスト を 甲する は 数 の リスト
+xs を 甲する とは xs を （a を 受け取って （（1 と 2） を （b を 受け取って a + b を 返すこと） で 写像する） の 先頭 を 返すこと） で 写像する
+
+数 を 乙する は 数
+x を 乙する とは （（（（（x + 1））））） # 点検しない: 不要な括弧
+
+文字列 を 丙する は 文字列
+x を 丙する とは 「LONG」 + x  # COMMENT
+
+数 を 丁する は 数
+x を 丁する とは x PLUS
+
+数 を 戊する は 数
+x を 戊する とは x PLUS2
+  PLUS2
+
+（（1 と 2） を 甲する） を 表示する
+（1 を 乙する） + （1 を 丁する） + （1 を 戊する） を 表示する
+「a」 を 丙して 表示する
+""".replace("LONG", "あ" * 200).replace("COMMENT", "い" * 100).replace("PLUS2", " ".join(["+ 1"] * 30)).replace("PLUS", " ".join(["+ 1"] * 70))
+
+READABLE_OUT = """\
+readable.suru:3:45: 無名関数の入れ子: 無名関数の中に無名関数があります。内側を「ただし」の局所の関数にして名前を付けると読みやすくなります(外の関数の引数も使えます)
+readable.suru:6:16: かっこが深い: かっこが5重になっています。途中の値に「ただし」(手順の中なら「x とは …」)で名前を付けると読みやすくなります
+readable.suru:12:1: 長い行: この行は、文字列の中身と注釈を除いても幅が 298 あります(全角は2、目安は 200 まで)。深く字下げした次の行に続けるか、途中の値に名前を付けると読みやすくなります
+"""
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_読みやすさの規則(kind, tmp_path):
+    # #250: 長い行(文字列の中身と注釈は数えない)・かっこが深い・無名関数の入れ子。字下げして続けた行は別に数える
+    (tmp_path / "readable.suru").write_text(READABLE, encoding="utf-8")
+    r = run_lint(kind, tmp_path, "readable.suru")
+    assert r.returncode == 1, r.stderr
+    assert r.stdout == READABLE_OUT, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("kind", KINDS)
+def test_字下げして続けた公開の一覧(kind, tmp_path):
+    # #250: 「… は 非公開とする」の一覧は、深く字下げした次の行に続けてもよい
+    (tmp_path / "名前.suru").write_text(
+        "数 を 甲する は 数\nx を 甲する とは x + 1\n\n数 を 乙する は 数\nx を 乙する とは x + 2\n\n"
+        "数 を 丙する は 数\nx を 丙する とは （x を 甲する） + （x を 乙する）\n\n甲する と\n  乙する は 非公開とする\n", encoding="utf-8")
+    r = run_lint(kind, tmp_path, "名前.suru")
+    assert (r.returncode, r.stdout) == (0, ""), r.stdout + r.stderr
+
+
 @pytest.mark.parametrize("kind", KINDS)
 def test_構文木の規則(kind, tmp_path):
     (tmp_path / "型.suru").write_text(TYPES, encoding="utf-8")
