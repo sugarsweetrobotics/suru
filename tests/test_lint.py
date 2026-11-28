@@ -365,6 +365,17 @@ def test_字下げして続けた公開の一覧(kind, tmp_path):
 
 
 @pytest.mark.parametrize("kind", KINDS)
+def test_型の宣言の関数の型は無名関数でない(kind, tmp_path):
+    # #250: 型の宣言の「… を 受け取って … を 返すこと」は関数の型なので、入れ子にしても知らせない
+    (tmp_path / "型.suru").write_text(
+        "（（数 を 受け取って 数 を 返すこと） を 受け取って （数 を 受け取って 数 を 返すこと） を 返すこと） を 二度掛けする は 数\n"
+        "f を 二度掛けする とは （f を （x を 受け取って x + 1 を 返すこと） に 適用する） を 3 に 適用する\n\n"
+        "二度掛けする は 非公開とする\n", encoding="utf-8")
+    r = run_lint(kind, tmp_path, "型.suru")
+    assert "無名関数の入れ子" not in r.stdout, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("kind", KINDS)
 def test_構文木の規則(kind, tmp_path):
     (tmp_path / "型.suru").write_text(TYPES, encoding="utf-8")
     (tmp_path / "syntax.suru").write_text(SYNTAX, encoding="utf-8")
