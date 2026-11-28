@@ -1284,6 +1284,18 @@ x とは p から 0 で 品質形 を 構造体読取した 結果     # inside 
 6. **The type is `時間 の C形`.** It can be written in type declarations too, as in `時間 の C形 を 大きさ取得する は 数`. Passing a record of another shape to `C直列化する` is caught by the type checker. C形 values print as `<C形 時間>` and can't be serialized ("Value serialization and セマフォ内実行する").
 7. **The interpreter and both the Python and Go compilers behave the same.** The tests check that results match the sizeof and offsetof decided by the C compiler.
 
+### C structs as types (C構造体)
+
+```suru
+時間 とは 秒 は 符号付き64 で ナノ秒 は 符号なし32 の C構造体
+品質 とは 深さ は 符号なし64 で 期限 は 時間 で 率 は 単精度 で 印 は 真偽 の C構造体
+（（1 と 2 の 時間） の 秒）
+```
+
+1. **`… の C構造体` declares a record whose field types are C types.** Write it like a record with field types, closed with `C構造体` instead of `組`. A field type is `符号付き8` to `符号付き64`, `符号なし8` to `符号なし64`, `単精度`, `小数`, `番地`, `真偽`, or another C構造体 type (a nested struct). Every field needs a type, and a C構造体 has one form (no `か`). A struct that contains itself, directly or through other structs, is an error (point to it with a `番地`) (#241).
+2. **Inside Suru a value is an ordinary record.** Integer fields are `数`, `単精度` and `小数` are `小数`, and `番地` and `真偽` are themselves. Values are built and taken apart like any record (`（1 と 2 の 時間）`, `t の 秒`, `秒 は 1 で ナノ秒 は 2 の 時間`), and the type checker checks the field types.
+3. **What comes next.** Passing and returning C構造体 values by value in external functions comes in the next stages of #241 (interpreter, then both compilers).
+
 ### Callbacks from C
 
 C functions that take function addresses (the comparison function of `qsort`, event watchers, ROS 2 rcl's "call this when a new message arrives" functions and so on) can now be used. There are two forms, called in different ways.

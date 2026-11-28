@@ -582,7 +582,8 @@ OPERATOR_CHARS = {c for op in OPERATORS for c in unicodedata.normalize("NFKC", o
 MIXED_WORDS = ("受け取って", "返すこと", KW_HENSU_POLITE, KW_HENSU, "長さ", "残り", KW_IMPORT_POLITE, KW_IMPORT, KW_IMPORT_TE, KW_USE_POLITE, KW_USE,
                "外部に出す関数")
 # ひらがなを含む組み込み関数の名前(「する」の前の部分)。名前として切り出す
-MIXED_NAMES = ("畳み込み",)
+# 「符号付き64」「符号なし8」は C構造体のフィールドの型(#241)。長いものから照合する
+MIXED_NAMES = ("畳み込み",) + tuple(f"{s}{b}" for s in ("符号付き", "符号なし") for b in (64, 32, 16, 8))
 # ひらがなの並びを分けるときの辞書。長いものから順に照合する
 HIRAGANA_WORDS = sorted(
     set(PARTICLES)
@@ -1225,6 +1226,8 @@ class TypeDef:
     line: int
     # 「番号 は 数 で 名前 は 文字列 の 組」と型を書いたとき: フィールド名 → 型の字句(書かなければ None)
     field_types: dict | None = None
+    # 「秒 は 符号付き64 で ナノ秒 は 符号付き64 の C構造体」(#241)。フィールドの型は C の型
+    c_struct: bool = False
 
 
 @dataclass
@@ -1467,6 +1470,8 @@ class ParseContext:
         self.types: dict[str, list] = dict(types or {})  # 型 → [形]
         # フィールドの型を書いた型 → {フィールド名: 型の書き方(TypeName など)}(「番号 は 数 で … の 組」)
         self.field_types: dict[str, dict] = {}
+        # C構造体の型 → [(フィールド名, C の型)](C の型はスカラーの名前か、別の C構造体の型の名前、#241)
+        self.c_structs: dict[str, list] = {}
         self.base_dir = base_dir  # 「「数学」 を 読み込む」で探すフォルダ
         self.modules: dict[str, Any] = dict(modules or {})  # 読み込んだファイル(絶対パス → Module。読み込み中は None)
         self.packages: dict[str, str] | None = None  # プロジェクトの依存(名前 → フォルダ)。None なら初めて読み込むときに探す
@@ -1483,6 +1488,7 @@ class ParseContext:
         c.packages = self.packages
         c.path = self.path
         c.field_types = dict(self.field_types)
+        c.c_structs = dict(self.c_structs)
         c.session_modules = self.session_modules
         c.session_nodes = self.session_nodes
         return c
@@ -1492,7 +1498,16 @@ class ParseContext:
         for td in tds:
             if td.field_types is None:
                 continue
+            if td.c_struct:
+                self.c_structs[td.name] = [(f, _c_field_type(td, f, toks, tds, self)) for f, toks in td.field_types.items()]
+                continue
             self.field_types[td.name] = {f: parse_type_all(toks, td.line) for f, toks in td.field_types.items()}
+        for td in tds:
+            if td.c_struct:
+                _check_c_struct_cycle(td.name, self.c_structs, [], td.line)
+                # する の中ではふつうの組: 整数は 数、単精度・小数 は 小数(#241)
+                self.field_types[td.name] = {
+                    f: TypeName(C_STRUCT_VALUE_TYPES.get(t, t), []) for f, t in self.c_structs[td.name]}
 
     def add(self, td: TypeDef) -> None:
         if td.name in self.types or td.name in BUILTIN_TYPES:
@@ -3303,6 +3318,41 @@ def _check_name(tok: Token) -> str:
     return tok.value
 
 
+C_STRUCT = "C構造体"  # 「時間 とは 秒 は 符号付き64 で ナノ秒 は 符号付き64 の C構造体」(#241)
+# C構造体のフィールドに書ける C の型 → する の中の値の型
+C_STRUCT_VALUE_TYPES = {
+    **{f"符号付き{b}": "数" for b in (8, 16, 32, 64)}, **{f"符号なし{b}": "数" for b in (8, 16, 32, 64)},
+    "単精度": "小数", "小数": "小数", "番地": "番地", "真偽": "真偽",
+}
+C_STRUCT_TYPES_TEXT = "符号付き8・16・32・64、符号なし8・16・32・64、単精度・小数・番地・真偽か、別の C構造体の型"
+
+
+def _is_c_struct_word(tok: Token) -> bool:
+    return tok.kind == "WORD" and tok.value == C_STRUCT and not tok.quoted
+
+
+def _c_field_type(td: TypeDef, field: str, toks: list[Token], tds: list, ctx: "ParseContext") -> str:
+    """C構造体のフィールドの型の字句を、C の型の名前(スカラーか C構造体の型)にする"""
+    if len(toks) == 1 and toks[0].kind == "WORD":
+        name = toks[0].value
+        if name in C_STRUCT_VALUE_TYPES:
+            return name
+        if name in ctx.c_structs or any(t.c_struct and t.name == name for t in tds):
+            return name
+    what = f"「{toks[0].value}」" if len(toks) == 1 and toks[0].kind == "WORD" else ""
+    raise SuruError(f"C構造体「{td.name}」のフィールド「{field}」の型{what}は C の型ではありません"
+                    f"(書けるのは {C_STRUCT_TYPES_TEXT})", toks[0].line if toks else td.line)
+
+
+def _check_c_struct_cycle(name: str, c_structs: dict, path: list, line: int) -> None:
+    """C構造体が自分自身を(入れ子を通して)値で持つとエラー(大きさが決まらない)"""
+    if name in path:
+        raise SuruError(f"C構造体「{path[0]}」が自分自身をフィールドに持っています(番地 で指してください)", line)
+    for _, t in c_structs.get(name, []):
+        if t in c_structs:
+            _check_c_struct_cycle(t, c_structs, path + [name], line)
+
+
 def try_parse_typedef(node: Node) -> TypeDef | None:
     """「点 とは 横 と 縦 の 組」「図形 とは 半径 の 円 か 幅 と 高 の 長方形」「信号 とは 赤 か 黄 か 青」"""
     tokens = nosep(flatten(node))
@@ -3311,10 +3361,13 @@ def try_parse_typedef(node: Node) -> TypeDef | None:
         return None
     body = _split_trailing_kumi(tokens[2:])
     has_ka = find_top_level(body, KW_KA) is not None
-    if not body or not (has_ka or is_kw(body[-1], KW_KUMI)):
+    is_c = bool(body) and _is_c_struct_word(body[-1])
+    if not body or not (has_ka or is_kw(body[-1], KW_KUMI) or is_c):
         return None
     name = _check_name(tokens[0])
     line = tokens[0].line
+    if is_c and has_ka:
+        raise SuruError("「C構造体」は形が1つのときだけ使えます(「か」で並べられません)", body[-1].line)
     ctors = []
     typed: bool | None = None  # フィールドの型を書いたか(まだフィールドがなければ None)
     style: str | None = None  # 型の書き方(「は」か「かっこ」)。1つの型の中ではそろえる
@@ -3348,7 +3401,7 @@ def try_parse_typedef(node: Node) -> TypeDef | None:
                 "型の形は「横 と 縦 の 点」のように「フィールド名 と … の 形の名前」で書いてください", alt[0].line
             )
         last = alt[-1]
-        if is_kw(last, KW_KUMI):
+        if is_kw(last, KW_KUMI) or (is_c and _is_c_struct_word(last)):
             if has_ka:
                 raise SuruError("「組」は形が1つのときだけ使えます(「か」で並べるときは形に名前を付けてください)", last.line)
             cname = name
@@ -3394,7 +3447,10 @@ def try_parse_typedef(node: Node) -> TypeDef | None:
         if len(alt[:-2]) % 2 == 0:
             raise SuruError("「と」の後にフィールド名が必要です", last.line)
         ctors.append((cname, fields))
-    return TypeDef(name, ctors, line, field_types if typed else None)
+    if is_c and not typed:
+        raise SuruError("C構造体のフィールドには C の型を書いてください"
+                        "(「時間 とは 秒 は 符号付き64 で ナノ秒 は 符号付き64 の C構造体」)", line)
+    return TypeDef(name, ctors, line, field_types if typed else None, is_c)
 
 
 TYPED_STYLE_MIXED = ("フィールドの型は、1つの型の中では「番号 は 数 で 名前 は 文字列 の 組」か"
@@ -4711,6 +4767,7 @@ def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool
     ctx.modules[path] = None
     sub = ParseContext(ctx.ctors, ctx.types, os.path.dirname(path), path=path)
     sub.field_types = dict(ctx.field_types)
+    sub.c_structs = dict(ctx.c_structs)
     sub.modules = ctx.modules
     sub.packages = ctx.packages
     sub.in_prelude = prelude
@@ -4730,6 +4787,7 @@ def _load_path(path: str, name: str, ctx: ParseContext, line: int, prelude: bool
     ctx.ctors.update(sub.ctors)
     ctx.types.update(sub.types)
     ctx.field_types.update(sub.field_types)
+    ctx.c_structs.update(sub.c_structs)
     module = Module(stem, path, program, private_names(program), source)
     ctx.modules[path] = module
     return module

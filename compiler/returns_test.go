@@ -120,3 +120,38 @@ func TestFieldTypeReturnsAction(t *testing.T) {
 		t.Errorf("「数 を 返す 動作」と「数 の 動作」が違う型になりました: %v", err)
 	}
 }
+
+// C構造体(#241 段階1): フィールドの型は C の型、値はふつうの組
+func TestCStructDecl(t *testing.T) {
+	src := "時間 とは 秒 は 符号付き64 で ナノ秒 は 符号なし32 の C構造体\n" +
+		"品質 とは 期限 は 時間 で 率 は 単精度 で 先 は 番地 の C構造体\n" +
+		"（（1 と 2 の 時間） と 0.5 と 空 の 品質） の 率 + 1\n"
+	if _, err := CompileSource(src, ".", "x.suru", true); err == nil || !strings.Contains(err.Error(), "番地") {
+		// 空 は番地ではないので型の検査で止まる
+		t.Errorf("番地のフィールドに 空 が通りました: %v", err)
+	}
+	ok := strings.Replace(src, "と 空 の 品質", "と （0 を 番地にする） の 品質", 1)
+	if _, err := CompileSource("「標準」 を 読み込んで 使う\n"+ok, ".", "x.suru", true); err != nil {
+		t.Errorf("C構造体を組として使えません: %v", err)
+	}
+	ctx := NewParseContext(".")
+	if err := try(func() {
+		ParseProgram("時間とは、秒は符号付き64でナノ秒は符号なし32のC構造体。\n", ctx)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []CStructField{{"秒", "符号付き64"}, {"ナノ秒", "符号なし32"}}
+	if !reflect.DeepEqual(ctx.CStructs["時間"], want) {
+		t.Errorf("C の型: %v", ctx.CStructs["時間"])
+	}
+	for src, msg := range map[string]string{
+		"時間 とは 秒 は 数 の C構造体\n":                       "フィールド「秒」の型「数」は C の型ではありません",
+		"時間 とは 秒 と 分 の C構造体\n":                       "C構造体のフィールドには C の型を書いてください",
+		"時間 とは 秒 は 符号付き64 の 甲 か 分 は 符号付き64 の C構造体\n": "「C構造体」は形が1つのときだけ使えます",
+		"甲 とは 中 は 乙 の C構造体\n乙 とは 中 は 甲 の C構造体\n":     "が自分自身をフィールドに持っています",
+	} {
+		if _, err := ParseSource(src, "."); err == nil || !strings.Contains(err.Error(), msg) {
+			t.Errorf("%q: 「%s」のエラーになりません: %v", src, msg, err)
+		}
+	}
+}

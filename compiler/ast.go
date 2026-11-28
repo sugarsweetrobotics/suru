@@ -184,6 +184,8 @@ type TypeDef struct {
 	Line  Pos
 	// FieldTypes は「番号 は 数 で 名前 は 文字列 の 組」と型を書いたときのフィールドの型の字句(書いた順)。書かなければ nil
 	FieldTypes []FieldTypeToks
+	// CStruct は「… の C構造体」(フィールドの型が C の型、#241)
+	CStruct bool
 }
 
 // FieldTypeToks はフィールドの名前と、その型の字句

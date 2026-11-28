@@ -218,7 +218,7 @@
         },
         {
           "name": "storage.type.suru",
-          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(?:性質|組)(?![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])"
+          "match": "(?<![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])(?:性質|組|C構造体)(?![\\p{L}\\p{Nd}_&&[^ぁ-ゟ]])"
         },
         {
           "name": "constant.language.suru",
