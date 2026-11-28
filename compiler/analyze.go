@@ -441,7 +441,7 @@ type Word struct {
 	Kind string // type / ctor / trait / field
 }
 
-var completionKeywords = []string{KwTowa, KwIf, KwThen, KwElse, KwProviso, KwSorekara, KwKatsu, KwMataha,
+var completionKeywords = []string{KwTowa, KwIf, KwThen, KwElse, KwProviso, KwSorekara, KwKatsu, KwMataha, KwDake,
 	KwLambda, KwReturn, KwEmpty, Tejun, Result, "真", "偽", KwKumi, KwSeishitsu, KwToiu,
 	KwImport, KwImportTe + " " + KwUse, "先頭", "残り", "最後", "長さ", "それぞれ"}
 

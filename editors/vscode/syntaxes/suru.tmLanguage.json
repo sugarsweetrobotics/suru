@@ -259,7 +259,7 @@
       ]
     },
     "hiragana": {
-      "match": "(そうでなければ)|(それから)|(それぞれ)|(ただし)|(という)|(ならば)|(または)|(かつ)|(から)|(です)|(とは)|(もし)|(より)|(か)|(が)|(で)|(と)|(に)|(の)|(は)|(へ)|(を)",
+      "match": "(そうでなければ)|(それから)|(それぞれ)|(ただし)|(という)|(ならば)|(または)|(かつ)|(だけ)|(から)|(です)|(とは)|(もし)|(より)|(か)|(が)|(で)|(と)|(に)|(の)|(は)|(へ)|(を)",
       "captures": {
         "1": {
           "name": "keyword.control.suru"
@@ -289,22 +289,22 @@
           "name": "keyword.other.particle.suru"
         },
         "10": {
-          "name": "keyword.other.declaration.suru"
+          "name": "keyword.other.particle.suru"
         },
         "11": {
           "name": "keyword.other.declaration.suru"
         },
         "12": {
-          "name": "keyword.control.suru"
-        },
-        "13": {
-          "name": "keyword.other.particle.suru"
-        },
-        "14": {
           "name": "keyword.other.declaration.suru"
         },
-        "15": {
+        "13": {
+          "name": "keyword.control.suru"
+        },
+        "14": {
           "name": "keyword.other.particle.suru"
+        },
+        "15": {
+          "name": "keyword.other.declaration.suru"
         },
         "16": {
           "name": "keyword.other.particle.suru"
@@ -319,12 +319,15 @@
           "name": "keyword.other.particle.suru"
         },
         "20": {
-          "name": "keyword.other.declaration.suru"
-        },
-        "21": {
           "name": "keyword.other.particle.suru"
         },
+        "21": {
+          "name": "keyword.other.declaration.suru"
+        },
         "22": {
+          "name": "keyword.other.particle.suru"
+        },
+        "23": {
           "name": "keyword.other.particle.suru"
         }
       }

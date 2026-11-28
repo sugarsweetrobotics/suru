@@ -1276,6 +1276,10 @@ func (p *ExprParser) namedConstruct() Node {
 			defer func() { p.inNamed = false }()
 			value = p.comparison()
 		}()
+		if isKw(p.peek0(), KwDake) && !p.sepStop() {
+			p.next()
+			value = &ListLit{[]Node{value}} // 「誤群 は 404 だけ で …」
+		}
 		fields = append(fields, FieldVal{name.Value(), value})
 		if p.namedContinues() {
 			p.next()
@@ -1329,6 +1333,13 @@ func (p *ExprParser) listExpr() Node {
 	for isKw(p.peek0(), KwTo) && !p.sepStop() {
 		p.next()
 		items = append(items, p.logic())
+	}
+	if isKw(p.peek0(), KwDake) && !p.sepStop() {
+		t := p.next()
+		if len(items) > 1 {
+			raise(t.Line, "「だけ」は値1つの後に書きます(「404 だけ」は要素が1つのリスト)。2つ以上なら「と」で並べるだけで書けます")
+		}
+		return &ListLit{items}
 	}
 	if isKw(p.peek0(), KwNo) && isCtor(p.peek(1)) && !p.sepStop() {
 		no := p.next()

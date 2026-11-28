@@ -38,6 +38,7 @@ const (
 	KwSorekara    = "それから"
 	KwKatsu       = "かつ"
 	KwMataha      = "または"
+	KwDake        = "だけ" // 要素が1つのリスト: 404 だけ(#250)
 	Desu          = "です"
 	ModuleMark    = "内"
 	ModuleSep     = ModuleMark + "の"
@@ -99,7 +100,7 @@ var operators = map[string]string{
 
 var keywords = setOf(
 	KwTo, KwTowa, KwNo, KwGa, KwIf, KwThen, KwElse, KwLambda, KwReturn, KwProviso,
-	KwKa, KwWa, KwToiu, KwKumi, KwSeishitsu, KwSorekara, KwKatsu, KwMataha, Desu, KwHensu, KwHensuPolite,
+	KwKa, KwWa, KwToiu, KwKumi, KwSeishitsu, KwSorekara, KwKatsu, KwMataha, Desu, KwHensu, KwHensuPolite, KwDake,
 	KwImport, KwImportPolit, KwImportTe, KwUse, KwUsePolite, KwIjou, KwIka, KwIkaIO,
 	KwIkaExtIO, KwIkaExt, KwIkaExtIONo, KwIkaExtNo, KwIkaExport,
 )
@@ -738,7 +739,7 @@ var mixedNameSet = setOf(mixedNames...)
 
 var hiraganaWords = func() [][]rune {
 	set := setOf(particles...)
-	for _, w := range []string{KwTo, KwTowa, KwNo, KwGa, KwIf, KwThen, KwElse, KwProviso, KwKa, KwWa, KwToiu, KwSorekara, KwKatsu, KwMataha,
+	for _, w := range []string{KwTo, KwTowa, KwNo, KwGa, KwIf, KwThen, KwElse, KwProviso, KwKa, KwWa, KwToiu, KwSorekara, KwKatsu, KwMataha, KwDake,
 		"それぞれ", Koto, Suru, Shitekara, Shite, Shita, Dearukoto, Dearu, Denai, Desu} {
 		set[w] = true
 	}

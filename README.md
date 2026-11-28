@@ -255,7 +255,7 @@ More examples: `examples/stdlib.suru` and `examples/stdlib_open.suru` show the s
 | `答えする とは 42` | A function with no arguments |
 | `税率 とは 0.1` | A value definition (a name that does not end in 「する」) |
 | `10 を 2 で 除算して 3 に 加算する` | A pipeline. The result of 「…して」 goes into the next function's **「を」** |
-| `1 と 2 と 3`, `空` | A list, the empty list |
+| `1 と 2 と 3`, `404 だけ`, `空` | A list, a one-element list, the empty list |
 | `a と b を 加算する とは a + b` | Takes a list as 「を」, destructured into a and b |
 | `リスト の 先頭` `の 残り` `の 最後` `の 長さ` | List properties (head, rest, last, length) |
 | `x を リスト に 追加する` / `挿入する` | A new list with x added at the end / front |
@@ -329,7 +329,7 @@ If you define a function with the same name as a built-in, your definition is us
 1. **Arguments are distinguished by case particles.** The particles are 「を・に・で・から・へ・より」. A function can use each particle at most once (a second one is an error, both in definitions and calls). Missing arguments, or particles the function does not take, are errors.
 2. **Particles may be attached to the function name.** `を加算する` and `を 加算する` are the same, as are `で除算する`, `を返すこと` and so on. **Function names made only of hiragana are not allowed** (`へんかんする` is an error; there must be a kanji or katakana before 「する」).
 3. **「…して」 is function composition (a pipeline).** The previous result goes into the next function's 「を」. When the next segment also has a 「を」 argument, the two become **a list with the previous result first**. `引数 と 引数 を加算して 引数 を加算する` is `加算(を = (加算(を = (引数, 引数)) と 引数))`. An expression always ends with 「…する」 (ending with 「…して」 is an error).
-4. **「と」 builds a list.** `1 と 2 と 3` is a three-element list. Arithmetic and comparison bind tighter than 「と」, so `1 + 1 と 2 * 3` is `（2 と 6）`. A one-element list is made with `1 を 空 に 追加する`. Lists are immutable values and print as `（1 と 2 と 3）`.
+4. **「と」 builds a list.** `1 と 2 と 3` is a three-element list. Arithmetic and comparison bind tighter than 「と」, so `1 + 1 と 2 * 3` is `（2 と 6）`. A one-element list is written `1 だけ` ("Lists of one with だけ"). Lists are immutable values and print as `（1 と 2 と 3）`.
 5. **「a と b を」 in a definition destructures a list.** If the list passed in has the wrong length, it is an error. This keeps the first example, `a と b を加算する とは a + b`, working as before.
 6. **The reading comma 「、」 is the separator of the punctuation style, and the middle dot 「・」 is reserved.** 「、」 is not used to separate list items (see item 20 onward). 「・」 outside a string is an error.
 7. **After 「の」 comes a list property or a field name.** 先頭・残り・最後・長さ・それぞれ (head, rest, last, length, each) are list properties; any other name is a record field (`p の 横`). It binds tighter than arithmetic (`リスト の 先頭 + 1` is `(リスト の 先頭) + 1`). Only when the name after 「の」 is the name of a type's shape does it mean building a record, and the binding changes (item 28).
@@ -1768,6 +1768,18 @@ kumu 導入 --先 /usr/local/bin               # put it somewhere else
 3. **One form per type.** Mixing the forms (`番号 （数） と 名前 は 文字列`) or using a different form in another shape of the same type is an error. As before, write a type for every field or for none.
 4. **Only in type definitions.** Records are still built with `（1 と 「茶」 の 品）` or `番号 は 1 で 名前 は 「茶」 の 品`, and parentheses right after a name in an expression are an error.
 5. **The final `の組` may be written without a space.** At the end of a type definition, right after a field name or `）`, `の組` is read as `の 組` (with or without types). A value named `の組` can still be used everywhere else.
+
+### Lists of one with だけ
+
+```suru
+点 とは 番号 は 数 で 誤り群 は 数 の リスト の 組
+
+（404 だけ） を 表示します
+（番号 は 1 で 誤り群 は 404 だけ の 点） の 誤り群 を 表示します
+```
+
+1. **`X だけ` is a list with the one element X.** It is the same as `X を 空 に 挿入する`, and pairs with `1 と 2` for two or more. It can be written where a list made with 「と」 can, and also as a field value of `名前 は 値 で …` (#250).
+2. **Only after one value.** `1 と 2 だけ` is an error; for two or more, the 「と」 list is enough. A one-element list still prints as `（404）`.
 
 ## License
 
