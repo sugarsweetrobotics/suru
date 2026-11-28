@@ -69,6 +69,7 @@ kumu 削除 計算      # remove a dependency (remove)
 kumu 取得           # fetch dependencies and write 組.lock (fetch; 作る and 実行 do this too)
 kumu 試験           # run the tests of the source files, then each 「…試験する」 in 試験/ (test; kumu 試験 二倍 picks by part of the name)
 kumu 点検           # lint every file in the project (check)
+kumu 整える         # tidy the white space of every file in the project (format; --確認 only lists them)
 kumu 公開           # check, then put the Git tag vVERSION (publish; push it yourself)
 kumu 文書           # write API documentation of the public names to docs/api (doc; --雛形 writes Sphinx and Read the Docs settings)
 kumu 導入           # build, then put the command in ~/.local/bin (install; see "Installing commands (kumu 導入)")
@@ -255,7 +256,7 @@ More examples: `examples/stdlib.suru` and `examples/stdlib_open.suru` show the s
 | `答えする とは 42` | A function with no arguments |
 | `税率 とは 0.1` | A value definition (a name that does not end in 「する」) |
 | `10 を 2 で 除算して 3 に 加算する` | A pipeline. The result of 「…して」 goes into the next function's **「を」** |
-| `1 と 2 と 3`, `空` | A list, the empty list |
+| `1 と 2 と 3`, `404 だけ`, `空` | A list, a one-element list, the empty list |
 | `a と b を 加算する とは a + b` | Takes a list as 「を」, destructured into a and b |
 | `リスト の 先頭` `の 残り` `の 最後` `の 長さ` | List properties (head, rest, last, length) |
 | `x を リスト に 追加する` / `挿入する` | A new list with x added at the end / front |
@@ -329,7 +330,7 @@ If you define a function with the same name as a built-in, your definition is us
 1. **Arguments are distinguished by case particles.** The particles are 「を・に・で・から・へ・より」. A function can use each particle at most once (a second one is an error, both in definitions and calls). Missing arguments, or particles the function does not take, are errors.
 2. **Particles may be attached to the function name.** `を加算する` and `を 加算する` are the same, as are `で除算する`, `を返すこと` and so on. **Function names made only of hiragana are not allowed** (`へんかんする` is an error; there must be a kanji or katakana before 「する」).
 3. **「…して」 is function composition (a pipeline).** The previous result goes into the next function's 「を」. When the next segment also has a 「を」 argument, the two become **a list with the previous result first**. `引数 と 引数 を加算して 引数 を加算する` is `加算(を = (加算(を = (引数, 引数)) と 引数))`. An expression always ends with 「…する」 (ending with 「…して」 is an error).
-4. **「と」 builds a list.** `1 と 2 と 3` is a three-element list. Arithmetic and comparison bind tighter than 「と」, so `1 + 1 と 2 * 3` is `（2 と 6）`. A one-element list is made with `1 を 空 に 追加する`. Lists are immutable values and print as `（1 と 2 と 3）`.
+4. **「と」 builds a list.** `1 と 2 と 3` is a three-element list. Arithmetic and comparison bind tighter than 「と」, so `1 + 1 と 2 * 3` is `（2 と 6）`. A one-element list is written `1 だけ` ("Lists of one with だけ"). Lists are immutable values and print as `（1 と 2 と 3）`.
 5. **「a と b を」 in a definition destructures a list.** If the list passed in has the wrong length, it is an error. This keeps the first example, `a と b を加算する とは a + b`, working as before.
 6. **The reading comma 「、」 is the separator of the punctuation style, and the middle dot 「・」 is reserved.** 「、」 is not used to separate list items (see item 20 onward). 「・」 outside a string is an error.
 7. **After 「の」 comes a list property or a field name.** 先頭・残り・最後・長さ・それぞれ (head, rest, last, length, each) are list properties; any other name is a record field (`p の 横`). It binds tighter than arithmetic (`リスト の 先頭 + 1` is `(リスト の 先頭) + 1`). Only when the name after 「の」 is the name of a type's shape does it mean building a record, and the binding changes (item 28).
@@ -592,7 +593,7 @@ x を y で 累乗する とは 外部の「pow」
 
 ### Linter (「点検」, written in Suru)
 
-1. **`suru --点検 FILE.suru …` points out code that is not an error but would read better if fixed.** It prints `FILE:LINE:COLUMN: RULE: DESCRIPTION`, and exits with code 1 if there is at least one. It is written in Suru in `lib/点検.suru` (and `lib/字句.suru`), and with clang available it is built into a binary only the first time and cached (`~/.cache/suru/`) (`SURU_LINT_INTERP=1` always runs it in the interpreter).
+1. **`suru --点検 FILE.suru …` points out code that is not an error but would read better if fixed.** It prints `FILE:LINE:COLUMN: RULE: DESCRIPTION`, and exits with code 1 if there is at least one. It is written in Suru in `lib/点検.suru` (and `lib/字句.suru`), and with clang available it is built into a binary only the first time and cached (`~/.cache/suru/`) (`SURU_LINT_INTERP=1` always runs it in the interpreter). The binary is built at `-O0`, and with the `suruc` from a pip wheel (`suruc --点検 FILE.suru …` does the same), so the first run takes a few seconds (#250).
 
 | Rule | What it reports |
 |---|---|
@@ -606,10 +607,14 @@ x を y で 累乗する とは 外部の「pow」
 | 未使用の引数 (unused parameter) | A parameter not used in the function body. Functions split into several definitions, as with `先頭 は x で …` or `空 を …`, and `外部の「…」` functions are not checked |
 | 未使用の読み込み (unused load) | `「X」 を 読み込む` with neither `X内の…` nor X's types used. With `読み込んで 使う`, none of the names in X used either (X is looked up in the same folder as the checked file or in lib/, and not checked if not found) |
 | 組み込みの上書き (built-in override) | An outermost definition with the same name as a built-in function (`加算する` and so on) or a function in a file loaded with `読み込んで 使う` |
+| して入りの名前 (name with して) | An outermost definition whose name has 「して」 inside, like `足して二倍する`. 「して」 joins calls, so the name reads like two calls. Use a name without 「して」, or split it into two functions and write `x を 足して 二倍する` (#250) |
 | 型の宣言なし (missing type declaration) | An outermost function in a library (a file without expression sentences at the outermost level) without a type declaration such as `数 を 三倍する は 数`. The declaration may be anywhere in the file |
 | 書き方の混在 (mixed styles) | One file has both punctuation-style and spaced-style sentences. Reported once, at the first sentence of the less common style |
 | 値の再定義 (value redefined) | The same value name is defined twice at the outermost level (the later definition is used). Functions are not checked, since they can be defined case by case |
 | 定義の間の空行 (blank line between definitions) | A function definition at the outermost level (its type declaration and all its definitions) is followed on the very next line by another function's definition. Reported only when one of the two is two or more lines ("Blank lines between definitions (lint)") |
+| 長い行 (long line) | A line wider than 200 (full-width characters count 2), not counting the contents of strings and comments. Continue it on a deeper-indented line (a `… は 非公開とする` list and a record's fields can be continued too) or name parts of it (#250) |
+| かっこが深い (deep parentheses) | Parentheses nested 5 deep. Name intermediate values with `ただし` (or `x とは …` in a procedure) (#250) |
+| 無名関数の入れ子 (nested anonymous function) | An anonymous function (`… を 受け取って … を 返すこと`) inside another one. Make the inner one a local function under `ただし`, which can use the outer function's arguments (#250) |
 
 2. **Silencing reports.** Writing `# 点検しない` ("don't lint") at the end of a line, or on a comment-only line just before it, silences all reports for that line; `# 点検しない: RULE RULE` silences only those rules.
 3. **It shows up in the editor too.** The language server `suru-ls` (VS Code extension) lints when a file is opened and saved, and shows the reports as warnings. A quick fix adds `# 点検しない: RULE` (clang is required). For an unsaved file, pass its contents as `suru --点検 --代わり CONTENTS_FILE REAL_PATH` to check them as the file at the real path.
@@ -1764,6 +1769,52 @@ kumu 導入 --先 /usr/local/bin               # put it somewhere else
 3. **One form per type.** Mixing the forms (`番号 （数） と 名前 は 文字列`) or using a different form in another shape of the same type is an error. As before, write a type for every field or for none.
 4. **Only in type definitions.** Records are still built with `（1 と 「茶」 の 品）` or `番号 は 1 で 名前 は 「茶」 の 品`, and parentheses right after a name in an expression are an error.
 5. **The final `の組` may be written without a space.** At the end of a type definition, right after a field name or `）`, `の組` is read as `の 組` (with or without types). A value named `の組` can still be used everywhere else.
+
+### Lists of one with だけ
+
+```suru
+点 とは 番号 は 数 で 誤り群 は 数 の リスト の 組
+
+（404 だけ） を 表示します
+（番号 は 1 で 誤り群 は 404 だけ の 点） の 誤り群 を 表示します
+```
+
+1. **`X だけ` is a list with the one element X.** It is the same as `X を 空 に 挿入する`, and pairs with `1 と 2` for two or more. It can be written where a list made with 「と」 can, and also as a field value of `名前 は 値 で …` (#250).
+2. **Only after one value.** `1 と 2 だけ` is an error; for two or more, the 「と」 list is enough. A one-element list still prints as `（404）`.
+
+### JSON objects one member per line (【JSON物】)
+
+```suru
+「JSON」 を 読み込んで 使う
+
+題 とは 「品屋」
+仕様 とは 以下の【JSON物】です
+  「openapi」 は 「3.1.0」
+  「info」 は
+    「title」 は 題
+    「version」 は 1
+  「tags」 は 「品」 と 「店」
+以上です
+
+（仕様 を JSON文字列にする） を 表示します
+```
+
+1. **`以下の【JSON物】です` … `以上です` writes a JSON object as a table.** Each line is `「名前」 は 値` (or `名前 は 値` when the name has no spaces). It is a quasi-quote of the JSON library (`JSON物展開する`), so the syntax of the language doesn't change. It replaces deeply nested `（（「a」 と … の JSON項目） と …） の JSON物` (#250).
+2. **Values become JSON by themselves.** 数, 文字列, 真偽, JSON and lists of them go through the property `JSON化可能` (`x を JSON値にする`), so `「version」 は 1` gives `1` and `「tags」 は 「品」 と 「店」` gives an array. Other types are converted first (for a type with 【JSON】 derived, with `会員JSON化する` and so on).
+3. **An inner object is a line with nothing after `は`.** The deeper lines under it are its members. Deeper lines under a value continue the value, as everywhere else in Suru. Errors say which line of the block is wrong (`【JSON物】の3行目: …`).
+
+### Tidying white space (suru --整える)
+
+```
+suru --整える a.suru b.suru      # rewrite, printing 「a.suru: 整えました」
+suru --整える --確認 a.suru      # don't rewrite; list the files that aren't tidy (exit code 1 if any)
+suru --整える --出力 a.suru      # print the tidied contents
+kumu 整える                      # every file in the project
+```
+
+1. **`suru --整える` only changes white space.** Spaces between words become one half-width space (outside strings; the spaces before a comment are kept, so aligned comments stay aligned), spaces at the end of lines are removed, indentation with full-width spaces or tabs becomes half-width spaces of the same width (a full-width space is 2, a tab 4, as the lexer counts them), three or more blank lines in a row become two, and blank lines at the start and end of the file are removed (#250).
+2. **The program means the same.** The contents of quasi-quotes (`以下は【道】です` … `以上です`) are left as they are. Before writing, it lexes the file again and compares the tokens and the indentation of every line; if anything would change, it leaves the file as it is and says so.
+3. **The same binary as the linter.** It is written in Suru in `lib/整形.suru` and runs in the linter's binary (`suruc --整える`, `kumu 整える`). In VS Code, "Format Document" uses it through the language server.
 
 ## License
 

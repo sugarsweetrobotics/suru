@@ -194,6 +194,7 @@ KW_SEISHITSU = "性質"
 KW_SOREKARA = "それから"  # 前の文に続けて行う: 「やあ」を表示する。それから、「またね」を表示する。
 KW_KATSU = "かつ"      # 真偽の「かつ」、パターンの条件: 半径 の 円 かつ 半径 > 10 ならば …
 KW_MATAHA = "または"   # 真偽の「または」
+KW_DAKE = "だけ"       # 要素が1つのリスト: 404 だけ(#250)
 DESU = "です"       # 文末の飾り: 「p とは 3 と 4 の 点 です。」の「です」は読み捨てる
 KW_HENSU = "返す"    # 関数の型の宣言の終わりの飾り: 「数 を 階乗する は 数 を 返す」の「を 返す」は読み捨てる
 KW_HENSU_POLITE = "返します"
@@ -245,7 +246,7 @@ def test_head_name(tok: "Token") -> str:
 
 KEYWORDS = {
     KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_LAMBDA, KW_RETURN, KW_PROVISO,
-    KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA, DESU, KW_HENSU, KW_HENSU_POLITE,
+    KW_KA, KW_WA, KW_TOIU, KW_KUMI, KW_SEISHITSU, KW_SOREKARA, KW_KATSU, KW_MATAHA, DESU, KW_HENSU, KW_HENSU_POLITE, KW_DAKE,
     KW_IMPORT, KW_IMPORT_POLITE, KW_IMPORT_TE, KW_USE, KW_USE_POLITE, KW_IJOU, KW_IKA, KW_IKA_IO,
     KW_IKA_EXT_IO, KW_IKA_EXT, KW_IKA_EXT_IO_NO, KW_IKA_EXT_NO, KW_IKA_EXPORT,
 }
@@ -587,7 +588,7 @@ MIXED_NAMES = ("畳み込み",) + tuple(f"{s}{b}" for s in ("符号付き", "符
 # ひらがなの並びを分けるときの辞書。長いものから順に照合する
 HIRAGANA_WORDS = sorted(
     set(PARTICLES)
-    | {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, KW_KA, KW_WA, KW_TOIU, KW_SOREKARA, KW_KATSU, KW_MATAHA}
+    | {KW_TO, KW_TOWA, KW_NO, KW_GA, KW_IF, KW_THEN, KW_ELSE, KW_PROVISO, KW_KA, KW_WA, KW_TOIU, KW_SOREKARA, KW_KATSU, KW_MATAHA, KW_DAKE}
     | {"それぞれ", KOTO, SURU, SHITEKARA, SHITE, SHITA, DEARUKOTO, DEARU, DENAI, DESU}
     | set(POLITE_FORMS),
     key=len,
@@ -2479,6 +2480,9 @@ class ExprParser:
                 value = self.comparison()
             finally:
                 self.in_named = False
+            if is_kw(self.peek(), KW_DAKE) and not self.sep_stop():
+                self.next()
+                value = ListLit([value])  # 「誤群 は 404 だけ で …」
             fields.append((name.value, value))
             if self.named_continues():
                 self.next()
@@ -2512,7 +2516,7 @@ class ExprParser:
         self.next()
         return Lambda(params, body, line)
 
-    # 値 := 比較 { と 比較 }  (2つ以上ならリスト)
+    # 値 := 比較 { と 比較 }  (2つ以上ならリスト)、比較 だけ(要素が1つのリスト)
     # 「… の 型名」は、と で並べた値の全体にかかる: 3 と 4 の 点 → （3 と 4） の 点
     def list_expr(self) -> Any:
         if self.at_named():
@@ -2521,6 +2525,11 @@ class ExprParser:
         while is_kw(self.peek(), KW_TO) and not self.sep_stop():
             self.next()
             items.append(self.logic())
+        if is_kw(self.peek(), KW_DAKE) and not self.sep_stop():
+            tok = self.next()
+            if len(items) > 1:
+                raise SuruError("「だけ」は値1つの後に書きます(「404 だけ」は要素が1つのリスト)。2つ以上なら「と」で並べるだけで書けます", tok.line)
+            return ListLit(items)
         if is_kw(self.peek(), KW_NO) and is_ctor(self.peek(1)) and not self.sep_stop():
             no = self.next()
             node = Construct(self.next().value, items, no.line)
@@ -8908,6 +8917,7 @@ COMPILE_FLAGS = ("--翻訳", "--compile")  # バイナリにコンパイルす�
 INTERPRETER_FLAGS = ("--インタプリタ", "--interpreter")  # コンパイルせずにインタプリタで動かす(#229)
 REPL_FLAGS = ("--対話", "-i")  # ファイルを読んでから対話モードを始める
 LINT_FLAGS = ("--点検", "--lint")  # lib/点検.suru(する で書いた点検)でファイルを調べる
+FORMAT_FLAGS = ("--整える", "--format")  # lib/整形.suru で空白を整える(点検と同じバイナリ。#250)
 TEST_FLAGS = ("--試験", "--test")  # 試験のまとまり・例・「…試験する」を動かす(#193)
 JSON_FLAGS = ("--json", "--JSON")  # エラーと点検の知らせを1行に1つの JSON で出す
 LINT_SOURCE = "「点検」 を 読み込む\n点検内の点検実行する\n"
@@ -8942,7 +8952,7 @@ def lint_binary() -> str | None:
     cc = suru_compile.find_cc()
     if cc is None or os.environ.get("SURU_LINT_INTERP"):
         return None
-    h = hashlib.sha256((__version__ + cc).encode())
+    h = hashlib.sha256((__version__ + cc + "-O0").encode())
     for name in lint_lib_files():
         with open(os.path.join(LIB_DIR, name), "rb") as f:
             h.update(name.encode() + b"\0" + f.read())
@@ -8963,7 +8973,8 @@ def lint_binary() -> str | None:
             with open(ll, "w", encoding="utf-8") as f:
                 f.write(ir)
             tmp = f"{name}.{os.getpid()}.tmp"
-            suru_compile.build(ll, tmp)
+            # -O0 で作る: -O2 より早くでき、点検の速さはほとんど変わらない(Go 版の lintbin と同じ。#250)
+            suru_compile.build(ll, tmp, "-O0")
             os.remove(ll)
             os.replace(suru_compile.exe_path(tmp), exe)
         except Exception as e:  # suru_compile は suru を別のモジュールとして読み込むので、名前で見分ける
@@ -8981,6 +8992,9 @@ def lint(paths: list[str]) -> int:
     import subprocess
 
     os.environ.setdefault("SURU_LIB", LIB_DIR)  # 「読み込んで 使う」ファイルの中の名前を調べるのに使う
+    suruc = None if os.environ.get("SURU_LINT_INTERP") else bundled_suruc()
+    if suruc:  # 同梱の Go 版で点検を作るほうが速い(最初の1回が約 18 秒 → 約 3 秒。#250)
+        return subprocess.call([suruc, "--点検", *paths])
     exe = lint_binary()
     if exe is not None:
         return subprocess.call([exe, *paths])
@@ -9246,6 +9260,11 @@ def main(argv: list[str]) -> int:
             print("使い方: suru --点検 [--json] ファイル.suru …", file=sys.stderr)
             return 2
         return lint(paths)
+    if len(argv) >= 2 and argv[1] in FORMAT_FLAGS:
+        if not [a for a in argv[2:] if not a.startswith("--")]:
+            print("使い方: suru --整える [--確認] [--出力] ファイル.suru …", file=sys.stderr)
+            return 2
+        return lint(["--整える", *argv[2:]])
     if len(argv) >= 2 and argv[1] in TEST_FLAGS:
         return run_tests(argv[2:])
     if len(argv) >= 2 and argv[1] in DOC_FLAGS:

@@ -54,7 +54,7 @@ def build() -> dict:
 
     control = [suru.KW_IF, suru.KW_THEN, suru.KW_ELSE, suru.KW_PROVISO, suru.KW_SOREKARA, suru.KW_KATSU, suru.KW_MATAHA]
     declare = [suru.KW_TOWA, suru.KW_TOIU, suru.KW_KA, suru.KW_WA, suru.DESU]
-    particles = list(suru.PARTICLES) + [suru.KW_TO, suru.KW_NO, suru.KW_GA]
+    particles = list(suru.PARTICLES) + [suru.KW_TO, suru.KW_NO, suru.KW_GA, suru.KW_DAKE]
     hira_props = [p for p in suru.PROPERTIES if all("ぁ" <= c <= "ゟ" for c in p)]
     kanji_props = [p for p in suru.PROPERTIES if p not in hira_props]
     imports = [suru.KW_IMPORT, suru.KW_IMPORT_POLITE, suru.KW_IMPORT_TE, suru.KW_USE, suru.KW_USE_POLITE, suru.KW_EXTERN, suru.KW_MAIN_THREAD]

@@ -43,6 +43,7 @@ const usage = `使い方: kumu <命令> [オプション]
   取得        依存を取ってきて 組.lock を書く(fetch)
   試験 [名前] 試験/ の「…試験する」を1つずつ動かす(test。名前の一部で選べる)
   点検        プロジェクトの全部のファイルを点検する(check。--json で知らせを JSON で出す)
+  整える      プロジェクトの全部のファイルの空白を整える(format。--確認 で整っていないファイルを示すだけ)
   公開        確かめて Git のタグ v版 を付ける。push はしない(publish)
   文書        公開の名前の API ドキュメントを docs/api に書く(doc。--雛形 で Sphinx と Read the Docs の設定を書く)
   書き込む    マイコン向けに作って、USB でつないだ基板に書き込む(flash)
@@ -79,6 +80,7 @@ var commands = map[string]string{
 	"取得": "取得", "fetch": "取得",
 	"試験": "試験", "test": "試験",
 	"点検": "点検", "check": "点検", "lint": "点検",
+	"整える": "整える", "format": "整える", "fmt": "整える",
 	"公開": "公開", "publish": "公開",
 	"文書": "文書", "doc": "文書", "docs": "文書",
 	"書き込む": "書き込む", "flash": "書き込む", "upload": "書き込む",
@@ -153,6 +155,8 @@ func (k *kumu) run(args []string) int {
 		return k.deps(cmd, rest)
 	case "点検":
 		return k.lint(rest)
+	case "整える":
+		return k.format(rest)
 	case "公開":
 		return k.publish(rest)
 	case "文書":
