@@ -30,6 +30,7 @@ n を フィボナッチにする とは もし n < 2 ならば n そうでな�
 BASIC_OUT = "6765\n（1 と 2 と 3）\n（1 と 1 と 2 と 3 と 5 と 8 と 13 と 21 と 34 と 55 と 89 と 144）\n空\n真\n"
 
 # 待つ間(外部の関数)はほかのスレッドが動く: 0.6 秒ずつ待つ 2 つのスレッドが、合わせて 1.2 秒よりずっと早く終わる
+# 時間はプログラムの中で測る。起動の時間は CI の負荷で大きく揺れるので入れない(#247)
 WAIT = """「スレッド」 を 読み込んで 使う
 「時間」 を 読み込んで 使う
 文字列 を 遅延返却する は 文字列 の 動作
@@ -37,11 +38,13 @@ s を 遅延返却する とは 手順
   0.6 を 待機する
   s を 結果にする
 試す とは 手順
+  始め とは 現在時刻取得した 結果
   a とは （「一」 を 遅延返却する） を 並行開始した 結果
   b とは （「二」 を 遅延返却する） を 並行開始した 結果
   「先」 を 表示する
   a を 合流してから 表示する
   b を 合流してから 表示する
+  始め を 経過秒取得してから 表示する
 試す
 """
 
@@ -215,10 +218,16 @@ xs を 確認する とは もし （xs を 「,」 で 結合する） の 長�
 """
 
 # 並列写像が本当に並列に計算する(確保しない計算)
+# 並列写像の速さ: 順に計算すると約 0.5 秒かかる仕事にして、時間はプログラムの中で測る(#247)
 SPEED = """「スレッド」 を 読み込んで 使う
+「時間」 を 読み込んで 使う
 数 を フィボナッチにする は 数
 n を フィボナッチにする とは もし n < 2 ならば n そうでなければ （n - 1 を フィボナッチにする） + （n - 2 を フィボナッチにする）
-（32 と 32 と 32 と 32） を フィボナッチにすること で MAPして 表示する
+試す とは 手順
+  始め とは 現在時刻取得した 結果
+  （36 と 36 と 36 と 36） を フィボナッチにすること で MAPして 表示する
+  始め を 経過秒取得してから 表示する
+試す
 """
 
 KINDS = ["interp"] + (["binary"] if suru_compile.find_cc() is not None else [])
@@ -247,13 +256,13 @@ def test_並行開始と合流(tmp_path, kind):
 
 @pytest.mark.parametrize("kind", KINDS)
 def test_待つ間はほかのスレッドが動く(tmp_path, kind):
-    cmd = build(WAIT, tmp_path, kind)
-    start = time.monotonic()
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    took = time.monotonic() - start
+    r = subprocess.run(build(WAIT, tmp_path, kind), capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
-    assert r.stdout == "先\n一\n二\n"
-    assert took < 1.1 + (0.5 if kind == "interp" else 0), took
+    lines = r.stdout.splitlines()
+    assert lines[:3] == ["先", "一", "二"]
+    # 順に待てば 1.2 秒以上かかる
+    took = float(lines[3])
+    assert 0.6 <= took < 1.0, took
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -373,10 +382,10 @@ def test_並列写像は速くなる(tmp_path):
         cmd = build(src, d, "binary")
         times = []
         for _ in range(3):
-            t = time.monotonic()
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            times.append(time.monotonic() - t)
-            assert r.stdout == "（2178309 と 2178309 と 2178309 と 2178309）\n", r.stderr
+            out, took = r.stdout.rsplit("\n", 2)[:2]
+            assert out == "（14930352 と 14930352 と 14930352 と 14930352）", r.stderr
+            times.append(float(took))
         return min(times)
 
     seq = best(SPEED.replace("を フィボナッチにすること で MAPして", "の それぞれ を フィボナッチにして"), tmp_path / "seq")
