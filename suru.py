@@ -8942,7 +8942,7 @@ def lint_binary() -> str | None:
     cc = suru_compile.find_cc()
     if cc is None or os.environ.get("SURU_LINT_INTERP"):
         return None
-    h = hashlib.sha256((__version__ + cc).encode())
+    h = hashlib.sha256((__version__ + cc + "-O0").encode())
     for name in lint_lib_files():
         with open(os.path.join(LIB_DIR, name), "rb") as f:
             h.update(name.encode() + b"\0" + f.read())
@@ -8963,7 +8963,8 @@ def lint_binary() -> str | None:
             with open(ll, "w", encoding="utf-8") as f:
                 f.write(ir)
             tmp = f"{name}.{os.getpid()}.tmp"
-            suru_compile.build(ll, tmp)
+            # -O0 で作る: -O2 より早くでき、点検の速さはほとんど変わらない(Go 版の lintbin と同じ。#250)
+            suru_compile.build(ll, tmp, "-O0")
             os.remove(ll)
             os.replace(suru_compile.exe_path(tmp), exe)
         except Exception as e:  # suru_compile は suru を別のモジュールとして読み込むので、名前で見分ける
@@ -8981,6 +8982,9 @@ def lint(paths: list[str]) -> int:
     import subprocess
 
     os.environ.setdefault("SURU_LIB", LIB_DIR)  # 「読み込んで 使う」ファイルの中の名前を調べるのに使う
+    suruc = None if os.environ.get("SURU_LINT_INTERP") else bundled_suruc()
+    if suruc:  # 同梱の Go 版で点検を作るほうが速い(最初の1回が約 18 秒 → 約 3 秒。#250)
+        return subprocess.call([suruc, "--点検", *paths])
     exe = lint_binary()
     if exe is not None:
         return subprocess.call([exe, *paths])

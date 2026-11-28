@@ -61,12 +61,14 @@ def test_delegates_to_suruc(tmp_path):
     assert r.stdout == "3\n"  # 調べるのは suruc、動かすのはインタプリタ
     assert _run(["--翻訳", "-O0", str(prog), "-o", "x"], env).returncode == 0
     assert _run(["--検査なし", str(prog)], env).stdout == "3\n"
+    assert _run(["--点検", "--json", str(prog)], env).returncode == 0
     assert log.read_text().splitlines() == [
         f"--検査 --json {prog}",
         f"--実行準備 {prog}",
         f"--検査 {prog}",
         f"-O0 {prog} -o x",
         f"--実行準備 --検査なし {prog}",
+        f"--点検 --json {prog}",
     ]
     # SURU_INTERPRETER=1 なら使わない
     log.unlink()
@@ -91,6 +93,21 @@ def test_same_errors_with_real_suruc(tmp_path):
         py = _run(args)
         go = _run(args, {"SURU_SURUC": str(exe)})
         assert (go.returncode, go.stdout, go.stderr) == (py.returncode, py.stdout, py.stderr)
+
+
+@pytest.mark.skipif(shutil.which("go") is None or shutil.which("clang") is None, reason="go か clang がありません")
+def test_same_lint_with_real_suruc(tmp_path):
+    """suru --点検 は同梱の suruc に任せても、知らせと終了コードが同じ(#250)"""
+    exe = tmp_path / "suruc"
+    subprocess.run(["go", "build", "-o", str(exe), "./cmd/suruc"], cwd=ROOT, check=True)
+    prog = tmp_path / "a.suru"
+    prog.write_text("x とは 1 \nx を 表示する\n", encoding="utf-8")
+    cache = {"XDG_CACHE_HOME": str(tmp_path / "cache")}
+    for args in (["--点検", str(prog)], ["--点検", "--json", str(prog)]):
+        py = _run(args, cache)
+        go = _run(args, {**cache, "SURU_SURUC": str(exe)})
+        assert (go.returncode, go.stdout, go.stderr) == (py.returncode, py.stdout, py.stderr)
+        assert go.returncode == 1 and "行末の空白" in go.stdout
 
 
 # ---- その場でコンパイルして動かす(suruc --実行・suru の既定) ----

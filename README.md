@@ -592,7 +592,7 @@ x を y で 累乗する とは 外部の「pow」
 
 ### Linter (「点検」, written in Suru)
 
-1. **`suru --点検 FILE.suru …` points out code that is not an error but would read better if fixed.** It prints `FILE:LINE:COLUMN: RULE: DESCRIPTION`, and exits with code 1 if there is at least one. It is written in Suru in `lib/点検.suru` (and `lib/字句.suru`), and with clang available it is built into a binary only the first time and cached (`~/.cache/suru/`) (`SURU_LINT_INTERP=1` always runs it in the interpreter).
+1. **`suru --点検 FILE.suru …` points out code that is not an error but would read better if fixed.** It prints `FILE:LINE:COLUMN: RULE: DESCRIPTION`, and exits with code 1 if there is at least one. It is written in Suru in `lib/点検.suru` (and `lib/字句.suru`), and with clang available it is built into a binary only the first time and cached (`~/.cache/suru/`) (`SURU_LINT_INTERP=1` always runs it in the interpreter). The binary is built at `-O0`, and with the `suruc` from a pip wheel (`suruc --点検 FILE.suru …` does the same), so the first run takes a few seconds (#250).
 
 | Rule | What it reports |
 |---|---|

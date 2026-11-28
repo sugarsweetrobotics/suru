@@ -13,6 +13,7 @@
 //	suruc --文書 lib/          # 公開の名前の API ドキュメントを Markdown で出す(--json・--出力 フォルダ)
 //	suruc --共有ライブラリ prog.suru -o libprog.so  # 他の言語から呼べる共有ライブラリ(#208)
 //	suruc --実行 prog.suru 引数…  # キャッシュにバイナリを作って、すぐ動かす(#229)
+//	suruc --点検 [--json] a.suru …  # 点検(lib/点検.suru)で調べる(suru --点検 と同じ。#250)
 package main
 
 import (
@@ -24,6 +25,7 @@ import (
 	"strings"
 
 	suru "github.com/suru-lang/suru"
+	"github.com/suru-lang/suru/cmd/internal/lintbin"
 	"github.com/suru-lang/suru/cmd/internal/mcu"
 	"github.com/suru-lang/suru/cmd/internal/native"
 	"github.com/suru-lang/suru/cmd/internal/testrun"
@@ -100,6 +102,9 @@ func run(args []string) int {
 	}
 	if len(args) >= 1 && (args[0] == "--実行準備" || args[0] == "--prepare-run") {
 		return runCommand(args[1:], true)
+	}
+	if len(args) >= 1 && (args[0] == "--点検" || args[0] == "--lint") {
+		return runLint(args[1:])
 	}
 	if len(args) >= 1 && (args[0] == "--文書" || args[0] == "--doc") {
 		return compiler.DocCommand(args[1:], os.Stdout, os.Stderr) // API ドキュメント(#209)
@@ -291,4 +296,19 @@ func mustSub() fs.FS {
 		panic(err)
 	}
 	return sub
+}
+
+// runLint は「suruc --点検 [--json] a.suru …」。点検のバイナリ(初めに一度だけ作ってキャッシュに置く)で調べる。
+// suru --点検 は、pip の wheel に suruc が入っていればこれを使う(Python 版で作るより速い。#250)
+func runLint(args []string) int {
+	if len(args) == 0 || (len(args) == 1 && (args[0] == "--json")) {
+		fmt.Fprintln(os.Stderr, "使い方: suruc --点検 [--json] ファイル.suru …")
+		return 2
+	}
+	exe, err := lintbin.Binary("suruc-" + version)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "エラー: "+err.Error())
+		return 1
+	}
+	return execProgram(exe, args)
 }

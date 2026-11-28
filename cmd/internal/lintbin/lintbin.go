@@ -78,7 +78,7 @@ func Binary(salt string) (string, error) {
 		return "", fmt.Errorf("clang がないので点検はしません")
 	}
 	h := sha256.New()
-	h.Write([]byte(salt + "\x00" + cc + "\x00"))
+	h.Write([]byte(salt + "\x00" + cc + "\x00-O0\x00"))
 	h.Write(suru.Runtime)
 	for _, n := range libFiles() {
 		b, _ := readLib(n)
@@ -107,7 +107,8 @@ func Binary(salt string) (string, error) {
 		return "", err
 	}
 	defer os.Remove(tmp + ".ll")
-	if err := native.Build(tmp+".ll", tmp, "-O2"); err != nil {
+	// -O0 で作る: -O2 より約 5 秒早くでき、点検の速さはほとんど変わらない(時間の多くは -O2 で作る実行時ライブラリの中。#250)
+	if err := native.Build(tmp+".ll", tmp, "-O0"); err != nil {
 		return "", err
 	}
 	return exe, os.Rename(native.ExePath(tmp), exe)

@@ -4,6 +4,12 @@
 
 Changes to Suru itself (`suru`, `suruc`, `suru-ls`, `kumu` and the bundled `lib/`). Versions before 0.7.0 are listed on [GitHub Releases](https://github.com/suru-lang/suru/releases). The VS Code extension has its own version.
 
+## Unreleased
+
+### Changed
+
+1. **The first lint is faster.** The linter's binary is now built at `-O0`, which is about 5 seconds quicker and lints at about the same speed. `suru --点検` uses the bundled `suruc` (`suruc --点検`, new) to build it, so the first run in a cloud container went from about 18 seconds to about 3 seconds. Later runs use the cached binary as before (#250).
+
 ## 0.13.0
 
 ### New
