@@ -730,6 +730,7 @@ var operatorChars = func() map[rune]bool {
 // 「外部に出す関数」は句読点の書き方の「以下は外部に出す関数です。」(#208)
 var mixedWords = []string{"受け取って", "返すこと", KwHensuPolite, KwHensu, "長さ", "残り", KwImportPolit, KwImport, KwImportTe, KwUsePolite, KwUse,
 	"外部に出す関数"}
+
 // 「符号付き64」「符号なし8」は C構造体のフィールドの型(#241)。長いものから照合する
 var mixedNames = []string{"畳み込み", "符号付き64", "符号付き32", "符号付き16", "符号付き8", "符号なし64", "符号なし32", "符号なし16", "符号なし8"}
 var mixedAll = append(append([]string{}, mixedWords...), mixedNames...)
