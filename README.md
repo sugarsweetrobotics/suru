@@ -606,6 +606,7 @@ x を y で 累乗する とは 外部の「pow」
 | 未使用の引数 (unused parameter) | A parameter not used in the function body. Functions split into several definitions, as with `先頭 は x で …` or `空 を …`, and `外部の「…」` functions are not checked |
 | 未使用の読み込み (unused load) | `「X」 を 読み込む` with neither `X内の…` nor X's types used. With `読み込んで 使う`, none of the names in X used either (X is looked up in the same folder as the checked file or in lib/, and not checked if not found) |
 | 組み込みの上書き (built-in override) | An outermost definition with the same name as a built-in function (`加算する` and so on) or a function in a file loaded with `読み込んで 使う` |
+| して入りの名前 (name with して) | An outermost definition whose name has 「して」 inside, like `足して二倍する`. 「して」 joins calls, so the name reads like two calls. Use a name without 「して」, or split it into two functions and write `x を 足して 二倍する` (#250) |
 | 型の宣言なし (missing type declaration) | An outermost function in a library (a file without expression sentences at the outermost level) without a type declaration such as `数 を 三倍する は 数`. The declaration may be anywhere in the file |
 | 書き方の混在 (mixed styles) | One file has both punctuation-style and spaced-style sentences. Reported once, at the first sentence of the less common style |
 | 値の再定義 (value redefined) | The same value name is defined twice at the outermost level (the later definition is used). Functions are not checked, since they can be defined case by case |

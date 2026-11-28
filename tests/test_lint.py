@@ -365,6 +365,19 @@ def test_字下げして続けた公開の一覧(kind, tmp_path):
 
 
 @pytest.mark.parametrize("kind", KINDS)
+def test_して入りの名前(kind, tmp_path):
+    # #250: 名前の中に「して」があると、2つの呼び出しに見える
+    (tmp_path / "名前.suru").write_text(
+        "数 を 一足して二倍する は 数\nx を 一足して二倍する とは （x + 1） * 2\n\n"
+        "数 を 二乗する は 数\nx を 二乗する とは x * x\n\n"
+        "（3 を 一足して二倍する） + （3 を 二乗して 二乗する） を 表示する\n", encoding="utf-8")
+    r = run_lint(kind, tmp_path, "名前.suru")
+    assert r.returncode == 1, r.stderr
+    lines = r.stdout.splitlines()
+    assert len(lines) == 1 and lines[0].startswith("名前.suru:2:5: して入りの名前: 「一足して二倍する」の中に「して」があります"), r.stdout
+
+
+@pytest.mark.parametrize("kind", KINDS)
 def test_型の宣言の関数の型は無名関数でない(kind, tmp_path):
     # #250: 型の宣言の「… を 受け取って … を 返すこと」は関数の型なので、入れ子にしても知らせない
     (tmp_path / "型.suru").write_text(
