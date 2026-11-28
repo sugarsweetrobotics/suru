@@ -5392,6 +5392,43 @@ V rt_ffi_from_ptr(void *p) {
     return (V)(intptr_t)a;
 }
 
+/* C構造体を値で渡す・返す外部の関数(#241): コンパイラが書く C の中継(suru_cs_…)が呼ぶ。
+   ctype は C_MEM の番号。範囲を外れた値は、インタプリタ(suru.py の _c_struct_arg)と同じ文でエラーにする */
+V rt_cs_field(V rec, const char *ctor, int32_t k, const char *what, int32_t pos) {
+    rec = rt_force(rec);
+    if (TAG(rec) != T_REC || strcmp(AS(Rec, rec)->c->name, ctor) != 0)
+        fail(pos, "%sには%sが必要です(「%s」が渡されました)", what, short_type_name(ctor), plain(rec).s);
+    return rt_force(AS(Rec, rec)->v[k]);
+}
+
+void rt_cs_put(V v, int32_t ctype, void *p, const char *what, int32_t pos) {
+    const CMemType *t = &C_MEM[ctype];
+    v = rt_force(v);
+    if (t->kind == CK_INT && is_num(v)) {
+        int64_t lo, hi;
+        c_int_range(t, &lo, &hi);
+        int ok = IS_INT(v) && INT_VAL(v) >= lo && INT_VAL(v) <= hi;
+        if (!IS_INT(v)) {
+            double d = AS(Flt, v)->d;
+            ok = d == floor(d) && d >= (double)lo && d <= (double)hi;
+            if (ok) v = mk_int((int64_t)d, pos);
+        }
+        if (!ok) fail(pos, "%s: 「%s」は%sに入りません(%lld から %lld までの整数です)", what, plain(v).s, t->name, (long long)lo, (long long)hi);
+    }
+    c_check(t, v, what, pos);
+    c_store(t, v, (uint8_t *)p);
+}
+
+V rt_cs_get(int32_t ctype, const void *p, int32_t pos) { return c_load(&C_MEM[ctype], (const uint8_t *)p, pos); }
+
+/* 入れ子のフィールドの説明「…の「期限」」を作る(エラーの文だけに使う) */
+const char *rt_cs_what(const char *what, const char *field) {
+    size_t n = strlen(what) + strlen(field) + 16; /* 「の「」と「」」は 9 バイト */
+    char *b = rt_alloc_atomic(n);
+    snprintf(b, n, "%sの「%s」", what, field);
+    return b;
+}
+
 /* 値が動作の外部の関数: 行ったときに k(引数を捕まえた関数)を呼ぶ */
 V rt_ffi_action(V k, const char *fname, int32_t pos) {
     Act *x = AS(Act, mk_act(A_CALL, fname, k, 0));

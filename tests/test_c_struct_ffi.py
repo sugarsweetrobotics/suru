@@ -12,7 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 import suru  # noqa: E402
 from suru import SuruError  # noqa: E402
-from test_ffi import interpreted  # noqa: E402
+from test_ffi import compiled, interpreted  # noqa: E402
 
 needs_cc = pytest.mark.skipif(shutil.which("cc") is None and shutil.which("clang") is None, reason="C コンパイラがありません")
 
@@ -136,17 +136,19 @@ def _err(source: str, base_dir: str) -> str:
     return info.value.message
 
 
-@needs_cc
-@pytest.mark.parametrize("call, want", [
+BAD_CALLS = [
     ("（256 の 甲1） を 一処理する", "外部の関数「一処理する」の「を」の「a」: 「256」は"),
     ("（256 の 甲1） を 一処理する", "「256」は符号なし8に入りません(0 から 255 までの整数です)"),
     ("（-129 と 0 の 甲2） を 二処理する", "「-129」は符号付き8に入りません"),
-    ("（（1 と -1 の 時間） と （0 と 0 の 時間）） を 時間加算する", "「-1」は符号なし32に入りません"),
+    ("（1 と -1 の 時間） を （0 と 0 の 時間） に 時間加算する", "「-1」は符号なし32に入りません"),
     ("（1 と 2.5 と 3 の 甲12） を 十二処理する", "「2.5」は符号付き32に入りません"),
-])
+]
+
+
+@needs_cc
+@pytest.mark.parametrize("call, want", BAD_CALLS)
 def test_入らない値はフィールドの名前を出してエラー(libdir, call, want):
-    src = PROGRAM.split("（254 の 甲1）")[0] + call.replace("（（1 と -1 の 時間） と （0 と 0 の 時間）） を 時間加算する",
-                                                          "（1 と -1 の 時間） を （0 と 0 の 時間） に 時間加算する") + "\n"
+    src = PROGRAM.split("（254 の 甲1）")[0] + call + "\n"
     assert want in _err(src, str(libdir))
 
 
@@ -167,10 +169,52 @@ def test_Go版の検査も_C構造体の引数を読む(libdir, tmp_path):
     assert r.returncode == 0, r.stderr
 
 
-def test_コンパイラはまだ値で渡せないと言う(tmp_path):
+needs_clang = pytest.mark.skipif(shutil.which("clang") is None, reason="clang がありません")
+
+
+@pytest.fixture(scope="module")
+def suruc(tmp_path_factory):
+    if shutil.which("go") is None:
+        pytest.skip("go がありません")
+    exe = tmp_path_factory.mktemp("suruc") / "suruc"
+    subprocess.run(["go", "build", "-o", str(exe), "./cmd/suruc"], cwd=ROOT, check=True)
+    return exe
+
+
+@needs_clang
+def test_Python版のコンパイラでも同じ(libdir):
+    r = compiled(PROGRAM, str(libdir))
+    assert r.returncode == 0, r.stderr
+    assert r.stdout == EXPECTED
+
+
+@needs_clang
+def test_Go版のコンパイラでも同じ(libdir, suruc):
+    prog = libdir / "例.suru"
+    prog.write_text(PROGRAM, encoding="utf-8")
+    exe = libdir / "例"
+    b = subprocess.run([str(suruc), str(prog), "-o", str(exe)], capture_output=True, text=True)
+    assert b.returncode == 0, b.stderr
+    r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
+    assert r.stdout == EXPECTED, r.stderr
+    # 中継の C のソースは Python 版と同じ
     import suru_compile
 
-    src = "時間 とは 秒 は 符号付き64 の C構造体\n時間 を 時間処理する は 時間\nt を 時間処理する とは 外部の「f」\n"
-    with pytest.raises(SuruError) as info:
-        suru_compile.compile_source(src, str(tmp_path))
-    assert "C構造体を値で渡す・返す外部の関数は、まだコンパイルできません" in info.value.message
+    py = suru_compile.cshim_source(suru_compile.compile_source(PROGRAM, str(libdir)))
+    ll = subprocess.run([str(suruc), "--ll", str(prog), "-o", str(libdir / "例.ll")], capture_output=True, text=True)
+    assert ll.returncode == 0, ll.stderr
+    go = suru_compile.cshim_source((libdir / "例.ll").read_text(encoding="utf-8"))
+    assert py and py == go
+
+
+@needs_clang
+@pytest.mark.parametrize("call, want", BAD_CALLS)
+def test_コンパイルしたものも入らない値は同じエラー(libdir, suruc, call, want):
+    src = PROGRAM.split("（254 の 甲1）")[0] + call + "\n"
+    prog = libdir / "誤.suru"
+    prog.write_text(src, encoding="utf-8")
+    exe = libdir / "誤"
+    b = subprocess.run([str(suruc), str(prog), "-o", str(exe)], capture_output=True, text=True)
+    assert b.returncode == 0, b.stderr
+    r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=60)
+    assert r.returncode != 0 and want in r.stderr, r.stderr

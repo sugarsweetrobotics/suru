@@ -34,6 +34,7 @@ RUNTIME = S.data_path("runtime", "suru_rt.c")
 FFI_IR = {"i64": "i64", "f64": "double", "f32": "float", "i32": "i32", "bool": "i32", "str": "ptr", "ptr": "ptr", "bytes": "ptr",
           "void": "void", "val": "ptr"}  # val は外部に出す関数の手札(#208)
 LINK_MARK = "; suru-link: "  # IR の中の、リンクするライブラリの印(build が読む)
+CSHIM_MARK = "; suru-cshim: "  # IR の中の、C構造体を値で渡す外部の関数の C の中継のソースの1行(#241)
 EXPORT_MARK = "; suru-export: "  # IR の中の、外部に出す関数の印(「C の名前 型の字 する の名前」、共有ライブラリとヘッダを作るときに読む、#208)
 # 外部に出す関数の C の型 → rt_export に渡す型の字(Go 版の exportCodes と同じ)
 EXPORT_CODES = {"i64": "l", "i32": "i", "f64": "d", "f32": "f", "bool": "b", "str": "s", "ptr": "p", "void": "v",
@@ -357,6 +358,7 @@ class Compiler:
         self.ffi_decls: dict[str, str] = {}  # 外部の関数の名前 → declare の行
         self.ffi_where: dict[str, Any] = {}  # 外部の関数の名前 → 初めに宣言した位置
         self.link_libs: list[str] = []  # リンクするライブラリ(ExternLib.path)
+        self.cshim = CShim()  # C構造体を値で渡す外部の関数の C の中継(#241)
         self.exports: list[str] = []  # 外部に出す関数の C の名前(#208)
 
     def uid(self) -> int:
@@ -734,8 +736,7 @@ class Compiler:
     def extern_body(self, name: str, params: list, ext: S.Extern) -> Any:
         """外部の関数の本体: 引数を C の値にして呼び、値を戻す。値が動作なら、行ったときに呼ぶ動作を返す"""
         if ext.structs:
-            raise S.SuruError(f"「{name}」: C構造体を値で渡す・返す外部の関数は、まだコンパイルできません"
-                            "(インタプリタでは動きます: suru --インタプリタ)", ext.line)
+            return self.c_struct_extern(name, params, ext)
         for lib in ext.libs:
             if lib not in self.link_libs:
                 self.link_libs.append(lib)
@@ -783,6 +784,29 @@ class Compiler:
                 fg.emit(f"{d} = fpext float {r} to double")
                 return fg.call("i64", "@rt_float", f"double {d}")
             return fg.call("i64", f"@rt_ffi_from_{ext.result}", f"{ret} {r}")
+
+        if not ext.action:
+            return call
+
+        def action(sc: Scope, fg: FnGen) -> str:
+            k = self.closure(name, [(S.WO, f"\0捨てる{self.uid()}")], call, sc, fg, check_pred=False)
+            return fg.call("i64", "@rt_ffi_action", f"i64 {k}, ptr {fname}, i32 %pos")
+        return action
+
+    def c_struct_extern(self, name: str, params: list, ext: S.Extern) -> Any:
+        """C構造体を値で渡す外部の関数の本体: する の値のまま C の中継を呼ぶ(#241、Go 版の cStructExtern と同じ)"""
+        if ext.main_thread:
+            raise S.SuruError(f"主スレッドで呼ぶ外部の関数「{name}」には、まだ C構造体を値で渡せません", ext.line)
+        for lib in ext.libs:
+            if lib not in self.link_libs:
+                self.link_libs.append(lib)
+        fn = self.cshim.function(name, params, ext)
+        self.ffi_decls[fn] = f"declare i64 @{fn}({', '.join(['i64'] * len(params) + ['i32'])})"
+        fname = self.cstr(name)
+
+        def call(sc: Scope, fg: FnGen) -> str:
+            args = [f"i64 {self.var_value(x, sc, fg, ext.line)}" for _, x in params] + ["i32 %pos"]
+            return fg.call("i64", f"@{fn}", ", ".join(args))
 
         if not ext.action:
             return call
@@ -1168,7 +1192,7 @@ class Compiler:
         entry = f"define void @suru_main() {{\nentry:\n{consts}\n  %r = call i64 @suru_init(ptr null)\n  ret void\n}}"
         src = self.source.encode("utf-8")
         source = f'@suru_source = constant [{len(src) + 1} x i8] c"{ir_bytes(src)}\\00"\n' + self.files_table()
-        links = [LINK_MARK + lib for lib in self.link_libs] + [EXPORT_MARK + sym for sym in self.exports]
+        links = [LINK_MARK + lib for lib in self.link_libs] + [EXPORT_MARK + sym for sym in self.exports] + self.cshim.marks()
         ffi = [self.ffi_decls[k] for k in sorted(self.ffi_decls)]
         return "\n".join(["; 「する」のコンパイラが作った LLVM IR"] + links + [DECLS] + ffi + [source] + self.globals + self.functions + [entry, self.roots_table()]) + "\n"
 
@@ -1539,6 +1563,203 @@ def _pkgconfig_link_flags(lib: str) -> list[str]:
     return [f"-L{d}", f"-Wl,-rpath,{d}"]
 
 
+# --- C構造体を値で渡す外部の関数の C の中継(#241)。compiler/cstruct.go と同じソースを書く ---
+C_STRUCT_CTYPES = {
+    "符号付き8": ("int8_t", 0), "符号付き16": ("int16_t", 1), "符号付き32": ("int32_t", 2), "符号付き64": ("int64_t", 3),
+    "符号なし8": ("uint8_t", 4), "符号なし16": ("uint16_t", 5), "符号なし32": ("uint32_t", 6), "符号なし64": ("uint64_t", 7),
+    "単精度": ("float", 8), "小数": ("double", 9), "番地": ("void *", 10), "真偽": ("uint8_t", 11),
+}
+CSHIM_SCALAR = {
+    "i64": ("int64_t", "rt_ffi_i64", "rt_ffi_from_i64(r, %s, pos)"),
+    "i32": ("int32_t", "rt_ffi_i32", "rt_ffi_from_i32(r)"),
+    "f64": ("double", "rt_ffi_f64", "rt_float(r)"),
+    "f32": ("float", "rt_ffi_f32", "rt_float((double)r)"),
+    "bool": ("int32_t", "rt_ffi_bool", "rt_ffi_from_bool(r)"),
+    "str": ("const char *", "rt_ffi_str", "rt_ffi_from_str(r)"),
+    "ptr": ("void *", "rt_ffi_ptr", "rt_ffi_from_ptr(r)"),
+    "bytes": ("const uint8_t *", "rt_ffi_bytes", ""),
+    "void": ("void", "", "1"),
+}
+CSHIM_HEAD = """/* 「する」のコンパイラが書いた、C構造体を値で渡す外部の関数の中継(#241) */
+#include <stdint.h>
+typedef int64_t V;
+V rt_cs_field(V, const char *, int32_t, const char *, int32_t);
+void rt_cs_put(V, int32_t, void *, const char *, int32_t);
+V rt_cs_get(int32_t, const void *, int32_t);
+const char *rt_cs_what(const char *, const char *);
+V rt_construct(const char *, int32_t, const V *, int32_t);
+void rt_ffi_pre(void);
+void rt_ffi_post(void);
+int64_t rt_ffi_i64(V, const char *, int32_t, int32_t);
+int32_t rt_ffi_i32(V, const char *, int32_t, int32_t);
+double rt_ffi_f64(V, const char *, int32_t, int32_t);
+float rt_ffi_f32(V, const char *, int32_t, int32_t);
+int32_t rt_ffi_bool(V, const char *, int32_t, int32_t);
+const char *rt_ffi_str(V, const char *, int32_t, int32_t);
+void *rt_ffi_ptr(V, const char *, int32_t, int32_t);
+const uint8_t *rt_ffi_bytes(V, const char *, int32_t, int32_t);
+void *rt_ffi_fnptr(V, const char *, int32_t, int32_t);
+V rt_ffi_from_i64(int64_t, const char *, int32_t);
+V rt_ffi_from_i32(int32_t);
+V rt_ffi_from_bool(int32_t);
+V rt_ffi_from_str(const char *);
+V rt_ffi_from_ptr(void *);
+V rt_float(double);
+"""
+
+
+def c_quote(s: str) -> str:
+    """C の文字列の書き方にする(UTF-8 はそのまま。Go 版の cQuote と同じ)"""
+    out = []
+    for ch in s:
+        if ch in "\"\\":
+            out.append("\\" + ch)
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append(f"\\{ord(ch):03o}")
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
+class CShim:
+    """C構造体を値で渡す外部の関数の C の中継(Go 版の cShim と同じ)"""
+
+    def __init__(self) -> None:
+        self.index: dict[str, int] = {}
+        self.types: list[str] = []
+        self.funcs: list[str] = []
+        self.by_name: dict[str, str] = {}
+        self.n = 0
+
+    def struct_type(self, name: str, structs: dict) -> str:
+        if name in self.index:
+            return f"suru_cs_t{self.index[name]}"
+        fields = structs[name]
+        for _, t in fields:
+            if t in structs:
+                self.struct_type(t, structs)
+        k = len(self.index)
+        self.index[name] = k
+        t = f"suru_cs_t{k}"
+        d = ["typedef struct {"]
+        i_ = [f"static {t} {t}_in(V v, const char *what, int32_t pos) {{\n  {t} r;\n"]
+        o_ = [f"static V {t}_out({t} c, int32_t pos) {{\n  V x[{len(fields)}];\n"]
+        for i, (f, ct) in enumerate(fields):
+            fq = c_quote(f)
+            if ct in structs:
+                inner = self.struct_type(ct, structs)
+                d.append(f" {inner} f{i};")
+                i_.append(f"  r.f{i} = {inner}_in(rt_cs_field(v, {c_quote(name)}, {i}, what, pos), rt_cs_what(what, {fq}), pos);\n")
+                o_.append(f"  x[{i}] = {inner}_out(c.f{i}, pos);\n")
+                continue
+            cname, mem = C_STRUCT_CTYPES[ct]
+            d.append(f" {cname} f{i};")
+            i_.append(f"  rt_cs_put(rt_cs_field(v, {c_quote(name)}, {i}, what, pos), {mem}, &r.f{i}, rt_cs_what(what, {fq}), pos);\n")
+            o_.append(f"  x[{i}] = rt_cs_get({mem}, &c.f{i}, pos);\n")
+        d.append(f" }} {t}; /* {name.replace('*/', '* /')} */")
+        i_.append("  return r;\n}")
+        o_.append(f"  return rt_construct({c_quote(name)}, {len(fields)}, x, pos);\n}}")
+        self.types += ["".join(d), "".join(i_), "".join(o_)]
+        return t
+
+    def c_type(self, t: str, structs: dict) -> str:
+        if t.startswith(S.C_STRUCT_FFI):
+            return self.struct_type(t[len(S.C_STRUCT_FFI):], structs)
+        return CSHIM_SCALAR[t][0]
+
+    def function(self, name: str, params: list, ext: S.Extern) -> str:
+        key = "" if ext.pointer else ext.symbol
+        if key and key in self.by_name:
+            return self.by_name[key]
+        self.n += 1
+        fn = f"suru_cs_f{self.n}"
+        if key:
+            self.by_name[key] = fn
+        ret = self.c_type(ext.result, ext.structs)
+        fq = c_quote(name)
+        proto, conv, cargs, vparams = [], [], [], []
+        fptr = ""
+        for i, (p, x) in enumerate(params):
+            vparams.append(f"V a{i}")
+            if ext.pointer and x == ext.pointer:
+                fptr = f"rt_ffi_fnptr(a{i}, {fq}, {PART_IDS[p]}, pos)"
+                continue
+            t = ext.params[i]
+            ct = self.c_type(t, ext.structs)
+            proto.append(ct)
+            if t.startswith(S.C_STRUCT_FFI):
+                conv.append(f"  {ct} x{i} = {ct}_in(a{i}, {c_quote(f'外部の関数「{name}」の「{p}」')}, pos);")
+            else:
+                conv.append(f"  {ct} x{i} = {CSHIM_SCALAR[t][1]}(a{i}, {fq}, {PART_IDS[p]}, pos);")
+            cargs.append(f"x{i}")
+        if ext.cargs:
+            by_param = cargs
+            cargs, proto = [], []
+            for k, v in ext.cargs:
+                if k == "定数":
+                    cargs.append(f"{v}LL")
+                    proto.append("int64_t")
+                else:
+                    cargs.append(by_param[v])
+                    proto.append(self.c_type(ext.params[v], ext.structs))
+        plist = ", ".join(proto) or "void"
+        b = []
+        callee = ext.symbol
+        if not fptr:
+            b.append(f"{ret} {ext.symbol}({plist});\n")
+        else:
+            callee = "fp"
+        b.append(f"V {fn}({', '.join(vparams + ['int32_t pos'])}) {{\n")
+        if fptr:
+            b.append(f"  {ret} (*fp)({plist}) = ({ret} (*)({plist})){fptr};\n")
+        b += [line + "\n" for line in conv]
+        b.append("  rt_ffi_pre();\n")
+        call = f"{callee}({', '.join(cargs)})"
+        if ext.result == "void":
+            b.append(f"  {call};\n  rt_ffi_post();\n  return 1;\n}}")
+        elif ext.result.startswith(S.C_STRUCT_FFI):
+            b.append(f"  {ret} r = {call};\n  rt_ffi_post();\n  return {ret}_out(r, pos);\n}}")
+        else:
+            to = CSHIM_SCALAR[ext.result][2]
+            if "%s" in to:
+                to = to % fq
+            b.append(f"  {ret} r = {call};\n  rt_ffi_post();\n  return {to};\n}}")
+        self.funcs.append("".join(b))
+        return fn
+
+    def source(self) -> str:
+        if not self.funcs:
+            return ""
+        return CSHIM_HEAD + "\n".join(self.types) + "\n" + "\n".join(self.funcs) + "\n"
+
+    def marks(self) -> list[str]:
+        src = self.source()
+        return [CSHIM_MARK + line for line in src.rstrip("\n").split("\n")] if src else []
+
+
+def cshim_source(ir: str) -> str:
+    """IR の頭の「; suru-cshim: 」の行から、C の中継のソースを取り出す(なければ "")"""
+    out = []
+    for line in ir.split("\n"):
+        if not line.startswith(";"):
+            break
+        if line.startswith(CSHIM_MARK):
+            out.append(line[len(CSHIM_MARK):] + "\n")
+    return "".join(out)
+
+
+def cshim_file(ll_path: str, tmp_dir: str) -> list[str]:
+    """IR に C の中継があれば tmp_dir に書き、clang に渡す道を返す(Go 版の cShimFile と同じ)"""
+    with open(ll_path, encoding="utf-8") as f:
+        src = cshim_source(f.read())
+    if not src:
+        return []
+    path = os.path.join(tmp_dir, "cshim.c")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(src)
+    return [path]
+
+
 def link_flags(ll_path: str) -> list[str]:
     """IR の始めの「; suru-link: 」の行から、外部のライブラリをリンクする引数を作る"""
     flags: list[str] = []
@@ -1569,7 +1790,10 @@ def build(ll_path: str, out: str, opt: str = "-O2") -> None:
 
         tmp_dir = tempfile.mkdtemp(prefix="suru-link-")
         link_out = os.path.join(tmp_dir, "out.exe")
-    cmd = [cc, *target_args(), opt, "-w", ll_path, runtime_object(cc), "-o", link_out] + link_flags(ll_path)
+    import tempfile
+
+    shim_dir = tempfile.mkdtemp(prefix="suru-cshim-")
+    cmd = [cc, *target_args(), opt, "-w", ll_path, runtime_object(cc), "-o", link_out] + cshim_file(ll_path, shim_dir) + link_flags(ll_path)
     if target_windows():
         if windows_lld():
             # lld は日本語の道も読み書きできる(GNU ld は Windows の ANSI の道しか扱えない)
@@ -1589,6 +1813,7 @@ def build(ll_path: str, out: str, opt: str = "-O2") -> None:
             shutil.copyfile(link_out, exe)
             os.chmod(exe, 0o755)
     finally:
+        shutil.rmtree(shim_dir, ignore_errors=True)
         if tmp_dir:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -1681,7 +1906,7 @@ def build_shared(ll_path: str, out: str, opt: str = "-O2") -> str:
             with open(script, "w", encoding="utf-8") as f:
                 f.write("{\n  global:\n    " + ";\n    ".join(syms) + ";\n  local: *;\n};\n")
             cmd += ["-shared", f"-Wl,--version-script={script}"]
-        cmd += link_flags(ll_path)
+        cmd += cshim_file(ll_path, d) + link_flags(ll_path)
         if target_windows():
             # pthread(winpthreads)は中に入れて、libwinpthread-1.dll なしで動くようにする(実行ファイルと同じ)
             cmd += ["-lm", "-Wl,-Bstatic", "-lpthread", "-Wl,-Bdynamic", "-lws2_32"]
